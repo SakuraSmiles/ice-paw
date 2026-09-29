@@ -92,6 +92,7 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             kind: None,
             initiator_agent_id: None,
             parent_conversation_id: None,
+            auto_approve: None,
         },
     )
     .await

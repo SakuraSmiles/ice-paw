@@ -173,3 +173,18 @@ pub async fn respond_inbox_item(
         Ok(())
     }
 }
+
+/// 会话级全自动开关（migration 58，2026-09-29 用户拍板）：开启后本会话
+/// （含委派子会话——出生继承）的 Confirm 级工具直接放行。例外：屏幕共享入口
+/// request_screen_session 不沾光（通道授权体系独立）。DB 持久 + 内存注册表
+/// 同步（授权热路径读内存）。
+#[tauri::command]
+pub async fn set_conversation_auto_approve(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+    on: bool,
+) -> AppResult<()> {
+    repo::conversation::set_auto_approve(pool.inner(), &conversation_id, on).await?;
+    crate::harness::auto_approve::global().set(&conversation_id, on).await;
+    Ok(())
+}

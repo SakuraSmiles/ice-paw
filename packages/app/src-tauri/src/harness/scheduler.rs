@@ -260,6 +260,7 @@ async fn ensure_target_conv(
             kind: Some("chat".into()),
             initiator_agent_id: None,
             parent_conversation_id: None,
+            auto_approve: None,
         },
     )
     .await?;

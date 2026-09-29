@@ -534,6 +534,11 @@ const inbox = {
     try { await invoke<void>("respond_inbox_item", { conversationId, messageId, allow }); }
     catch (err) { throw wrapInvokeError("inbox.respond", err); }
   },
+  /** 会话级全自动开关（migration 58）：Confirm 级工具直接放行（含委派继承） */
+  async setAutoApprove(conversationId: string, on: boolean): Promise<void> {
+    try { await invoke<void>("set_conversation_auto_approve", { conversationId, on }); }
+    catch (err) { throw wrapInvokeError("inbox.setAutoApprove", err); }
+  },
 };
 
 const tasks = {

@@ -172,6 +172,7 @@ export interface Conversation {
   /** 频道 v1 归档时刻（migration 54；NULL = 活会话。频道归档 = 原项目删除的
    *  软删除：记录只读保留，散落 scope 侧栏可见「已归档」） */
   archived_at?: string | null;
+  auto_approve?: boolean;
 }
 
 export interface NewConversation {

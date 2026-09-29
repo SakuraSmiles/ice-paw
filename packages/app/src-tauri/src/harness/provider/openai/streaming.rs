@@ -158,8 +158,10 @@ pub(crate) fn parse_sse_stream<S, E>(
         // content 走零开销透传分支）。见上方 SentinelScrubber 注释。
         let mut scrubber = SentinelScrubber::new(needs_sentinel_scrub(&model));
 
-        while let Some(chunk_result) = byte_stream.next().await {
-            // 取消检查
+        // cancel 探测轮询化（2026-09-29 插话及时性，anthropic 同款）：检查点原在
+        // chunk 到达后——thinking 阶段无 chunk 期插话要等下一 chunk。改为 chunk
+        // 等待与 200ms cancel 探测 select 并行（biased 探测优先）。
+        loop {
             if cancel.is_cancelled() {
                 let _ = tx
                     .send(Ok(ChatDelta::Done {
@@ -168,6 +170,12 @@ pub(crate) fn parse_sse_stream<S, E>(
                     .await;
                 return;
             }
+            let chunk_result = tokio::select! {
+                biased;
+                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => continue,
+                c = byte_stream.next() => c,
+            };
+            let Some(chunk_result) = chunk_result else { break };
 
             let chunk = match chunk_result {
                 Ok(c) => c,

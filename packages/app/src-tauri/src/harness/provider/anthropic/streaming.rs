@@ -44,8 +44,11 @@ pub(crate) fn parse_sse_stream<S>(
         // 用于在 content_block_start 时记录，content_block_delta 时查询
         let mut block_info: HashMap<i64, (String, Option<String>, Option<String>)> = HashMap::new();
 
-        while let Some(chunk_result) = byte_stream.next().await {
-            // 取消检查（每 chunk 一次）
+        // cancel 探测轮询化（2026-09-29 插话及时性）：检查点原在 chunk 到达后——
+        // thinking 阶段模型可能数十秒无 chunk（GLM-5.3 思考常开），插话要等下一
+        // chunk 才生效。改为 chunk 等待与 200ms cancel 探测 select 并行（biased
+        // 探测优先），无 chunk 期也能立即打断；探测间隔 = 体感上限，开销可忽略。
+        loop {
             if cancel.is_cancelled() {
                 let _ = tx
                     .send(Ok(ChatDelta::Done {
@@ -54,6 +57,12 @@ pub(crate) fn parse_sse_stream<S>(
                     .await;
                 return;
             }
+            let chunk_result = tokio::select! {
+                biased;
+                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => continue,
+                c = byte_stream.next() => c,
+            };
+            let Some(chunk_result) = chunk_result else { break };
 
             let chunk = match chunk_result {
                 Ok(c) => c,

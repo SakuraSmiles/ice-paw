@@ -10,7 +10,7 @@ use crate::error::{AppError, AppResult};
 /// 全列清单（MA-1 起含 kind/initiator/parent 四列，MA-3 加 inbox_policy，
 /// 频道 v1 加 archived_at；`query_as<ConversationRow>` 要求 SELECT 覆盖全部
 /// 字段，统一收口防止逐站点漂移）
-const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy, archived_at";
+const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy, archived_at, auto_approve";
 
 /// 列出全部会话（不限 agent），按 `pinned DESC, updated_at DESC`
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {
@@ -65,8 +65,8 @@ pub async fn create(
         None
     };
     sqlx::query(
-        "INSERT INTO conversations (id, agent_id, title, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO conversations (id, agent_id, title, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, auto_approve)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_conv.agent_id)
@@ -76,10 +76,34 @@ pub async fn create(
     .bind(initiator_type)
     .bind(&new_conv.initiator_agent_id)
     .bind(&new_conv.parent_conversation_id)
+    .bind(new_conv.auto_approve.unwrap_or(0))
     .execute(pool)
     .await?;
 
     get_by_id(pool, id).await
+}
+
+/// 会话级全自动开关（migration 58）。
+pub async fn set_auto_approve(pool: &SqlitePool, id: &str, on: bool) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE conversations SET auto_approve = ? WHERE id = ?")
+        .bind(on as i32)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound { resource: "conversation", id: id.to_string() });
+    }
+    Ok(())
+}
+
+/// boot 扫描：全部开启全自动的会话 id（注册表种子）。
+pub async fn list_auto_approve_ids(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT id FROM conversations WHERE auto_approve = 1")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
 /// 重命名

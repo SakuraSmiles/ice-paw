@@ -16,7 +16,7 @@ import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { useClickOutside } from "../../composables/useClickOutside";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Inbox, ScreenShare, Shield } from "@lucide/vue";
+import { Inbox, ScreenShare, Shield, Zap } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
@@ -37,6 +37,23 @@ const chat = useChatStore();
 const agent = useAgentStore();
 const screenChannel = useScreenChannelStore();
 const { pendingOf } = useInbox();
+
+// ===== 会话级全自动开关（migration 58）：Confirm 级工具直接放行（含委派继承）=====
+const autoApproving = ref(false);
+async function toggleAutoApprove() {
+  const conv = chat.activeConversation;
+  if (!conv || autoApproving.value) return;
+  autoApproving.value = true;
+  try {
+    await bridge.inbox.setAutoApprove(conv.id, !conv.auto_approve);
+    // 权威回读（本地翻转乐观值——单字段，回读防漂移）
+    await chat.loadConversations();
+  } catch (err) {
+    console.warn("[chat-header] 切换全自动失败", err);
+  } finally {
+    autoApproving.value = false;
+  }
+}
 
 // ===== MA-3 收件箱入口（hold 扣件的批准出口 + 收件政策切换）=====
 const inboxOpen = ref(false);
@@ -502,6 +519,19 @@ async function toggleScreenShare() {
         </Transition>
       </div>
       <!-- 屏幕共享通道开关（批次④ 步骤 1）：附着态图标常显主色（状态可见） -->
+      <!-- 会话级全自动开关（migration 58）：Zap 闪电，开启态主色。含委派继承；
+           屏幕共享入口不沾光（通道授权独立） -->
+      <button
+        class="header-btn auto-btn"
+        :class="{ active: chat.activeConversation?.auto_approve }"
+        :disabled="autoApproving"
+        :title="chat.activeConversation?.auto_approve
+          ? '全自动已开启：工具调用免审批（委派任务同权；屏幕共享除外）。点击关闭'
+          : '开启全自动：本会话工具调用免审批（含委派任务；屏幕共享除外）'"
+        @click="toggleAutoApprove"
+      >
+        <Zap :size="16" />
+      </button>
       <button
         class="header-btn screen-btn"
         :class="{ active: screenAttachedHere, unready: screenUnready }"
@@ -665,6 +695,7 @@ async function toggleScreenShare() {
 }
 
 /* ===== 屏幕共享通道开关（批次④）：本会话附着 = 授权免卡生效，图标常显主色 ===== */
+.auto-btn.active svg { color: var(--ip-warning-text); }
 .screen-btn svg { color: var(--ip-color-text-tertiary); }
 .screen-btn:hover svg { color: var(--ip-color-text-primary); }
 .screen-btn.active svg { color: var(--ip-primary-500); }

@@ -781,6 +781,7 @@ mod tests {
             tools_override: None,
             project_id: project.map(str::to_string),
             kind: "chat".into(),
+            auto_approve: 0,
             initiator_type: None,
             initiator_agent_id: None,
             parent_conversation_id: None,

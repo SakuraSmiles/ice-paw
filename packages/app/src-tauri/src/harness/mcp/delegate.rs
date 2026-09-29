@@ -455,9 +455,15 @@ impl McpClient for DelegateTool {
                 kind: Some("delegation".into()),
                 initiator_agent_id: Some(ctx.agent_id.clone()),
                 parent_conversation_id: Some(ctx.conv_id.clone()),
+                // 会话级全自动开关继承（migration 58，用户拍板「含委派任务」）：
+                // 出生继承非实时联动（父后来开关不影响已在跑的子会话）
+                auto_approve: (parent.auto_approve != 0).then_some(1),
             },
         )
         .await?;
+        crate::harness::auto_approve::global()
+            .inherit(&ctx.conv_id, &child_conv_id)
+            .await;
 
         // --- 4. cancel 级联 + ChatState 注册（早退路径 RAII 兜底注销） ---
         let child_cancel = parent_cancel.child_token();

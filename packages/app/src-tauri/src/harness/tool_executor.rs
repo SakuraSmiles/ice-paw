@@ -264,6 +264,29 @@ pub(crate) async fn execute_tool_round(
             _ => decision,
         };
 
+        // ④ 会话级全自动开关（migration 58，2026-09-29 用户拍板「会话级含委派」）：
+        // 开启会话的 Confirm 直接放行（等效用户逐次点允许）。例外：屏幕共享入口
+        // request_screen_session 不沾光——Confirm 是它的存在意义（通道授权体系
+        // 独立，Off 提议制 2026-09-24 拍板），全自动不越界到「看我的屏幕」。
+        let decision = match decision {
+            AuthorizationDecision::Confirm { .. } if tc_name != "request_screen_session" => {
+                if crate::harness::auto_approve::global()
+                    .is_on(&tool_ctx.conv_id)
+                    .await
+                {
+                    tracing::info!(
+                        target: "ice_paw.tool_auth",
+                        tool = %tc_name,
+                        "会话级全自动开关放行"
+                    );
+                    AuthorizationDecision::Allow
+                } else {
+                    decision
+                }
+            }
+            _ => decision,
+        };
+
         // 2. 根据决策执行
         let final_result: Result<ToolOutput, String> = match decision {
             AuthorizationDecision::Allow => {

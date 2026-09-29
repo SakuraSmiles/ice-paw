@@ -151,6 +151,7 @@ pub fn run() {
             commands::inbox_cmd::list_inbox_counts,
             commands::inbox_cmd::set_inbox_policy,
             commands::inbox_cmd::respond_inbox_item,
+            commands::inbox_cmd::set_conversation_auto_approve,
             commands::task_cmd::list_scheduled_tasks,
             commands::task_cmd::create_scheduled_task,
             commands::task_cmd::update_scheduled_task,
@@ -505,6 +506,13 @@ pub fn run() {
             //     单循环串行天然保证（设计真相源 docs/scheduled-tasks-design.md）。
             harness::scheduler::spawn_scheduler(handle.clone(), pool.clone());
             harness::scheduler::spawn_boot_sweep(handle.clone(), pool.clone());
+
+            // 3j) 会话级全自动开关（migration 58）：boot 种子——授权热路径读
+            //     内存注册表（全局单例），DB 是持久层非查询层。
+            let aa_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                harness::auto_approve::global().seed_from_db(&aa_pool).await;
+            });
 
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。

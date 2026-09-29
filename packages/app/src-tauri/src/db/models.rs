@@ -564,6 +564,9 @@ pub struct ConversationRow {
     /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（migration 52，默认 'accept'
     /// ——2026-09-10 拍板：投递即自动消费，hold 扣住待批准是显式选择）
     pub inbox_policy: String,
+    /// 会话级全自动开关（migration 58）：Confirm 级工具直接放行；委派子会话
+    /// 创建时继承（delegate.rs）。屏幕家族不沾光（独立通道授权 + Off 提议制）。
+    pub auto_approve: i32,
     /// 频道 v1: 归档时刻（migration 54，NULL = 活会话）。频道在项目永久删除时
     /// 软删除为只读归档保留聊天记录；普通会话恒 NULL。
     #[sqlx(default)]
@@ -599,6 +602,9 @@ pub struct Conversation {
     /// 频道 v1: 归档时刻（NULL = 活会话；Some = 只读归档频道，原项目已删除）
     #[serde(default)]
     pub archived_at: Option<String>,
+    /// 会话级全自动开关（migration 58）：Confirm 级工具直接放行（含委派继承）
+    #[serde(default)]
+    pub auto_approve: bool,
 }
 
 /// `kind` 的 serde 默认值（旧负载无此字段时视为普通聊天会话）
@@ -639,6 +645,7 @@ impl From<ConversationRow> for Conversation {
                 row.inbox_policy
             },
             archived_at: row.archived_at,
+            auto_approve: row.auto_approve != 0,
         }
     }
 }
@@ -660,6 +667,9 @@ pub struct NewConversation {
     /// MA-1: 委派父会话 ID（None = 非委派会话）
     #[serde(default)]
     pub parent_conversation_id: Option<String>,
+    /// 会话级全自动开关（None = 关；delegate 继承时传 Some(父值)）
+    #[serde(default)]
+    pub auto_approve: Option<i32>,
 }
 
 // =========================================================================

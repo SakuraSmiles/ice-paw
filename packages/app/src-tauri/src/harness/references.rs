@@ -791,6 +791,7 @@ mod tests {
                 kind: None,
                 initiator_agent_id: None,
                 parent_conversation_id: None,
+                auto_approve: None,
             },
         )
         .await
