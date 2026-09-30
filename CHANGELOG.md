@@ -2,6 +2,27 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.9.4] — 2026-09-30
+
+> 实测反馈批：插话及时性 + 会话级全自动 + 屏幕提议制 + UE5 复活 + RAG 地基 + 项目智慧 + 提案卡实体引用化。
+
+### Added
+
+- **会话级全自动开关**：输入框发送按钮左侧「审批 ⇄ 全自动」选择器（参考 Claude Code/Codex 形态）——开启后 Confirm 级工具直接放行，含委派子会话（出生继承）；屏幕共享入口不沾光（独立通道授权体系）。
+- **RAG 检索质量地基**：结构感知分块（markdown heading 边界不切碎 + 代码块整块不切）+ 相邻 chunk 15% 重叠（跨边界语境保底）+ 检索结果携带正文片段（agent 免二跳 read_file）+ save_to_kb 四时机主动存（做完存结论/用户分享/说「记住」/调试存根因）。
+- **项目智慧（ProjectBriefStage）**：挂项目的会话自动注入成员名册 + 近况摘要（最近 3 个会话的滚动摘要）——同一项目下不同会话/不同 agent 打开上下文就能看到队友和近期进展。
+- **Agent 原生发现工具四件**：`list_projects` / `get_project_details` / `search_conversations`（全文检索）/ `get_task_ledger`（委派台账）——全部只读。
+- **Agent 提案卡实体引用**：`model_profile_id` 字段——agent 优先引用既有模型配置（免用户手填 Key），配套发现工具 `list_model_profiles`（脱敏只读）。
+
+### Fixed
+
+- **插话打断更及时**：SSE 流的 cancel 检查点从「chunk 到达后」改为「chunk 等待与 200ms cancel 探测并行」——thinking 阶段无 chunk 期也能 ≤200ms 打断。
+- **UE5 MCP 编辑器重开后自动复活**：调用期懒重启只救 Running 假死，Failed 后无自动拉起路径——新增回合预检 `revive_failed`（30s 节流）。
+- **屏幕工具提议制**：通道 Off 时屏幕工具一律拒绝并指路 `request_screen_session`——agent 只能提议、用户批准后才可用（治「agent 对屏幕工具权重过高」）。
+- **续写前缀泄漏（长任务数据损坏）**：续写链被工具调用打断时旧前缀错误拼接到后续每条新消息——终结时清空。
+- **智谱默认端点切 Coding Plan**（用户 Coding 套餐）；embedding/视觉推导保持标准端点（兼容族解耦）。
+- **模型快照滞后窗口**：实体更新后 agent 快照列即时同步（不等下次对话）。
+
 ## [0.9.3] — 2026-09-20
 
 > 定时任务（Scheduled Tasks）全批——到点自动执行完整 Agent 回合（0.9.3 主推主题）。
