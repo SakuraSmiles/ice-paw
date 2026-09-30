@@ -51,7 +51,11 @@ impl PipelineStage for ProjectBriefStage {
                         format!(
                             "- {}（{}）",
                             m.name,
-                            if m.role == "coordinator" { "统筹" } else { "成员" }
+                            if m.role == "coordinator" {
+                                "统筹"
+                            } else {
+                                "成员"
+                            }
                         )
                     })
                     .collect();

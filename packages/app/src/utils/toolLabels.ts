@@ -54,6 +54,8 @@ export const TOOL_LABELS: Record<string, string> = {
   read_agent_config: "读取配置",
   propose_config_change: "提出配置提案",
   update_plan: "更新计划",
+  // 用户选择（ask_user）
+  ask_user: "向用户提问",
   // 屏幕操作
   capture_screen: "截取屏幕",
   list_windows: "列出窗口",

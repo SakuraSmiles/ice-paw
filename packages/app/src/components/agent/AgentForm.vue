@@ -513,6 +513,7 @@ const PLATFORM_TOOL_NAMES = new Set([
   "delegate_to_agent",
   "send_message_to_session",
   "list_conversations",
+  "ask_user",
 ]);
 /** 旧白名单需要并入草稿的条目（平台元工具过滤掉——迁移后行为不变，纯去噪） */
 const whitelistMigrated = (props.agent?.enabled_tools ?? []).filter(

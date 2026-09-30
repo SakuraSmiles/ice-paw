@@ -17,6 +17,7 @@ import type {
   AuthScope,
   DelegationGrant,
   PendingAuthEntry,
+  PendingAskEntry,
   ConfigProposalPayload,
   ConfigProposalResponse,
   ChatBudgetPayload,
@@ -434,6 +435,19 @@ export const useChatStore = defineStore("chat", () => {
   const pendingProposals = ref<Map<string, ConfigProposalPayload>>(new Map());
   const pendingProposal = computed(() =>
     activeConvId.value ? pendingProposals.value.get(activeConvId.value) ?? null : null,
+  );
+  /** pendingAskRequests: 按 convId 索引的待处理用户选择（ask_user，2026-09-30）。
+   *  同 #10 注意力路由：激活会话 → 输入框上方内联选择卡（AskUserCard）；
+   *  非激活会话 → 右下通知栈（AuthNoticeStack 扩展渲染，可跳转/跳过）。
+   *  常驻等待无倒计时；清条目 = 作答（invoke 乐观删）或后端 cancel 事件。*/
+  const pendingAskRequests = ref<Map<string, PendingAskEntry>>(new Map());
+  /** 激活会话的待处理选择（内联选择卡渲染） */
+  const activeConvAskRequest = computed<PendingAskEntry | null>(() =>
+    activeConvId.value ? pendingAskRequests.value.get(activeConvId.value) ?? null : null,
+  );
+  /** 非激活会话的待处理选择（右下通知栈渲染），[convId, entry] 对 */
+  const backgroundAskRequests = computed<Array<[string, PendingAskEntry]>>(() =>
+    [...pendingAskRequests.value.entries()].filter(([cid]) => cid !== activeConvId.value),
   );
   /** 每会话最近一次发送错误（chat:error 的用户可读消息 + 后端分类 kind）。
    *  按 conversation_id 隔离——A 会话的错误横幅不会串到 B 会话顶部。
@@ -857,6 +871,28 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** 发送用户选择（ask_user）作答回 Rust。按 request_id 定位（通知栈条目不属
+   *  激活会话）；先删后 invoke：乐观移除防重复点击双发响应。dismissed =
+   *  用户主动跳过（agent 收到「自行决策并说明」）。*/
+  async function respondToAsk(
+    requestId: string,
+    action: "answered" | "dismissed",
+    selected: string[] = [],
+    customText?: string | null,
+  ) {
+    const m = new Map(pendingAskRequests.value);
+    for (const [cid, entry] of m) {
+      if (entry.payload.request_id === requestId) { m.delete(cid); break; }
+    }
+    pendingAskRequests.value = m;
+    await bridge.chat.respondAsk({
+      request_id: requestId,
+      action,
+      selected,
+      custom_text: customText ?? null,
+    });
+  }
+
   // ===== 删除 / 置顶会话（含撤销机制） =====
   const pendingDelete = ref<Map<string, { conv: Conversation; timer: ReturnType<typeof setTimeout> }>>(new Map());
 
@@ -1059,6 +1095,7 @@ export const useChatStore = defineStore("chat", () => {
     bgStreams.value = new Map();
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
+    pendingAskRequests.value = new Map();
     pendingRefs.value = [];
     channelView.value = null;
     clearChannelQueuedNotice();
@@ -1124,9 +1161,10 @@ export const useChatStore = defineStore("chat", () => {
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
     lastFailedSend, clearConvError, setConvError,
     activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError, lastErrorKind,
+    pendingAskRequests, activeConvAskRequest, backgroundAskRequests,
     streamingConvIds,
     loadConversations, selectConversation, loadMessages, loadMoreMessages,
-    sendMessage, stopGeneration, respondToAuth, respondToProposal,
+    sendMessage, stopGeneration, respondToAuth, respondToProposal, respondToAsk,
     deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
     // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）
     resetSendTimeout, clearSendTimeout, freezeCurrentAssistant, resetRoundStreaming, clearTurnAnchors,

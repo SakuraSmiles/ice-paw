@@ -1006,7 +1006,7 @@ mod tests {
             file_path: p.into(),
             title: p.into(),
             summary: "s".into(),
-        passage: None,
+            passage: None,
         };
         let kw = vec![mk("a.md"), mk("b.md")];
         let sem = vec![mk("b.md"), mk("c.md")];
@@ -1022,7 +1022,7 @@ mod tests {
             file_path: p.into(),
             title: p.into(),
             summary: "s".into(),
-        passage: None,
+            passage: None,
         };
         let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 5);
         assert_eq!(out.len(), 2);
@@ -1036,7 +1036,7 @@ mod tests {
             file_path: p.into(),
             title: p.into(),
             summary: "s".into(),
-        passage: None,
+            passage: None,
         };
         let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 1);
         assert_eq!(out.len(), 1, "limit 截断");

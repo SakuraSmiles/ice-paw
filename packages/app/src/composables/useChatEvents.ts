@@ -31,6 +31,7 @@ import type {
   ChatSummaryStartedPayload,
   ChatSummaryInjectedPayload,
   ToolAuthRequestPayload,
+  AskUserRequestPayload,
   DelegationAuthRequestPayload,
   ConfigProposalPayload,
   DelegationStartedPayload,
@@ -446,6 +447,14 @@ export async function useChatEvents(): Promise<() => void> {
       // 提案不传 request_id：批准需应用内看 diff / 填 key，toast 保持纯提醒
       void notifyApprovalNeeded("IcePaw · 收到配置提案", p.summary);
     }
+    for (const { payload } of chat.pendingAskRequests.values()) {
+      live.add(payload.request_id);
+      if (notifiedApprovalIds.has(payload.request_id)) continue;
+      notifiedApprovalIds.add(payload.request_id);
+      // 选择题不传 request_id：toast 按钮只有批准/拒绝两态，装不下选项——
+      // 纯提醒指引用户回应用内点选
+      void notifyApprovalNeeded("IcePaw · 等待你的选择", payload.question.slice(0, 80));
+    }
     // 瘦身：清掉已不在挂起集合的 id（审批已处理/超时），防长会话 Set 无界增长
     for (const id of notifiedApprovalIds) if (!live.has(id)) notifiedApprovalIds.delete(id);
   }
@@ -500,6 +509,26 @@ export async function useChatEvents(): Promise<() => void> {
     chat.pendingProposals = m;
     maybeNotifyPendingApprovals();
   });
+  // ---- 用户选择请求（ask_user，2026-09-30）----
+  // 按 convId 存（同授权/提案路由模型）：激活会话内联选择卡 / 后台会话通知栈；
+  // 常驻等待无超时——清条目只有两路：用户作答（invoke 乐观删）或后端 cancel
+  //（用户停止生成时 emit chat:ask-user-request-cancel）。
+  await subscribe<AskUserRequestPayload>("chat:ask-user-request", (e) => {
+    const m = new Map(chat.pendingAskRequests);
+    m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
+    chat.pendingAskRequests = m;
+    maybeNotifyPendingApprovals(); // 失焦才真发（内部守卫），fire-and-forget
+  });
+  await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
+    "chat:ask-user-request-cancel",
+    (e) => {
+      const m = new Map(chat.pendingAskRequests);
+      for (const [cid, entry] of m) {
+        if (entry.payload.request_id === e.payload.request_id) { m.delete(cid); break; }
+      }
+      chat.pendingAskRequests = m;
+    },
+  );
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:config-proposal-cancel",
     (e) => {

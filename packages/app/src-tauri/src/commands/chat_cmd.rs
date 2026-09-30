@@ -388,6 +388,32 @@ pub async fn respond_tool_auth(
     Ok(())
 }
 
+/// 前端用户选择结果 → 唤醒后端 ask_user 工具的 oneshot 等待者。
+///
+/// invoke 直达（无事件通道——Tauri v2 前端→后端走 invoke；ask_user 无 toast
+/// 按钮路径，前端乐观删即唯一清条目路径，cancel 场景由后端
+/// `chat:ask-user-request-cancel` 事件兜底清）。
+#[tauri::command]
+pub async fn respond_ask_user(
+    ask_registry: State<'_, crate::harness::oneshot_registry::AskUserRegistry>,
+    input: crate::infra::protocol::AskUserResponse,
+) -> AppResult<()> {
+    if input.action != "answered" && input.action != "dismissed" {
+        return Err(AppError::Validation(format!(
+            "ask_user 响应 action 非法: '{}'（需 answered/dismissed）",
+            input.action
+        )));
+    }
+    let handled = ask_registry.respond(input).await;
+    if !handled {
+        tracing::warn!(
+            target: "ice_paw.chat",
+            "ask_user respond：未找到匹配的 request_id（可能已被取消）"
+        );
+    }
+    Ok(())
+}
+
 /// 前端审批系统通知（utils/systemNotify → bridge.notify.approval）。
 ///
 /// `request_id` 有值 = 工具授权（Windows toast 带批准/拒绝按钮）；无值 =

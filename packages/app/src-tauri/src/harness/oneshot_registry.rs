@@ -158,6 +158,12 @@ impl RegistryResponse for ConfigProposalResponse {
     }
 }
 
+impl RegistryResponse for crate::infra::protocol::AskUserResponse {
+    fn request_id(&self) -> &str {
+        &self.request_id
+    }
+}
+
 // =========================================================================
 // 类型别名：消除 ToolAuthRegistry / ProposalRegistry 代码重复
 // =========================================================================
@@ -167,3 +173,7 @@ pub type ToolAuthRegistry = OneshotRegistry<ToolAuthResponse>;
 
 /// 配置提案响应注册表（Phase 1）
 pub type ProposalRegistry = OneshotRegistry<ConfigProposalResponse>;
+
+/// 用户选择（ask_user）响应注册表——invoke 命令 `respond_ask_user` 直调
+/// `respond()` 唤醒等待者，无需事件监听（Tauri v2 前端→后端走 invoke）。
+pub type AskUserRegistry = OneshotRegistry<crate::infra::protocol::AskUserResponse>;

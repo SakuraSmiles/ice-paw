@@ -397,6 +397,52 @@ pub struct ToolAuthResponse {
     pub delegation_grant: Option<DelegationGrant>,
 }
 
+// === 用户选择请求（ask_user）事件 ===
+
+/// `chat:ask-user-request` 选项条目 (Rust → Frontend)
+#[derive(Clone, Serialize)]
+pub struct AskUserOptionOut {
+    /// 选项标签（点击即选的短文案）
+    pub label: String,
+    /// 可选说明（选项下方次行灰字）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// `chat:ask-user-request` 事件 payload (Rust → Frontend)
+///
+/// ask_user 工具在需要用户拍板的分叉点发出（方案选择/继续与否等），
+/// 前端渲染选择卡（单选点击即答 / 多选勾选 + 提交），用户作答后经
+/// `respond_ask_user` 命令唤醒 oneshot 等待者，结果作为 tool_result
+/// 回到在途回合——**回合不中断**（对比文本提问 = 结束回合等打字再起一轮）。
+/// 等待语义：常驻等待（无超时），仅用户停止生成时经 cancel 中止。
+#[derive(Clone, Serialize)]
+pub struct AskUserRequestPayload {
+    pub request_id: String,
+    pub conversation_id: String,
+    /// 发起本问的工具调用 id（审计对账用）
+    pub tool_use_id: String,
+    pub question: String,
+    pub options: Vec<AskUserOptionOut>,
+    /// true = 多选（checkbox + 提交）；false = 单选（点击即答）
+    pub multiple: bool,
+    /// 是否提供「其他」自由输入逃生舱
+    pub allow_custom: bool,
+}
+
+/// `respond_ask_user` 命令 payload (Frontend → Rust)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AskUserResponse {
+    pub request_id: String,
+    /// "answered"（selected/custom_text 有效）| "dismissed"（用户跳过——
+    /// agent 应自行决策并说明未经确认）
+    pub action: String,
+    #[serde(default)]
+    pub selected: Vec<String>,
+    #[serde(default)]
+    pub custom_text: Option<String>,
+}
+
 // === 配置提案事件 ===
 
 /// 敏感度分级（贯穿所有阶段的调节阀）

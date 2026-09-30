@@ -905,6 +905,42 @@ export interface PendingAuthEntry {
 }
 
 // ============================================================================
+// 用户选择请求（ask_user，2026-09-30：回合内人机决策点）
+// ============================================================================
+
+/** 选项条目 */
+export interface AskUserOption {
+  label: string;
+  description?: string | null;
+}
+/** chat:ask-user-request 负载：agent 在需要用户拍板的分叉点发出，前端渲染
+ *  选择卡（单选点击即答 / 多选勾选 + 提交），作答经 respond_ask_user 命令
+ *  回后端，结果作为 tool_result 回到在途回合——回合不中断。常驻等待无超时，
+ *  仅用户停止生成时后端发 chat:ask-user-request-cancel 清卡。 */
+export interface AskUserRequestPayload {
+  request_id: string;
+  conversation_id: string;
+  tool_use_id: string;
+  question: string;
+  options: AskUserOption[];
+  multiple: boolean;
+  allow_custom: boolean;
+}
+/** respond_ask_user 命令负载：answered（selected/custom_text 有效）|
+ *  dismissed（用户跳过——agent 自行决策并说明）。 */
+export interface AskUserResponse {
+  request_id: string;
+  action: "answered" | "dismissed";
+  selected: string[];
+  custom_text?: string | null;
+}
+/** store 侧待处理选择条目（与 PendingAuthEntry 同构；无倒计时——常驻等待） */
+export interface PendingAskEntry {
+  payload: AskUserRequestPayload;
+  receivedAt: number;
+}
+
+// ============================================================================
 // 屏幕共享通道（computer-use 批次④：授权与可见性的单位）
 // ============================================================================
 

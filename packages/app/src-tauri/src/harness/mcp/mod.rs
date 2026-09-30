@@ -22,6 +22,7 @@ pub mod transport;
 pub mod types;
 // 内置 agentic 工具（文件读写编辑 / shell / grep / git / web）
 pub mod agent_config;
+pub mod ask_user_tool;
 pub mod delegate;
 pub mod discovery_tools;
 pub mod docx_tool;

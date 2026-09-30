@@ -14,6 +14,7 @@ import ChatMessages from "../components/chat/ChatMessages.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
 import ChatWelcome from "../components/chat/ChatWelcome.vue";
 import AuthRequestCard from "../components/chat/AuthRequestCard.vue";
+import AskUserCard from "../components/chat/AskUserCard.vue";
 import TaskPanel from "../components/chat/TaskPanel.vue";
 import TrajectoryView from "../components/trajectory/TrajectoryView.vue";
 import { useChatStore } from "../stores/chat";
@@ -95,6 +96,10 @@ watch(() => chat.activeConvId, () => {
       <!-- 工具授权内联卡（#10 激活会话分支）：输入框上方向上弹出；
            后台会话的授权走 AppLayout 挂载的 AuthNoticeStack -->
       <AuthRequestCard />
+
+      <!-- 用户选择内联卡（ask_user 激活会话分支）：与授权卡同注意力位；
+           后台会话的选择走 AuthNoticeStack 的选择条目 -->
+      <AskUserCard />
 
       <!-- 输入框：会话级能力，两个 render 共用，常驻底部 -->
       <ChatInput />

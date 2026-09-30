@@ -129,6 +129,50 @@ describe("chatStore", () => {
       });
     });
 
+    describe("respondToAsk（ask_user 作答，2026-09-30）", () => {
+      function seedAsk(store: ReturnType<typeof useChatStore>, requestId = "ask-1") {
+        const m = new Map(store.pendingAskRequests);
+        m.set("c1", {
+          payload: {
+            request_id: requestId, conversation_id: "c1", tool_use_id: "tu-1",
+            question: "用哪个方案？",
+            options: [{ label: "A" }, { label: "B" }],
+            multiple: false, allow_custom: true,
+          },
+          receivedAt: Date.now(),
+        });
+        store.pendingAskRequests = m;
+      }
+
+      it("作答：selected + custom_text 透传 + 乐观删条目", async () => {
+        mockInvoke.mockResolvedValue(undefined);
+        const store = useChatStore();
+        seedAsk(store);
+
+        await store.respondToAsk("ask-1", "answered", ["A"], "尽快");
+
+        expect(store.pendingAskRequests.size).toBe(0);
+        expect(mockInvoke).toHaveBeenCalledWith("respond_ask_user", {
+          input: { request_id: "ask-1", action: "answered", selected: ["A"], custom_text: "尽快" },
+        });
+      });
+
+      it("跳过：dismissed + 空选；custom_text 缺省补 null", async () => {
+        mockInvoke.mockResolvedValue(undefined);
+        const store = useChatStore();
+        seedAsk(store);
+
+        await store.respondToAsk("ask-1", "dismissed");
+
+        const arg = mockInvoke.mock.calls[mockInvoke.mock.calls.length - 1];
+        expect(arg[0]).toBe("respond_ask_user");
+        expect(arg[1]).toEqual({
+          input: { request_id: "ask-1", action: "dismissed", selected: [], custom_text: null },
+        });
+        expect(store.pendingAskRequests.size).toBe(0);
+      });
+    });
+
     it("createConversation calls bridge and adds to list", async () => {
       const newConv = fakeConv("new-c1");
       mockInvoke.mockResolvedValueOnce(newConv);

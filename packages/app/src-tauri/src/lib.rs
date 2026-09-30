@@ -165,6 +165,7 @@ pub fn run() {
             commands::chat_cmd::is_conversation_streaming,
             commands::chat_cmd::respond_config_proposal,
             commands::chat_cmd::respond_tool_auth,
+            commands::chat_cmd::respond_ask_user,
             commands::chat_cmd::notify_approval,
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
@@ -416,6 +417,10 @@ pub fn run() {
                 "[mgmt] 提案响应解析失败".to_string(),
             );
             handle.manage(proposal_registry);
+
+            // 3d) 用户选择（ask_user）响应注册表——无事件监听（前端走 invoke
+            //     命令 respond_ask_user 直调 respond，Tauri v2 前端→后端唯一通道）
+            handle.manage(harness::oneshot_registry::AskUserRegistry::new());
 
             // 3c) 会话事件通知总线（轨迹 live v2）：订阅 event_log 的 append 广播，
             //     转 Tauri event 推给前端——前端按 conversation_id 过滤后用已载

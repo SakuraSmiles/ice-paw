@@ -683,6 +683,11 @@ pub(crate) async fn run_agent_turn(
                 crate::harness::mcp::task_tools::DeleteScheduledTaskTool,
             ))
             .await;
+            // 用户选择卡（2026-09-30）：回合内人机决策点——仅 1v1 用户会话
+            // （频道多成员语义 v1 未定、委派子会话无用户；定时任务/MA-3 消费
+            // 回合在工具内按数据判定拒绝，见 ask_user_tool::unattended_rejection）
+            reg.register(Arc::new(crate::harness::mcp::ask_user_tool::AskUserTool))
+                .await;
         }
 
         // 回合预检：复活 Failed 的启用 server（UE5 编辑器重开实案——懒重启只救
@@ -1115,6 +1120,8 @@ const PLATFORM_TOOLS: &[&str] = &[
     "create_scheduled_task",
     "update_scheduled_task",
     "delete_scheduled_task",
+    // 向用户提问（2026-09-30）：沟通通道非能力面——收窄不断「问用户」
+    "ask_user",
 ];
 
 /// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；

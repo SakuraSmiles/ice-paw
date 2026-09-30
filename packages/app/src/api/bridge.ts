@@ -374,6 +374,16 @@ const chat = {
     try { await invoke<void>("respond_tool_auth", { input }); }
     catch (err) { throw wrapInvokeError("chat.respondAuth", err); }
   },
+  /** 用户选择（ask_user）作答响应——唤醒后端常驻等待的选择请求 */
+  async respondAsk(input: {
+    request_id: string;
+    action: "answered" | "dismissed";
+    selected: string[];
+    custom_text?: string | null;
+  }): Promise<void> {
+    try { await invoke<void>("respond_ask_user", { input }); }
+    catch (err) { throw wrapInvokeError("chat.respondAsk", err); }
+  },
   /** 审批系统通知（Rust 侧 harness/approval_toast：Windows toast 带批准/拒绝
    *  按钮 + 点主体前置主窗；request_id 有值=工具授权带按钮，无值=纯提醒） */
   async notifyApproval(input: {

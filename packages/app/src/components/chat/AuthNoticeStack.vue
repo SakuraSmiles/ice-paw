@@ -8,7 +8,7 @@
 // modal」混淆源。挂载在 AppLayout（全局，所有页面可见）。
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
-import { Lock } from "@lucide/vue";
+import { Lock, ListChecks } from "@lucide/vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
 import { formatMmSs } from "../../utils/time";
 import type {
@@ -58,10 +58,19 @@ function isDelegation(
 ): payload is DelegationAuthRequestPayload {
   return "agent_name" in payload;
 }
+
+/** 后台会话的用户选择跳过（dismissed——agent 收「自行决策并说明」） */
+function dismissAsk(requestId: string) {
+  void chat.respondToAsk(requestId, "dismissed");
+}
 </script>
 
 <template>
-  <div v-if="chat.backgroundAuthRequests.length > 0" class="auth-notice-stack" aria-live="polite">
+  <div
+    v-if="chat.backgroundAuthRequests.length > 0 || chat.backgroundAskRequests.length > 0"
+    class="auth-notice-stack"
+    aria-live="polite"
+  >
     <TransitionGroup name="auth-notice">
       <div
         v-for="[convId, entry] in chat.backgroundAuthRequests"
@@ -91,6 +100,33 @@ function isDelegation(
         <div class="notice-actions">
           <button class="notice-btn notice-btn-deny" type="button" @click="deny(entry.payload.request_id)">拒绝</button>
           <button class="notice-btn notice-btn-allow" type="button" @click="allowOnce(entry.payload.request_id)">允许（本次）</button>
+        </div>
+      </div>
+      <!-- 后台会话的用户选择（ask_user）：无倒计时（常驻等待）；作答需回会话
+           点内联卡（通知装不下选项），此处给跳过 + 跳转 -->
+      <div
+        v-for="[convId, askEntry] in chat.backgroundAskRequests"
+        :key="askEntry.payload.request_id"
+        class="auth-notice"
+        role="alert"
+      >
+        <div class="notice-head">
+          <ListChecks :size="14" class="notice-icon" aria-hidden="true" />
+          <span class="notice-conv" :title="convTitle(convId)">{{ convTitle(convId) }}</span>
+        </div>
+        <button class="notice-body" type="button" @click="jumpTo(convId)">
+          <div class="notice-tool">{{ askEntry.payload.question }}</div>
+          <div class="notice-hint">
+            {{ askEntry.payload.multiple ? "多选" : "单选" }} · {{ askEntry.payload.options.length }} 个选项 · 点击去作答
+          </div>
+        </button>
+        <div class="notice-actions">
+          <button
+            class="notice-btn notice-btn-deny"
+            type="button"
+            @click="dismissAsk(askEntry.payload.request_id)"
+          >跳过</button>
+          <button class="notice-btn notice-btn-allow" type="button" @click="jumpTo(convId)">去作答</button>
         </div>
       </div>
     </TransitionGroup>

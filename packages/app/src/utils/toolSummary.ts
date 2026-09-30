@@ -72,6 +72,7 @@ const SUMMARY_TOOLS = new Set([
   "edit_docx",
   "write_docx",
   "validate_docx",
+  "ask_user",
 ]);
 
 interface ToolResultLike {
@@ -259,6 +260,23 @@ export function summarizeToolCall(
         if (lines != null) parts.push(`${lines} 行`);
         return parts.join(" · ");
       });
+
+    // ask_user：问题进 fileLabel（截断展示 + title 全文），作答摘要进 secondary
+    //（format_answer 的 message 字段：如「用户选择了：方案 A」/「用户跳过了此问题…」）
+    case "ask_user": {
+      const question = strOf(args, "question");
+      if (!question) return null;
+      const r = parseResultJson(result);
+      const answer = r ? strOf(r, "message") : null;
+      return {
+        display: toolDisplayName(name),
+        secondary: result && result.isError ? "调用失败" : answer ?? "",
+        fileLabel: question.length > 40 ? question.slice(0, 40) + "…" : question,
+        fileTitle: question,
+        revealPath: "",
+        diff: null,
+      };
+    }
 
     case "inspect_docx":
       if (!path) return null;

@@ -197,4 +197,50 @@ describe("审批系统通知：恰一次语义", () => {
     await Promise.resolve();
     expect(chat.pendingAuthRequests.size).toBe(0);
   });
+
+  // ---- 用户选择（chat:ask-user-request，2026-09-30）----
+  // 进 pendingAskRequests 栈（按 convId 键）；失焦通知纯提醒（不传 request_id
+  // ——toast 按钮装不下选项）；作答走 invoke 乐观删（无 responded 事件）；
+  // cancel 事件（用户停止生成）清条目。
+
+  function askPayload(requestId: string) {
+    return {
+      request_id: requestId,
+      conversation_id: "c1",
+      tool_use_id: "tu-1",
+      question: "用哪个方案？",
+      options: [{ label: "A" }, { label: "B" }],
+      multiple: false,
+      allow_custom: true,
+    };
+  }
+
+  it("选择请求 → 进 pendingAskRequests；失焦纯提醒通知（无 toast 按钮）", async () => {
+    const chat = useChatStore();
+    chat.activeConvId = "c1";
+    handlers.get("chat:ask-user-request")!({ payload: askPayload("ask-1") });
+    await Promise.resolve();
+    expect(chat.pendingAskRequests.size).toBe(1);
+    expect(chat.activeConvAskRequest?.payload.request_id).toBe("ask-1");
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith({
+      title: "IcePaw · 等待你的选择",
+      body: "用哪个方案？",
+    });
+  });
+
+  it("选择条目被 ask-user-request-cancel 清除（用户停止生成路径）", async () => {
+    handlers.get("chat:ask-user-request")!({ payload: askPayload("ask-2") });
+    await Promise.resolve();
+    const chat = useChatStore();
+    expect(chat.pendingAskRequests.size).toBe(1);
+
+    handlers.get("chat:ask-user-request-cancel")!({
+      payload: { request_id: "ask-2", conversation_id: "c1", reason: "abort" },
+    });
+    await Promise.resolve();
+    expect(chat.pendingAskRequests.size).toBe(0);
+  });
 });
