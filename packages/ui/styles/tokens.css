@@ -99,10 +99,12 @@
   --ip-line-height-relaxed:  1.33;
   --ip-line-height-loose:    1.60;
   --ip-line-height-loose2:   1.54;
-  /* loose3 2026-09-15 三轮 1.50→1.60（聊天正文 15px 配 24px 行高）——DS 系两端实证
-     （DSH 桌面 1.71 / 网页 1.75）后用户重新拍板；消费方 = 聊天文本簇（markdown-body
-     + 用户/助手气泡纯文本，同值统一），改值即全簇同步 */
-  --ip-line-height-loose3:   1.60;
+  /* loose3 2026-09-15 三轮 1.50→1.60（DS 系两端实证后拍板）；2026-10-08 四轮
+     1.60→1.70 + 聊天正文 15px→14px（对标 DSH 14px/1.71——隐形空行修复后纯设计
+     间距真实呈现，用户对标重拍）。14×1.7≈23.8px/行；消费方 = 聊天文本簇
+     （markdown-body + 用户/助手气泡纯文本，同值统一），改值即全簇同步；
+     思考区 .think-body 字面 1.6 紧凑档不随（低半档密度设计不变） */
+  --ip-line-height-loose3:   1.70;
   --ip-line-height-monospace: 1.57;
 
   /* 字重 token */

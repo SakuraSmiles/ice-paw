@@ -2019,7 +2019,7 @@ const RESUMABLE_REASONS = new Set([
 /* flex column + 统一 gap：正文 / 引用卡 / 附件卡（含堆叠）/ 图片（含堆叠）纵向
    排布的唯一间距来源——旧实现靠各元素零散 margin-top（6/4/0px 不一，单图单卡
    贴正文），多元素混排时参差；卡片的独立 margin 已移除，调间距只改 gap。 */
-.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:var(--ip-spacing-2_5) var(--ip-spacing-4); border-radius:12px; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.6); white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
+.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:var(--ip-spacing-2_5) var(--ip-spacing-4); border-radius:12px; font-size:14px; line-height:var(--ip-line-height-loose3, 1.7); white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
 
 /* ===== MA-3 跨会话来件来源标注头（气泡内首行；气泡底色深→文字用 on-bubble 色）===== */
 .user-incoming-head { display:flex; align-items:center; gap:var(--ip-spacing-1_5); min-width:0; padding-bottom:var(--ip-spacing-1_5); border-bottom:1px solid rgba(255,255,255,0.18); }
@@ -2029,9 +2029,10 @@ const RESUMABLE_REASONS = new Set([
 .incoming-pill { flex-shrink:0; font-size:var(--ip-text-micro-size); line-height:1; padding:3px var(--ip-spacing-2); border-radius:var(--ip-radius-full, 999px); background:rgba(255,255,255,0.16); }
 
 /* ===== 助手消息文字（无自带背景，由组容器承载气泡块）=====
-   行高走 loose3（1.6）与用户气泡/ markdown-body 同值——2026-09-15 排版批三轮
-   （令牌改值 1.5→1.6），勿回退字面量（同屏 MD 与纯文本行距不齐的根源）。 */
-.message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.6); white-space:pre-wrap; word-break:break-word; background:transparent; }
+   行高走 loose3 与用户气泡/ markdown-body 同值（同屏 MD 与纯文本行距统一——
+   勿回退字面量）。2026-10-08 四轮：14px/loose3 1.7（对标 DSH，与 markdown-body
+   同批同步改——正文档从 body-15 降 14px，注释见 markdown.css 根容器）。 */
+.message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:14px; line-height:var(--ip-line-height-loose3, 1.7); white-space:pre-wrap; word-break:break-word; background:transparent; }
 
 /* ===== 用户消息内容（含图片） ===== */
 .user-content { display:flex; flex-direction:column; gap:4px; }

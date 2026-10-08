@@ -25,8 +25,10 @@
 
 .markdown-body {
   font-family: var(--ip-font-sans);
-  font-size: var(--ip-text-body-size, 15px);
-  line-height: var(--ip-line-height-loose3, 1.6);
+  /* 2026-10-08 四轮：15px→14px（对标 DSH 14px 档；与用户/助手纯文本气泡同步改，
+     同屏统一）。14px = code-14 档尺寸值；行高 loose3 同批 1.6→1.7（23.8px/行） */
+  font-size: 14px;
+  line-height: var(--ip-line-height-loose3, 1.7);
   color: var(--ip-color-text-body, var(--ip-gray-700));
 
   /* 2026-10-08：切断宿主的 pre-wrap 继承——勿删（删了段间空行回归）。
