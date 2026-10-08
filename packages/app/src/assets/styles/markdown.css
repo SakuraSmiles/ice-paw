@@ -28,6 +28,16 @@
   font-size: var(--ip-text-body-size, 15px);
   line-height: var(--ip-line-height-loose3, 1.6);
   color: var(--ip-color-text-body, var(--ip-gray-700));
+
+  /* 2026-10-08：切断宿主的 pre-wrap 继承——勿删（删了段间空行回归）。
+   * markdown-it 输出的块级元素之间有 \n 源码换行（匿名空白文本节点），
+   * normal 下浏览器折叠忽略；宿主 .message-bubble / .think-body 的
+   * white-space:pre-wrap（纯文本消息保换行的设计）沿继承链传进来后，
+   * 每个 \n 被渲染成一行 24px 隐形空行——不属于任何元素的盒模型，
+   * DevTools 里查 margin/padding 均看不到，真实段间断口 ≈40px。
+   * 行内 code（pre-wrap）与代码块 pre（pre）是元素自身声明，不受影响；
+   * 纯文本消息不经过 .markdown-body，换行能力保持。 */
+  white-space: normal;
 }
 
 .markdown-body > *:first-child {
