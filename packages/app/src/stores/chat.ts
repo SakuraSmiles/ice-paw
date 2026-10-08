@@ -828,27 +828,47 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** 作答/授权响应的 in-flight 判重（同步段防双击双发——invoke-first 改造后
+   *  接管原「乐观先删」的防抖职责；请求结束即移除，失败可重点）。*/
+  const pendingResponds = new Set<string>();
+
   /** 发送授权响应（#11 带 scope 范围档；委派授权带 delegationGrant 预授权档）。
    *  按 request_id 定位——通知栈里的条目不属于激活会话，不能再走「当前条目」
-   *  语义。先删后 invoke：乐观移除防重复点击双发响应。*/
+   *  语义。invoke-first：成功才删（2026-10-08 P1——旧「先删后 invoke」在 invoke
+   *  失败时卡已消失而后端没收到响应；授权有 120s 超时兜底但失败静默吞卡仍是
+   *  坏体验）。失败保留卡可重试 + 横幅可见。*/
   async function respondToAuth(
     requestId: string,
     allowed: boolean,
     scope: AuthScope = "once",
     delegationGrant?: DelegationGrant,
   ) {
+    if (pendingResponds.has(requestId)) return;
+    pendingResponds.add(requestId);
+    // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
+    try {
+      await bridge.chat.respondAuth({
+        request_id: requestId,
+        allowed,
+        scope,
+        delegation_grant: delegationGrant,
+      });
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      const target = [...pendingAuthRequests.value.entries()]
+        .find(([, v]) => v.payload.request_id === requestId)?.[0];
+      if (target) {
+        setConvError(target, `授权响应发送失败（${raw}），卡已保留，请重试。`, "respond_failed");
+      }
+      return;
+    } finally {
+      pendingResponds.delete(requestId);
+    }
     const m = new Map(pendingAuthRequests.value);
     for (const [cid, entry] of m) {
       if (entry.payload.request_id === requestId) { m.delete(cid); break; }
     }
     pendingAuthRequests.value = m;
-    // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
-    await bridge.chat.respondAuth({
-      request_id: requestId,
-      allowed,
-      scope,
-      delegation_grant: delegationGrant,
-    });
   }
 
   /** 发送配置提案响应回 Rust */
@@ -872,25 +892,45 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   /** 发送用户选择（ask_user）作答回 Rust。按 request_id 定位（通知栈条目不属
-   *  激活会话）；先删后 invoke：乐观移除防重复点击双发响应。dismissed =
-   *  用户主动跳过（agent 收到「自行决策并说明」）。*/
+   *  激活会话）。invoke-first：成功才删（2026-10-08 P1——旧「先删后 invoke」
+   *  在 invoke 失败时卡已消失而后端没收到响应，ask_user 是常驻等待（拍板无
+   *  超时）、唯一中止路径是用户停止生成——失败即回合挂死无重试出口）。
+   *  dismissed = 用户主动跳过（agent 收到「自行决策并说明」）。*/
   async function respondToAsk(
     requestId: string,
     action: "answered" | "dismissed",
     selected: string[] = [],
     customText?: string | null,
   ) {
+    if (pendingResponds.has(requestId)) return;
+    pendingResponds.add(requestId);
+    try {
+      await bridge.chat.respondAsk({
+        request_id: requestId,
+        action,
+        selected,
+        custom_text: customText ?? null,
+      });
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      const target = [...pendingAskRequests.value.entries()]
+        .find(([, v]) => v.payload.request_id === requestId)?.[0];
+      if (target) {
+        setConvError(
+          target,
+          `作答发送失败（${raw}），问题卡已保留，请重新作答。`,
+          "respond_failed",
+        );
+      }
+      return;
+    } finally {
+      pendingResponds.delete(requestId);
+    }
     const m = new Map(pendingAskRequests.value);
     for (const [cid, entry] of m) {
       if (entry.payload.request_id === requestId) { m.delete(cid); break; }
     }
     pendingAskRequests.value = m;
-    await bridge.chat.respondAsk({
-      request_id: requestId,
-      action,
-      selected,
-      custom_text: customText ?? null,
-    });
   }
 
   // ===== 删除 / 置顶会话（含撤销机制） =====

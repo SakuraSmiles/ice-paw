@@ -127,6 +127,27 @@ describe("chatStore", () => {
           input: { request_id: "r1", allowed: false, scope: "once", delegation_grant: undefined },
         });
       });
+
+      it("2026-10-08 P1：invoke 失败保留条目 + 错误可见（invoke-first 回滚）", async () => {
+        mockInvoke.mockRejectedValueOnce(new Error("pipe broken"));
+        const store = useChatStore();
+        const m = new Map(store.pendingAuthRequests);
+        m.set("c1", {
+          payload: {
+            request_id: "d1", conversation_id: "c1", message_id: "m1",
+            agent_name: "wenshu", agent_id: "a1", task: "整理文档",
+          },
+          receivedAt: Date.now(),
+        });
+        store.pendingAuthRequests = m;
+
+        await store.respondToAuth("d1", true, "once");
+
+        expect(store.pendingAuthRequests.size).toBe(1); // 条目保留可重试
+        const err = (store as unknown as { lastErrors: Map<string, { message: string; kind: string }> }).lastErrors.get("c1");
+        expect(err?.kind).toBe("respond_failed");
+        expect(err?.message).toContain("授权响应发送失败");
+      });
     });
 
     describe("respondToAsk（ask_user 作答，2026-09-30）", () => {
@@ -170,6 +191,35 @@ describe("chatStore", () => {
           input: { request_id: "ask-1", action: "dismissed", selected: [], custom_text: null },
         });
         expect(store.pendingAskRequests.size).toBe(0);
+      });
+
+      it("2026-10-08 P1：invoke 失败保留条目 + 错误可见（invoke-first 回滚）", async () => {
+        // ask_user 是常驻等待（无超时）——旧「先删后 invoke」失败即回合挂死
+        // 无重试出口；现在失败保留卡 + setConvError
+        mockInvoke.mockRejectedValueOnce(new Error("boom"));
+        const store = useChatStore();
+        seedAsk(store);
+
+        await store.respondToAsk("ask-1", "answered", ["A"]);
+
+        expect(store.pendingAskRequests.size).toBe(1); // 条目保留可重试
+        const err = (store as unknown as { lastErrors: Map<string, { message: string; kind: string }> }).lastErrors.get("c1");
+        expect(err?.kind).toBe("respond_failed");
+        expect(err?.message).toContain("作答发送失败");
+      });
+
+      it("2026-10-08 P1：双击同 request_id 只发一次 invoke（in-flight 判重）", async () => {
+        mockInvoke.mockImplementation(() => new Promise((r) => setTimeout(r, 20)));
+        const store = useChatStore();
+        seedAsk(store);
+
+        const p1 = store.respondToAsk("ask-1", "answered", ["A"]);
+        const p2 = store.respondToAsk("ask-1", "answered", ["A"]);
+        await Promise.all([p1, p2]);
+
+        const askCalls = mockInvoke.mock.calls.filter((c) => c[0] === "respond_ask_user");
+        expect(askCalls.length).toBe(1); // 在途期间第二次点击早退
+        expect(store.pendingAskRequests.size).toBe(0); // 成功后删除
       });
     });
 
