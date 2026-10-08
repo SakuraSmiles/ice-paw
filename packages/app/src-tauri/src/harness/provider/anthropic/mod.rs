@@ -257,7 +257,12 @@ impl LlmProvider for AnthropicAdapter {
             let detail = serde_json::from_str::<ApiErrorBody>(&text)
                 .map(|b| format!("{}: {}", b.error.kind, b.error.message))
                 .unwrap_or_else(|_| text.chars().take(500).collect());
-            return Err(AppError::Llm(format!("HTTP {status}: {detail}")));
+            // 2026-10-08：对端报错体可能回显 key 片段（防御性掩码——错误原文
+            // 会进 session_events/日志/前端横幅）
+            return Err(AppError::Llm(format!(
+                "HTTP {status}: {}",
+                crate::infra::strings::mask_credentials(&detail)
+            )));
         }
 
         // 6. SSE 解析（mpsc 模式）— 委托给 streaming::parse_sse_stream

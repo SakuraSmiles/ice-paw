@@ -1119,6 +1119,10 @@ pub(crate) fn inject_into_system(
 /// 场景）。模块级：组装期收窄披露日志与 filter 共用同一份名单。
 const PLATFORM_TOOLS: &[&str] = &[
     "propose_config_change",
+    // 实体引用脱敏只读（2026-10-08 接线）：propose_config_change 的 description
+    // 指路 list_model_profiles——不恒保留则「指路但路被 tool_scopes 拆」，
+    // agent 被逼退回 __SLOT__ 手填路径
+    "list_model_profiles",
     "read_agent_config",
     "delegate_to_agent",
     "send_message_to_session",

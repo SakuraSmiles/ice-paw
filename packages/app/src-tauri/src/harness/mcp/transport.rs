@@ -234,8 +234,10 @@ impl HttpMcpTransport {
                 let txt = resp.text().await.unwrap_or_default();
                 tracing::warn!(
                     target: "ice_paw.mcp",
-                    "MCP HTTP '{}' notification({method}) 返回 {status}（已忽略）: {txt}",
-                    self.name
+                    "MCP HTTP '{}' notification({method}) 返回 {status}（已忽略）: {}",
+                    self.name,
+                    // 2026-10-08：对端报错体可能回显凭据片段（防御性掩码）
+                    crate::infra::strings::mask_credentials(&txt)
                 );
             }
             Err(e) => {

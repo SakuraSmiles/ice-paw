@@ -350,7 +350,8 @@ impl OpenAiAdapter {
             return Err(AppError::Llm(format!(
                 "LLM 返回 HTTP {}: {}",
                 status,
-                text.chars().take(500).collect::<String>()
+                // 2026-10-08：对端报错体可能回显 key 片段（防御性掩码）
+                crate::infra::strings::mask_credentials(&text.chars().take(500).collect::<String>())
             )));
         }
 

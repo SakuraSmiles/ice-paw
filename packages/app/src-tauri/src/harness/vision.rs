@@ -187,7 +187,8 @@ pub async fn describe_image(
         .await
         .map_err(|e| AppError::Internal(format!("vision 响应读取失败 ({provider}): {e}")))?;
     if !status.is_success() {
-        let snippet: String = text.chars().take(500).collect();
+        // 2026-10-08：对端报错体可能回显 key 片段（防御性掩码）
+        let snippet: String = crate::infra::strings::mask_credentials(&text.chars().take(500).collect::<String>());
         return Err(AppError::Internal(format!(
             "vision {provider} 返回 {status}: {snippet}"
         )));

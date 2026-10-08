@@ -31,6 +31,28 @@ pub(crate) fn truncate_to_byte_boundary(s: &str, max_bytes: usize, suffix: Optio
     out
 }
 
+/// 错误文本中的凭据模式掩码（2026-10-08 顺手批）。
+///
+/// 部分 API/网关在报错体里回显 key 片段（智谱 1113 族、某些 401 网关）——
+/// 错误原文会进 session_events / 持久日志 / 前端横幅，此处对两类模式做
+/// **防御性**掩码（不依赖对端行为实证）：
+/// - `sk-` 前缀 key：`sk-[A-Za-z0-9_-]{8,}` → `sk-***`
+/// - Bearer 凭据：`bearer xxxxx`（大小写不敏感）→ `Bearer ***`
+///
+/// 掩码后的 `***` 不会再命中模式（`*` 不在字符类），幂等。
+pub(crate) fn mask_credentials(text: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static SK: OnceLock<Regex> = OnceLock::new();
+    static BEARER: OnceLock<Regex> = OnceLock::new();
+    let bearer = BEARER.get_or_init(|| {
+        Regex::new(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}").expect("静态凭据正则必合法")
+    });
+    let sk = SK.get_or_init(|| Regex::new(r"sk-[A-Za-z0-9_-]{8,}").expect("静态凭据正则必合法"));
+    let masked = bearer.replace_all(text, "Bearer ***");
+    sk.replace_all(&masked, "sk-***").into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +100,25 @@ mod tests {
     fn exactly_at_length() {
         // max 恰等于字符串长度 → 走 <= 分支原样返回
         assert_eq!(truncate_to_byte_boundary("abc", 3, None), "abc");
+    }
+
+    #[test]
+    fn mask_credentials_covers_both_patterns() {
+        // sk- key（含 - _ 字符类成员）
+        assert_eq!(
+            mask_credentials("鉴权失败: sk-abc123XYZ_9-cred 无效"),
+            "鉴权失败: sk-*** 无效"
+        );
+        // Bearer（大小写不敏感、token 含 . _ ~ + / = -）
+        assert_eq!(
+            mask_credentials("401: bearer eyJhbGciOi.JOSE.abc 失效"),
+            "401: Bearer *** 失效"
+        );
+        assert_eq!(mask_credentials("Bearer abc.def-ghi_jkl"), "Bearer ***");
+        // 普通文本零改动；短于 8 的 token 不误伤
+        assert_eq!(mask_credentials("余额不足 1113，请充值"), "余额不足 1113，请充值");
+        assert_eq!(mask_credentials("token: sk-short"), "token: sk-short");
+        // 幂等（已掩码不再命中）
+        assert_eq!(mask_credentials("Bearer ***"), "Bearer ***");
     }
 }

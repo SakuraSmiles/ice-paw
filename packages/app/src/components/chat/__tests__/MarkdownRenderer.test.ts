@@ -128,3 +128,44 @@ describe("MarkdownRenderer 表格", () => {
     expect(w.find(".markdown-table-wrap").classes()).not.toContain("md-table-wide");
   });
 });
+
+// ===== 安全锁定（2026-10-08 顺手批）=====
+// 当前防线 = markdown-it html:false + 默认 validateLink，CSP=null 无第二道——
+// 本组断言把防线锁进测试：任何人改 html:true / 升级 markdown-it 改默认值，
+// 这里立刻红。勿删（体检台账 X-P2-10）。
+describe("MarkdownRenderer XSS 锁定", () => {
+  it("javascript: 链接不产生可点击 href（validateLink 拦截）", () => {
+    const w = mount(MarkdownRenderer, {
+      props: { content: "[点我](javascript:alert(1))" },
+    });
+    const anchor = w.find("a");
+    // markdown-it validateLink 拒绝 → 渲染为纯文本（无 <a>）
+    expect(anchor.exists()).toBe(false);
+    expect(w.text()).toContain("点我");
+  });
+
+  it("内联 HTML 不解析：img onerror 转义为文本", () => {
+    const w = mount(MarkdownRenderer, {
+      props: { content: '<img src=x onerror="alert(1)">' },
+    });
+    expect(w.find("img").exists()).toBe(false);
+    expect(w.text()).toContain("<img"); // 原样转义显示
+  });
+
+  it("script 标签转义为文本", () => {
+    const w = mount(MarkdownRenderer, {
+      props: { content: "<script>alert(1)</script>" },
+    });
+    expect(w.find("script").exists()).toBe(false);
+    expect(w.text()).toContain("<script>");
+  });
+
+  it("http(s) 正常链接仍可渲染（拦截不误伤）", () => {
+    const w = mount(MarkdownRenderer, {
+      props: { content: "[官网](https://example.com)" },
+    });
+    const anchor = w.find("a");
+    expect(anchor.exists()).toBe(true);
+    expect(anchor.attributes("href")).toBe("https://example.com");
+  });
+});

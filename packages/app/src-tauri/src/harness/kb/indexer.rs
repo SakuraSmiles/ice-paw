@@ -293,7 +293,24 @@ fn is_indexable_ext(ext: &str) -> bool {
     )
 }
 
+/// 递归深度上限（2026-10-08 顺手批）：Windows junction 环会让无界递归栈溢出
+/// （boot 全量索引路径一次崩终身崩）；正常知识库目录层级 <<16。
+const MAX_WALK_DEPTH: usize = 16;
+
 fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+    walk_dir_inner(root, dir, out, 0);
+}
+
+fn walk_dir_inner(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>, depth: usize) {
+    if depth > MAX_WALK_DEPTH {
+        tracing::warn!(
+            target: "ice_paw.kb",
+            "目录扫描达深度上限 {}，跳过更深层（疑似环形 junction/超深目录）: {}",
+            MAX_WALK_DEPTH,
+            dir.display()
+        );
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -312,7 +329,7 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             if is_hidden {
                 continue;
             }
-            walk_dir(root, &path, out);
+            walk_dir_inner(root, &path, out, depth + 1);
         } else if ft.is_file() {
             let is_indexable = path
                 .extension()

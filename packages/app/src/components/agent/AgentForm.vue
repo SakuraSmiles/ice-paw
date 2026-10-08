@@ -509,10 +509,16 @@ function onSelectPreset(p: StylePreset | null) {
 /** 平台元工具（恒可见，无需进 scopes 表达）——与 session_runner::PLATFORM_TOOLS 同步 */
 const PLATFORM_TOOL_NAMES = new Set([
   "propose_config_change",
+  // 与后端 session_runner::PLATFORM_TOOLS 同步（两处同步不变式）
+  "list_model_profiles",
   "read_agent_config",
   "delegate_to_agent",
   "send_message_to_session",
   "list_conversations",
+  "list_scheduled_tasks",
+  "create_scheduled_task",
+  "update_scheduled_task",
+  "delete_scheduled_task",
   "ask_user",
 ]);
 /** 旧白名单需要并入草稿的条目（平台元工具过滤掉——迁移后行为不变，纯去噪） */
