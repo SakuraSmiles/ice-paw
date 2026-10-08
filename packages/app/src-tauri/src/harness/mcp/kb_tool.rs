@@ -431,7 +431,7 @@ impl McpClient for SaveToKbTool {
                 "content": { "type": "string", "description": "Full markdown content to save." },
                 "scope": { "type": "string", "enum": ["agent", "global"], "description": "Which knowledge base: 'agent' (this agent's dedicated) or 'global' (shared)." },
                 "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for categorization." },
-                "filename": { "type": "string", "description": "Optional filename without path/extension. Defaults to note-{timestamp}." }
+                "filename": { "type": "string", "description": "Optional plain file name (no path separators, no drive letters, no '..'). Defaults to note-{timestamp}." }
             },
             "required": ["title", "content", "scope"]
         })
@@ -460,6 +460,14 @@ impl McpClient for SaveToKbTool {
             .filename
             .clone()
             .unwrap_or_else(|| format!("note-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S")));
+        // 2026-10-08 P1 加固：stem 必须是单组件名——join 遇绝对路径整体替换、
+        // `..` 穿越出 knowledge 目录；本工具 Always 级不弹审批，是工具面唯一
+        // 无路径闸的写盘位，必须自校验（与 write_file 的 PathWhitelist 体系对齐）
+        if !is_safe_kb_stem(&stem) {
+            return Err(AppError::Validation(format!(
+                "知识库文件名无效: {stem}。文件名不能包含路径分隔符、盘符、\"..\" 或以点/空格结尾；请只给纯名字（如 my-note）。"
+            )));
+        }
         let filename = format!("{stem}.md");
         let file_path = directory.join(&filename);
 
@@ -524,6 +532,34 @@ fn validate_save_scope(scope: &str) -> AppResult<()> {
             "scope 必须是 agent / global，得到 '{scope}'"
         ))),
     }
+}
+
+/// save_to_kb 的 filename 是否为安全单组件名（不含路径语义）。
+///
+/// 拒绝：路径分隔符/多组件（`a/b`、`..\x`、绝对路径——`Path::join` 遇绝对
+/// 路径整体替换目标目录）、`..`、盘符/ADS 冒号、尾部点/空格（Win32 归一剥除）。
+/// 本工具 Always 级不弹审批，是工具面唯一无路径闸的写盘位，必须自校验。
+fn is_safe_kb_stem(stem: &str) -> bool {
+    if stem.trim().is_empty() {
+        return false;
+    }
+    // 两种分隔符显式拒（`\` 在 Unix 非分隔符、Path 判不住；文件名含反斜杠
+    // 在任何平台都是坏名字）
+    if stem.contains('/') || stem.contains('\\') {
+        return false;
+    }
+    // 单组件：Path 解析后仍是同一名字（无前缀/父段；`.` `..` 的 file_name
+    // 为 None 天然不过；Windows 上此处兜住盘符前缀形态）
+    let p = std::path::Path::new(stem);
+    if p.components().count() != 1 || p.file_name() != Some(std::ffi::OsStr::new(stem)) {
+        return false;
+    }
+    // 盘符（`C:`）/ ADS（`a:b`）——合法 NTFS 名本不允许冒号，一刀切
+    if stem.contains(':') {
+        return false;
+    }
+    // 尾部点/空格：Win32 对末组件剥除后落盘（防归一撞名/绕过）
+    !stem.ends_with('.') && !stem.ends_with(' ')
 }
 
 /// 推导某 scope 的 knowledge 目录：
@@ -865,6 +901,40 @@ mod tests {
         assert!(validate_save_scope("project").is_err());
         assert!(validate_save_scope("agent").is_ok());
         assert!(validate_save_scope("global").is_ok());
+    }
+
+    /// 2026-10-08 P1 回归锁：filename 必须是单组件名（Always 级写盘自校验）。
+    /// 绝对路径 join 整体替换、`..` 穿越、盘符/ADS 冒号、尾随点/空格全拒。
+    #[test]
+    fn save_to_kb_rejects_pathlike_filenames() {
+        // 合法名
+        for ok in ["my-note", "笔记_2026", "note-20261008-093000", "a.b.c"] {
+            assert!(is_safe_kb_stem(ok), "应放行: {ok}");
+        }
+        // 绝对路径（正斜杠 Windows 判定 / 盘符反斜杠）/ 穿越与分隔符
+        for bad in [
+            "C:/abs/path",
+            "C:\\Windows\\Temp\\x",
+            "../../etc/x",
+            "..",
+            ".",
+            "a/b",
+            "a\\b",
+            "/etc/passwd",
+            // 盘符冒号（无分隔符形态）/ ADS
+            "C:x",
+            "note:stream",
+            // 尾部点/空格（Win32 归一剥除）
+            "note.",
+            "note ",
+            "note. ",
+            // 空/纯空白/纯点
+            "",
+            "   ",
+            "...",
+        ] {
+            assert!(!is_safe_kb_stem(bad), "应拒绝: {bad:?}");
+        }
     }
 
     /// 闭环：build_markdown 产出的 md 能被 parse_markdown 正确解析回 title/tags。

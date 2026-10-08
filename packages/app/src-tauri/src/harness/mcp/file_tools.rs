@@ -22,13 +22,49 @@ const MAX_BACKUPS: usize = 10;
 /// 是否指向 IcePaw agent 配置文件（布局 `<workspaces>/agents/<id>/agent.yaml`）。
 ///
 /// 用 [`Path::components`] 匹配路径段，跨平台（Windows `\` / Unix `/` 均正确），
-/// 避免字符串 `contains` 的分隔符与大小写陷阱。文件名按 ASCII 大小写不敏感。
+/// 避免字符串 `contains` 的分隔符与大小写陷阱。
+///
+/// 2026-10-08 P0 加固（大小写不一致绕过实案）：判等必须与 Win32 落盘行为一致——
+/// - 目录组件 "agents" 与文件名同为大小写不敏感（原实现文件名不敏感、目录
+///   敏感，`\Agents\` 变体即绕过：授权层大小写折叠放行 + 此处漏判 = 零审批
+///   直改 agent.yaml，击穿提案审批系统）；
+/// - file_name 先剥 ADS 流段（`agent.yaml::$DATA`）与尾部点/空格（CreateFileW
+///   对非 `\\?\` 路径的末组件做同样规范化——`agent.yaml. ` 落盘即写中真身）；
+/// - 8.3 短名形态（如 `AG~1.YAM`；agent.yaml 的 4 字符扩展名不符合 8.3，卷
+///   启用 8dot3 时必有短名）静态判等不可靠，按形态拒——宁拒勿放。
 fn is_agent_config(path: &Path) -> bool {
-    let is_yaml = path
-        .file_name()
-        .map(|n| n.eq_ignore_ascii_case("agent.yaml"))
-        .unwrap_or(false);
-    is_yaml && path.components().any(|c| c.as_os_str() == "agents")
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return false;
+    };
+    // ADS 流剥离 + 尾部点/空格归一（镜像 Win32 末组件规范化）
+    let normalized = name.split(':').next().unwrap_or("");
+    let normalized = normalized.trim_end_matches(['.', ' ']);
+    let is_yaml = normalized.eq_ignore_ascii_case("agent.yaml");
+    let has_agents_dir = path
+        .components()
+        .any(|c| c.as_os_str().eq_ignore_ascii_case("agents"));
+    has_agents_dir && (is_yaml || looks_like_8dot3_short_name(&name))
+}
+
+/// 8.3 短名形态判定：`<基名≤8 且含 ~数字尾>.<扩展 1-3 字符>`（如 `AG~1.YAM`）。
+///
+/// 短名↔长名映射依赖卷 8dot3 配置，静态判等无法可靠还原，agents 目录下按
+/// 形态拒（纵深防御）。正常业务文件名不带 `~数字` 尾巴；有意保守误伤面 =
+/// 恰好 ≤8 字符基名且形如 `x~1.md` 的用户文件——错误文案会说明原因。
+fn looks_like_8dot3_short_name(name: &str) -> bool {
+    let Some((base, ext)) = name.split_once('.') else {
+        return false;
+    };
+    if ext.is_empty() || ext.len() > 3 || ext.contains('.') {
+        return false;
+    }
+    let Some((head, tail)) = base.split_once('~') else {
+        return false;
+    };
+    !head.is_empty()
+        && base.len() <= 8
+        && !tail.is_empty()
+        && tail.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// 拒绝操作敏感路径（按原始串前缀判断，对新文件也生效）：
@@ -894,6 +930,62 @@ mod tests {
         // agents 段但文件名非 agent.yaml
         assert!(!is_agent_config(std::path::Path::new(
             "/x/agents/dev-2/config.yaml"
+        )));
+    }
+
+    // ---- 2026-10-08 P0 加固回归锁：Win32 别名变体全拒 ----
+
+    #[test]
+    fn is_agent_config_blocks_case_and_alias_variants() {
+        // 目录组件大小写变体：授权层大小写折叠放行 + 旧实现目录判等敏感 =
+        // 零审批绕过（审计 P0 实案形态）
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/Agents/dev-2/agent.yaml"
+        )));
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/AGENTS/dev-2/agent.yaml"
+        )));
+        #[cfg(windows)]
+        {
+            assert!(is_agent_config(std::path::Path::new(
+                "C:\\ws\\Agents\\dev-2\\agent.yaml"
+            )));
+        }
+        // 尾随点/空格：CreateFileW 规范化剥除后落盘即写中真身
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/agent.yaml."
+        )));
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/agent.yaml. "
+        )));
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/AGENT.YAML "
+        )));
+        // ADS 流形态
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/agent.yaml::$DATA"
+        )));
+        // 8.3 短名形态（agent.yaml 的 yaml 扩展 4 字符不符 8.3，短名必生成）
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/AG~1.YAM"
+        )));
+    }
+
+    #[test]
+    fn is_agent_config_variant_guard_no_false_positive() {
+        // 无 agents 段的尾随点文件不误伤
+        assert!(!is_agent_config(std::path::Path::new("/proj/agent.yaml.")));
+        // agents 段（= agent workspace）内正常业务文件不拦
+        assert!(!is_agent_config(std::path::Path::new("/x/agents/dev-2/notes.md")));
+        assert!(!is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/report-final.md"
+        )));
+        // 非 8.3 形态不拦：基名超 8 / 尾巴非数字
+        assert!(!is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/notes~v2.md"
+        )));
+        assert!(!is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/draft~final.md"
         )));
     }
 

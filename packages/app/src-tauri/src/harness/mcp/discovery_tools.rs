@@ -244,11 +244,13 @@ impl McpClient for SearchConversationsTool {
     }
 
     fn description(&self) -> &str {
-        "Full-text search across ALL conversation message CONTENT (not just titles) for a \\
+        "Full-text search across conversation message CONTENT (not just titles) for a \\
          keyword or phrase. Use it for 'have we discussed X before', 'find that conversation \\
-         where we decided Y'. Returns matching conversation id/title/agent + a truncated \\
-         excerpt around the match. Read-only; use send_message_to_session or @-references to \\
-         act on what you find."
+         where we decided Y'. Search scope: conversations in the CURRENT project (including \\
+         the project channel) plus your own standalone conversations — other projects' and \\
+         other agents' standalone conversations are NOT searchable. Returns matching \\
+         conversation id/title/agent + a truncated excerpt around the match. Read-only; use \\
+         send_message_to_session or @-references to act on what you find."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -287,13 +289,20 @@ impl McpClient for SearchConversationsTool {
             .replace('%', "\\%")
             .replace('_', "\\_");
         let pattern = format!("%{esc}%");
+        // 2026-10-08 P1 边界收窄（用户拍板）：检索范围 = 同项目会话（含频道）+
+        // 本 agent 自己的散落会话——与 MA-3 项目边界/委派沙箱的信息边界对齐，
+        // 不再全库可检索。project_id 绑 None 时第一支恒不中（SQL NULL 比较），
+        // 散落会话发起的检索自然只剩自己的。
         let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
             "SELECT c.id, COALESCE(c.title, ''), c.agent_id, m.content, m.created_at \
              FROM messages m JOIN conversations c ON c.id = m.conversation_id \
              WHERE m.content LIKE ? ESCAPE '\\' AND c.kind != 'delegation' \
+               AND (c.project_id = ? OR (c.project_id IS NULL AND c.agent_id = ?)) \
              ORDER BY m.created_at DESC LIMIT ?",
         )
         .bind(&pattern)
+        .bind(&ctx.project_id)
+        .bind(&ctx.agent_id)
         .bind(limit)
         .fetch_all(&ctx.pool)
         .await
@@ -310,11 +319,19 @@ impl McpClient for SearchConversationsTool {
         let items: Vec<serde_json::Value> = rows
             .iter()
             .map(|(cid, title, agent_id, content, at)| {
-                // 摘录：命中点前后各 60 字符
+                // 摘录：命中点前后各 60 字符（char 边界对齐——CJK 命中点跨
+                // 字节边界时裸切片 panic，dispatch_catch_panic 兜底为工具错误
+                // 但 doom 签名被污染；2026-10-08 顺手件）
                 let excerpt = match content.find(q) {
                     Some(i) => {
-                        let start = i.saturating_sub(60);
-                        let end = (i + q.len() + 60).min(content.len());
+                        let mut start = i.saturating_sub(60);
+                        while start > 0 && !content.is_char_boundary(start) {
+                            start -= 1;
+                        }
+                        let mut end = (i + q.len() + 60).min(content.len());
+                        while end < content.len() && !content.is_char_boundary(end) {
+                            end += 1;
+                        }
                         let mut s = String::new();
                         if start > 0 {
                             s.push('…');
@@ -406,5 +423,176 @@ impl McpClient for GetTaskLedgerTool {
             })
             .collect();
         Ok(serde_json::json!({ "project": p.name, "tasks": items }).to_string())
+    }
+}
+
+// =========================================================================
+// 单测
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::mcp::client::ToolContext;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn fresh_pool() -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn seed_agent(pool: &SqlitePool, id: &str) {
+        sqlx::query(
+            "INSERT INTO agents (id, name, provider, model, api_key_ref) VALUES (?, ?, 'mock', 'm', ?)",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_project(pool: &SqlitePool, id: &str) {
+        sqlx::query("INSERT INTO projects (id, name) VALUES (?, ?)")
+            .bind(id)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn seed_conv(pool: &SqlitePool, id: &str, agent: &str, project: Option<&str>, kind: &str) {
+        sqlx::query(
+            "INSERT INTO conversations (id, title, agent_id, project_id, kind, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, '2026-01-01 00:00:00', '2026-01-01 00:00:00')",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(agent)
+        .bind(project)
+        .bind(kind)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_msg(pool: &SqlitePool, id: &str, conv: &str, needle: &str) {
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) \
+             VALUES (?, ?, 'user', ?, '2026-01-01 00:00:00')",
+        )
+        .bind(id)
+        .bind(conv)
+        .bind(needle)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn ctx(pool: &SqlitePool, agent: &str, project: Option<&str>) -> ToolContext {
+        ToolContext {
+            conv_id: "conv-self".into(),
+            agent_id: agent.into(),
+            project_id: project.map(str::to_string),
+            workspace: None,
+            pool: pool.clone(),
+            api_key: None,
+            app_handle: None,
+            proposal_registry: None,
+            turn_id: None,
+            cancel: None,
+            tool_use_id: None,
+        }
+    }
+
+    async fn hit_ids(tool: &SearchConversationsTool, pool: &SqlitePool, agent: &str, project: Option<&str>) -> Vec<String> {
+        let out = tool
+            .execute_with_context(r#"{"query":"needle-xy"}"#, &ctx(pool, agent, project))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        v["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["conversation_id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// 2026-10-08 P1 边界收窄回归锁：检索范围 = 同项目会话（含他人 agent 的
+    /// 项目会话）+ 本 agent 自己的散落会话；跨项目 / 他人散落 / 委派子会话不中。
+    #[tokio::test]
+    async fn search_scopes_to_project_and_own_standalone() {
+        let pool = fresh_pool().await;
+        seed_agent(&pool, "agent-1").await;
+        seed_agent(&pool, "agent-2").await;
+        seed_project(&pool, "projA").await;
+        seed_project(&pool, "projB").await;
+        seed_conv(&pool, "c-proj-a", "agent-1", Some("projA"), "chat").await;
+        // 同项目、他人 agent 的会话——项目内共享上下文，应命中
+        seed_conv(&pool, "c-proj-a2", "agent-2", Some("projA"), "chat").await;
+        // 跨项目、自己的会话——不中
+        seed_conv(&pool, "c-proj-b", "agent-1", Some("projB"), "chat").await;
+        // 散落、自己的会话——应命中
+        seed_conv(&pool, "c-loose-1", "agent-1", None, "chat").await;
+        // 散落、他人的会话——不中
+        seed_conv(&pool, "c-loose-2", "agent-2", None, "chat").await;
+        // 委派子会话（即便同项目）——kind 过滤，不中
+        seed_conv(&pool, "c-dele", "agent-2", Some("projA"), "delegation").await;
+        for (i, c) in [
+            "c-proj-a",
+            "c-proj-a2",
+            "c-proj-b",
+            "c-loose-1",
+            "c-loose-2",
+            "c-dele",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            seed_msg(&pool, &format!("m{i}"), c, "needle-xy").await;
+        }
+
+        let tool = SearchConversationsTool;
+        // 项目语境：同项目两条 + 自己散落一条
+        let mut ids = hit_ids(&tool, &pool, "agent-1", Some("projA")).await;
+        ids.sort();
+        assert_eq!(ids, vec!["c-loose-1", "c-proj-a", "c-proj-a2"]);
+
+        // 散落语境（project_id=None）：只剩自己的散落会话
+        let ids = hit_ids(&tool, &pool, "agent-1", None).await;
+        assert_eq!(ids, vec!["c-loose-1"]);
+    }
+
+    /// LIKE 字面量回归（与 kb.rs B2 同族）：检索词含 %/_ 不当通配符
+    #[tokio::test]
+    async fn search_escapes_like_wildcards() {
+        let pool = fresh_pool().await;
+        seed_agent(&pool, "agent-1").await;
+        seed_project(&pool, "projA").await;
+        seed_conv(&pool, "c-1", "agent-1", Some("projA"), "chat").await;
+        seed_msg(&pool, "m-1", "c-1", "记录 file_name_v2 与 100% 进度").await;
+        seed_msg(&pool, "m-2", "c-1", "无关内容 fileXnameYvZ2").await;
+
+        let tool = SearchConversationsTool;
+        let out = tool
+            .execute_with_context(r#"{"query":"file_name_v2"}"#, &ctx(&pool, "agent-1", Some("projA")))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // `file_name_v2` 的下划线不被当通配符——精确命中，m-2 的 fileXnameYvZ2 不中
+        assert_eq!(v["matches"].as_array().unwrap().len(), 1);
     }
 }

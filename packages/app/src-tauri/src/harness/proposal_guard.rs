@@ -14,10 +14,13 @@
 //! ### 🟡 敏感（需用户确认）
 //! - 创建带 enabled_tools / tool_scopes 的 agent
 //! - 修改 enabled_tools / tool_scopes
+//! - 修改模型身份/端点（provider/model/base_url/model_profile_id）——端点变更
+//!   会使现有 API Key 发往新地址（2026-10-08 P1 收口，原 Low）
+//! - 修改 workspace_path（文件访问边界 + {workspace} 注入链前置）
 //!
 //! ### 🟢 非敏感（一键批准）
 //! - 创建无工具的 agent
-//! - 修改自己的 name/system_prompt/temperature/max_tokens/base_url/workspace_path
+//! - 修改自己的 name/system_prompt/temperature/max_tokens
 //!   /word_style_profile（Word 样式偏好自由文字块；空串=摘除，同 Low——落地走
 //!   set_agent_word_profile，agent.yaml 侧无害）
 //!
@@ -87,6 +90,11 @@ pub fn validate_proposal(
             agent_id,
             enabled_tools,
             tool_scopes,
+            provider,
+            model,
+            base_url,
+            model_profile_id,
+            workspace_path,
             ..
         } => {
             // --- 红线检查 ---
@@ -96,16 +104,32 @@ pub fn validate_proposal(
                     "跨 agent 修改被禁止：提案目标 agent_id='{agent_id}'，当前对话 agent_id='{caller_agent_id}'。只能修改当前对话所属的 agent。"
                 )));
             }
-            // ⚠️ 前瞻备忘（ModelProfile Phase 2 起）：上方 `..` rest pattern 会把
-            // 未来新增的字段（如 model_profile_id）静默放行为 🟢 Low——模型身份
-            // 属敏感旋钮，届时须显式加 🟡 Medium 分支并给 warning。
 
             // --- 敏感度分级 ---
+            // 2026-10-08 P1（兑现原前瞻备忘）：模型身份/端点字段显式 🟡 Medium——
+            // base_url 变更会把 legacy agent 的现有 API Key 逐轮发往任意新端点
+            // （key 外泄通道）；workspace_path 变更改写文件访问边界且是 {workspace}
+            // 占位符注入链的前置。此前这些字段落 rest pattern = 🟢 Low 一键批准，
+            // 防线只剩一张无警示的卡。
+            let changing_model_identity =
+                provider.is_some() || model.is_some() || base_url.is_some() || model_profile_id.is_some();
+            if changing_model_identity {
+                warnings.push(
+                    "正在修改模型身份/端点配置（provider/model/base_url/模型配置引用）。请核对新值是否可信：端点变更会使该 agent 的现有 API Key 发往新地址。".into(),
+                );
+            }
+            if workspace_path.is_some() {
+                warnings.push(
+                    "正在修改工作区路径——这会改变该 agent 的文件访问边界与 {workspace} 占位符的解析结果。".into(),
+                );
+            }
             let changing_tools = enabled_tools.is_some() || tool_scopes.is_some();
             if changing_tools {
                 warnings.push(
                     "正在修改 agent 的工具面（启用名单/工具集范围），请确认变更符合预期。".into(),
                 );
+            }
+            if changing_model_identity || workspace_path.is_some() || changing_tools {
                 Ok((SensitivityTier::Medium, warnings))
             } else {
                 Ok((SensitivityTier::Low, warnings))
@@ -196,6 +220,83 @@ mod tests {
         let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
         assert_eq!(tier, SensitivityTier::Medium);
         assert!(!warnings.is_empty());
+    }
+
+    // === 2026-10-08 P1：模型身份/端点/工作区字段显式 Medium（原 rest pattern Low）===
+
+    /// 身份/边界字段的参数化构造器（enum variant 不支持 record-update 语法）
+    fn make_update_agent_identity(
+        provider: Option<&str>,
+        model: Option<&str>,
+        base_url: Option<&str>,
+        model_profile_id: Option<&str>,
+        workspace_path: Option<&str>,
+    ) -> ProposalAction {
+        ProposalAction::UpdateAgent {
+            agent_id: "caller-1".into(),
+            name: None,
+            provider: provider.map(str::to_string),
+            model: model.map(str::to_string),
+            system_prompt: None,
+            base_url: base_url.map(str::to_string),
+            temperature: None,
+            max_tokens: None,
+            enabled_tools: None,
+            tool_scopes: None,
+            workspace_path: workspace_path.map(str::to_string),
+            word_style_profile: None,
+            model_profile_id: model_profile_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn update_model_identity_fields_are_medium() {
+        // 任一身份/端点/边界字段 Some → Medium（base_url 重定向 key 外泄通道、
+        // workspace_path 文件边界 + {workspace} 注入链前置）
+        let cases = [
+            make_update_agent_identity(Some("custom"), None, None, None, None),
+            make_update_agent_identity(None, Some("some-model"), None, None, None),
+            make_update_agent_identity(None, None, Some("https://attacker.example"), None, None),
+            make_update_agent_identity(None, None, None, Some("mp-1"), None),
+            make_update_agent_identity(None, None, None, None, Some("C:\\other\\ws")),
+        ];
+        for action in &cases {
+            let (tier, warnings) = validate_proposal(action, "caller-1").unwrap();
+            assert_eq!(tier, SensitivityTier::Medium);
+            assert!(!warnings.is_empty(), "身份/边界变更应有 warning");
+        }
+    }
+
+    #[test]
+    fn update_endpoint_plus_tools_gives_both_warnings() {
+        // 端点 + 工具面同时改：Medium 且两条 warning 并存
+        let mut action =
+            make_update_agent_identity(None, None, Some("https://x.example"), None, None);
+        if let ProposalAction::UpdateAgent {
+            enabled_tools, ..
+        } = &mut action
+        {
+            *enabled_tools = Some(vec!["git".into()]);
+        }
+        let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
+        assert_eq!(tier, SensitivityTier::Medium);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "端点与工具面两条 warning 都给: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn update_pure_birthcert_fields_stay_low() {
+        // 纯出生证字段（name）仍 Low——回归：不把整个 update 升 Medium
+        let mut action = make_update_agent_identity(None, None, None, None, None);
+        if let ProposalAction::UpdateAgent { name, .. } = &mut action {
+            *name = Some("新名字".into());
+        }
+        let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
+        assert_eq!(tier, SensitivityTier::Low);
+        assert!(warnings.is_empty());
     }
 
     // === tool_scopes（工具集范围）= 工具面变更，Medium ===

@@ -594,6 +594,13 @@ pub(crate) async fn run_agent_turn(
         // 收口——频道内共享流本身就是全量视野，无需钻取通道。
         if conv.kind != "chat" {
             snap.remove("read_reference");
+            // search_conversations：委派子会话不给跨会话检索——信息沙箱语义
+            // （子 agent 只见父给的任务，跨会话正文检索会绕空沙箱）。频道成员
+            // 保留（检索范围已收窄为同项目 + 自己散落，频道恰是共享流上下文）。
+            // 2026-10-08 随 search 边界收窄批。
+            if conv.kind == "delegation" {
+                snap.remove("search_conversations");
+            }
         }
         // tool_scopes 过滤：组/Server/裸名三态命中 ∨ 平台元工具恒保留（与
         // enabled_tools 同语义）。死条目（对快照零命中）warn 可见——生产实案

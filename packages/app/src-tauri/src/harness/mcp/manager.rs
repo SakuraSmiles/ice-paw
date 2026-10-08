@@ -175,6 +175,14 @@ impl McpServerManager {
             TransportKind::Stdio => {
                 // 替换 args 中的 {workspace} 占位符（per_agent server 用 agent workspace）
                 let args: Vec<String> = if let Some(ws) = workspace {
+                    // 2026-10-08 P1：替换值元字符硬闸——非 .exe 命令在 Windows 走
+                    // `cmd /C` 包装（external.rs），std 的 BatBadBut 转义不覆盖
+                    // cmd.exe 本身，无空格含 `& | < >` 等元字符的参数会被 shell
+                    // 解释执行。workspace 路径可经低敏提案变更，此处是唯一闸。
+                    if let Some(reason) = workspace_substitution_error(ws) {
+                        self.mark_failed(&id, config, reason.clone()).await;
+                        return Err(AppError::Validation(reason));
+                    }
                     config
                         .args
                         .iter()
@@ -674,6 +682,23 @@ pub(crate) fn transport_down_message(server_name: &str, detail: &str) -> String 
     )
 }
 
+/// `{workspace}` 替换值的 cmd 元字符校验（Windows `cmd /C` 包装下的注入闸）。
+///
+/// 返回 `Some(三段式错误文案)` = 拒绝启动；`None` = 安全。只校验进替换值的
+/// workspace 路径，不碰用户显式写的 args（那些走配置页人工审视）。
+pub(crate) fn workspace_substitution_error(ws: &str) -> Option<String> {
+    const META_CHARS: &str = "&|<>^%!()\"";
+    if ws.chars().any(|c| META_CHARS.contains(c)) {
+        Some(format!(
+            "MCP Server 启动失败: workspace 路径含命令行特殊字符（{ws}），存在命令注入风险。\
+             请修改 agent 工作区路径（路径不应包含 & | < > ^ % ! ( ) \" 等字符），\
+             或从该 Server 配置的参数中移除 {{workspace}} 占位符。"
+        ))
+    } else {
+        None
+    }
+}
+
 // =========================================================================
 // 单测
 // =========================================================================
@@ -686,6 +711,39 @@ mod tests {
     fn manager_new_is_empty() {
         let mgr = McpServerManager::new();
         assert!(mgr.entries.try_read().unwrap().is_empty());
+    }
+
+    // ===== 2026-10-08 P1：{workspace} 替换值 cmd 元字符闸 =====
+
+    #[test]
+    fn workspace_substitution_rejects_cmd_metachars() {
+        // 正常路径（含中文、空格、盘符、括号外常见字符）全过
+        for ok in [
+            "C:\\Users\\dabai\\Documents\\icepaw-workspaces\\agents\\dev",
+            "/home/u/my workspace",
+            "D:\\工作区\\项目-01",
+        ] {
+            assert!(
+                workspace_substitution_error(ok).is_none(),
+                "应放行: {ok}"
+            );
+        }
+        // cmd 元字符（无空格含元字符的参数会被 cmd /C 解释执行）
+        for bad in [
+            "C:\\ws&calc",
+            "a|b",
+            "x^y",
+            "D:\\p%PATH%",
+            "w!d",
+            "dir(1)",
+            "a<b",
+            "c>d",
+            "q\"r",
+        ] {
+            let err = workspace_substitution_error(bad)
+                .unwrap_or_else(|| panic!("应拒绝: {bad}"));
+            assert!(err.starts_with("MCP Server 启动失败:"), "家族前缀稳定: {err}");
+        }
     }
 
     // ===== ② 懒重启：传输断开错误分类 =====
