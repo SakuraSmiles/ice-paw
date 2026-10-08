@@ -32,6 +32,7 @@ pub mod plan_tool;
 pub mod proposal_tool;
 pub mod screen;
 pub mod search;
+pub(crate) mod server_secrets;
 pub mod shell;
 pub mod tool_scopes;
 pub mod web;

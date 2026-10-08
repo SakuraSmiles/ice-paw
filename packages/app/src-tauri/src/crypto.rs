@@ -343,6 +343,63 @@ pub fn has_api_key(app: &AppHandle, agent_id: &str) -> AppResult<bool> {
 }
 
 // =========================================================================
+// 通用 JSON 槽位（2026-10-08 MCP server 凭据槽位化）
+// =========================================================================
+//
+// 与 agent/profile key 同一 Stronghold store，键即槽位名（如
+// `mcpserver:{id}`），值是任意 JSON 序列化字节。读侧 `Ok(None)` = 槽位
+// 不存在（区别于损坏——损坏上抛），调用方按「值未设置/已丢失」语义处理。
+
+/// 写通用 JSON 槽位（insert + save；save 失败 best-effort 回滚已插入项，
+/// 与 store_api_key 同款防幽灵条目）。
+pub fn store_slot_json(app: &AppHandle, slot: &str, payload: &serde_json::Value) -> AppResult<()> {
+    let state = crypto(app);
+    let sh = state.lock_sh();
+    let bytes = serde_json::to_vec(payload)?;
+    let insert_result = {
+        let client = sh
+            .get_client(CLIENT_NAME)
+            .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
+        let store = client.store();
+        store.insert(slot.as_bytes().to_vec(), bytes, None)
+    };
+    insert_result.map_err(|e| AppError::Stronghold(format!("store.insert: {e}")))?;
+    if let Err(e) = sh.save() {
+        if let Ok(client) = sh.get_client(CLIENT_NAME) {
+            let _ = client.store().delete(slot.as_bytes());
+        }
+        return Err(AppError::Stronghold(format!("store save: {e}")));
+    }
+    Ok(())
+}
+
+/// 读通用 JSON 槽位。`Ok(None)` = 槽位不存在（未设置或已删除）。
+pub fn fetch_slot_json(app: &AppHandle, slot: &str) -> AppResult<Option<serde_json::Value>> {
+    let state = crypto(app);
+    let sh = state.lock_sh();
+    let client = sh
+        .get_client(CLIENT_NAME)
+        .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
+    let store = client.store();
+    match store
+        .get(slot.as_bytes())
+        .map_err(|e| AppError::Stronghold(format!("store.get: {e}")))?
+    {
+        None => Ok(None),
+        Some(raw) => Ok(Some(
+            serde_json::from_slice(&raw)
+                .map_err(|e| AppError::Stronghold(format!("槽位 {slot} 负载损坏: {e}")))?,
+        )),
+    }
+}
+
+/// 删除通用槽位（不存在 = Ok，幂等）。
+pub fn delete_slot(app: &AppHandle, slot: &str) -> AppResult<()> {
+    // delete_api_key 即按任意槽位键删（参数名是历史遗留），语义完全一致
+    delete_api_key(app, slot)
+}
+
+// =========================================================================
 // memory_store 加密（XChaCha20-Poly1305，REQ-CHAT-048）
 // =========================================================================
 //

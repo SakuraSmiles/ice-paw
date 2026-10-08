@@ -19,9 +19,7 @@ const emit = defineEmits<{
 
 const isEdit = computed(() => !!props.server);
 
-// env Record ↔ 键值对数组
-const envToEntries = (env: Record<string, string> | undefined | null) =>
-  Object.entries(env ?? {}).map(([key, value]) => ({ key, value }));
+// env/headers Record ↔ 键值对数组（提交方向）
 const entriesToEnv = (entries: { key: string; value: string }[]): Record<string, string> => {
   const env: Record<string, string> = {};
   for (const e of entries) {
@@ -31,9 +29,19 @@ const entriesToEnv = (entries: { key: string; value: string }[]): Record<string,
   return env;
 };
 
-// headers Record ↔ 键值对数组（与 envEntries 同构：http/sse 远程传输的请求头，如 Authorization）
-const headersToEntries = (headers: Record<string, string> | undefined | null) =>
-  Object.entries(headers ?? {}).map(([key, value]) => ({ key, value }));
+// 2026-10-08 P1 槽位化：值全 "__SLOT__" = 凭据在安全存储（DB 只有键名清单）。
+// 编辑态识别后：值输入框置空显示「已配置 N 项」提示；用户不动 → 提交时该
+// 字段缺省（undefined = 不更新，后端从槽位取既有值），动了 → 全量重填覆盖。
+const SLOT_SENTINEL = "__SLOT__";
+const isSlotManifest = (r: Record<string, string> | undefined | null): boolean => {
+  const entries = Object.entries(r ?? {});
+  return entries.length > 0 && entries.every(([, v]) => v === SLOT_SENTINEL);
+};
+// 编辑态清单形态：键名保留、值置空（实值不回显——改填新值覆盖、不动保持）
+const entriesOf = (r: Record<string, string> | undefined | null) =>
+  Object.entries(r ?? {}).map(([key, value]) => ({ key, value: value === SLOT_SENTINEL ? "" : value }));
+
+// headers 与 envEntries 同构提交（http/sse 远程传输的请求头，如 Authorization）
 const entriesToHeaders = (entries: { key: string; value: string }[]): Record<string, string> => {
   const headers: Record<string, string> = {};
   for (const e of entries) {
@@ -54,14 +62,20 @@ const form = ref({
   // stdio 字段
   command: props.server?.command ?? "",
   args: props.server ? [...props.server.args] : [],
-  envEntries: props.server ? envToEntries(props.server.env) : [],
+  envEntries: props.server ? entriesOf(props.server.env) : [],
   // http/sse 字段
   url: props.server?.url ?? "",
-  headerEntries: props.server ? headersToEntries(props.server.headers) : [],
+  headerEntries: props.server ? entriesOf(props.server.headers) : [],
   // 通用
   trust_level: (props.server?.trust_level ?? "untrusted") as McpTrustLevel,
   enabled: props.server?.enabled ?? true,
 });
+
+// 凭据「不动 = 保持」判定基准：编辑态初始快照（任何键值变动都算全量重填）
+const envSnapshot = JSON.stringify(form.value.envEntries);
+const headersSnapshot = JSON.stringify(form.value.headerEntries);
+const envWasManifest = computed(() => isSlotManifest(props.server?.env));
+const headersWasManifest = computed(() => isSlotManifest(props.server?.headers));
 
 const saving = ref(false);
 const error = ref("");
@@ -91,19 +105,24 @@ async function save() {
       ? "global"
       : form.value.args.some((a: string) => a.includes("{workspace}")) ? "per_agent" : "global";
     if (isEdit.value && props.server) {
+      // 2026-10-08 P1 槽位化「不动 = 保持」：凭据字段与初始快照一致时不提交
+      //（undefined → 后端 None → 从安全存储取既有值）；任何键值变动 = 全量
+      // 重填（新值入槽位 + DB 落新键名清单）
+      const envDirty = JSON.stringify(form.value.envEntries) !== envSnapshot;
+      const headersDirty = JSON.stringify(form.value.headerEntries) !== headersSnapshot;
       const input: McpServerUpdate = {
         id: props.server.id,
         name: form.value.name,
         description: form.value.description,
         command: form.value.command,
         args: form.value.args,
-        env,
+        ...(envDirty ? { env } : {}),
         enabled: form.value.enabled,
         trust_level: form.value.trust_level,
         scope,
         transport: form.value.transport,
         url: isRemote.value ? form.value.url : null,
-        headers,
+        ...(headersDirty ? { headers } : {}),
       };
       emit("saved", await bridge.mcp.update(input));
     } else {
@@ -206,11 +225,14 @@ function confirmDelete() {
       <!-- 请求头（http/sse，如 Authorization） -->
       <div v-if="isRemote" class="field">
         <label class="field-label">请求头</label>
+        <p v-if="headersWasManifest" class="field-hint">
+          已配置 {{ form.headerEntries.length }} 项（值保密存储，不回显）。保持不动即沿用；修改任何键值后保存 = 全量重填覆盖。
+        </p>
         <div class="dyn-list">
           <div v-for="(h, i) in form.headerEntries" :key="'h' + i" class="dyn-row">
             <input v-model="h.key" type="text" class="input input-mono dyn-key" placeholder="Authorization" />
             <span class="dyn-eq">:</span>
-            <input v-model="h.value" type="text" class="input input-mono" placeholder="Bearer sk-..." />
+            <input v-model="h.value" type="password" class="input input-mono" placeholder="Bearer sk-..." autocomplete="off" />
             <button type="button" class="dyn-remove" @click="removeHeader(i)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
             </button>
@@ -243,6 +265,9 @@ function confirmDelete() {
       <!-- 环境变量（stdio） -->
       <div v-if="!isRemote" class="field">
         <label class="field-label">环境变量</label>
+        <p v-if="envWasManifest" class="field-hint">
+          已配置 {{ form.envEntries.length }} 项（值保密存储，不回显）。保持不动即沿用；修改任何键值后保存 = 全量重填覆盖。
+        </p>
         <div class="dyn-list">
           <div v-for="(e, i) in form.envEntries" :key="'e' + i" class="dyn-row">
             <input v-model="e.key" type="text" class="input input-mono dyn-key" placeholder="KEY" />

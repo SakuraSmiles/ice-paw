@@ -158,6 +158,25 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     get_by_id(pool, &input.id).await
 }
 
+/// 仅更新 env/headers 两列为哨兵清单形态（2026-10-08 凭据槽位化 boot 迁移用
+/// ——不走 `update` 全量通道，避免触碰其他列/触发 next_tool_index 之外的语义）。
+pub async fn update_secrets_manifest(
+    pool: &SqlitePool,
+    id: &str,
+    env: &serde_json::Value,
+    headers: &serde_json::Value,
+) -> AppResult<()> {
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    sqlx::query("UPDATE mcp_servers SET env=?, headers=?, updated_at=? WHERE id=?")
+        .bind(serde_json::to_string(env)?)
+        .bind(serde_json::to_string(headers)?)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// 删除 MCP Server 配置
 pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     let affected = sqlx::query("DELETE FROM mcp_servers WHERE id = ?")
@@ -395,5 +414,29 @@ mod tests {
 
         let next = create(&pool, &new_server("s-new")).await.expect("new");
         assert_eq!(next.tool_index, 8, "计数器缺失时以表内 MAX(7)+1 播种");
+    }
+
+    /// 2026-10-08 P1 槽位化：env/headers 清单化 UPDATE 往返（boot 迁移的 DB 侧）
+    #[tokio::test]
+    async fn update_secrets_manifest_roundtrip() {
+        let pool = test_pool().await;
+        let created = create(&pool, &new_server("s-sec")).await.expect("create");
+
+        // 实值形态 → 清单形态（键名保留、值哨兵化）
+        let manifest = serde_json::json!({"Authorization": "__SLOT__"});
+        update_secrets_manifest(&pool, &created.id, &manifest, &serde_json::json!({}))
+            .await
+            .expect("manifest update");
+
+        let row = get_by_id(&pool, &created.id).await.expect("read back");
+        assert_eq!(row.env["Authorization"], serde_json::json!("__SLOT__"));
+        assert_eq!(
+            row.headers,
+            serde_json::json!({}),
+            "空对象保持空（无凭据字段不产生哨兵清单）"
+        );
+        // 其他列不被触碰
+        assert_eq!(row.name, created.name);
+        assert_eq!(row.tool_index, created.tool_index);
     }
 }

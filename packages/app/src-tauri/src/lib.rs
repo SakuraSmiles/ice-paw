@@ -548,7 +548,12 @@ pub fn run() {
             let boot_registry = mcp_registry.clone();
             let boot_manager = mcp_manager.clone();
             let boot_pool = pool.clone();
+            let boot_app = handle.clone();
             tauri::async_runtime::spawn(async move {
+                // 2026-10-08 P1：存量 env/headers 明文外置到 Stronghold 槽位
+                //（幂等行级收编；须先于 server 启动——spawn 即需实值。失败 warn
+                // 下次启动重放，实值留在 DB 期间走兼容直用路径）
+                harness::mcp::server_secrets::migrate_plaintext_rows(&boot_app, &boot_pool).await;
                 if let Err(e) = db::repo::mcp_server::seed_defaults(&boot_pool).await {
                     tracing::warn!(target: "ice_paw.mcp", "种子默认 MCP Server 失败: {e}");
                 }

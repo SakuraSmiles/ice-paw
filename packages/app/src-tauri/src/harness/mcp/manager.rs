@@ -169,9 +169,25 @@ impl McpServerManager {
             );
         }
 
+        // 2026-10-08 P1 槽位化：DB 读出的 env/headers 是哨兵清单——spawn 前从
+        // Stronghold 槽位水合实值到本地 resolved（boot/cmd 重启/lazy_restart/
+        // retry 全路径经此单点）。entries 内 config 保持清单形态（前端零回显）；
+        // mark_failed 恒记 config（展示安全）。测试态无 app_handle 时跳过水合
+        //（清单值发出去会握手失败，可从错误定位）。
+        let mut resolved = config.clone();
+        if let Some(app) = &self.app_handle {
+            if let Err(e) =
+                crate::harness::mcp::server_secrets::hydrate_into(app, &mut resolved)
+            {
+                let reason = format!("凭据读取失败: {e}");
+                self.mark_failed(&id, config, reason.clone()).await;
+                return Err(AppError::Internal(reason));
+            }
+        }
+
         // 按 transport 分流得到传输实例（stdio 子进程 / http 远程），失败统一标 Failed。
         // 后续 list_tools / 注册 proxy / 标 Running 完全统一，不感知具体传输类型。
-        let server: Arc<dyn McpTransport> = match config.transport {
+        let server: Arc<dyn McpTransport> = match resolved.transport {
             TransportKind::Stdio => {
                 // 替换 args 中的 {workspace} 占位符（per_agent server 用 agent workspace）
                 let args: Vec<String> = if let Some(ws) = workspace {
@@ -183,26 +199,26 @@ impl McpServerManager {
                         self.mark_failed(&id, config, reason.clone()).await;
                         return Err(AppError::Validation(reason));
                     }
-                    config
+                    resolved
                         .args
                         .iter()
                         .map(|a| a.replace(WORKSPACE_PLACEHOLDER, ws))
                         .collect()
                 } else {
-                    config.args.clone()
+                    resolved.args.clone()
                 };
                 // bundled 运行时：command → 内置 node.exe 绝对路径，entry script prepend；
                 // system 运行时保持 DB 里的 command/args/env 不变。
                 // （command 为 node.exe 绝对路径时，spawn 的 Windows cmd /C 分支被跳过，直执行）
                 let (command, args, env_value): (String, Vec<String>, serde_json::Value) =
-                    if config.runtime_kind == RuntimeKind::Bundled {
-                        self.resolve_bundled(config, args)?
+                    if resolved.runtime_kind == RuntimeKind::Bundled {
+                        self.resolve_bundled(&resolved, args)?
                     } else {
-                        (config.command.clone(), args, config.env.clone())
+                        (resolved.command.clone(), args, resolved.env.clone())
                     };
                 match ExternalMcpServer::spawn(
-                    config.id.clone(),
-                    config.name.clone(),
+                    resolved.id.clone(),
+                    resolved.name.clone(),
                     &command,
                     &args,
                     &env_value,
@@ -219,13 +235,17 @@ impl McpServerManager {
             }
             TransportKind::Http => {
                 // http/sse 无 args/workspace/子进程概念，直接连远程端点
-                let Some(url) = config.url.as_deref() else {
+                let Some(url) = resolved.url.as_deref() else {
                     let reason = "HTTP 传输缺少 url".to_string();
                     self.mark_failed(&id, config, reason.clone()).await;
                     return Err(AppError::Internal(reason));
                 };
-                match HttpMcpTransport::new(config.name.clone(), url.to_string(), &config.headers)
-                    .await
+                match HttpMcpTransport::new(
+                    resolved.name.clone(),
+                    url.to_string(),
+                    &resolved.headers,
+                )
+                .await
                 {
                     Ok(t) => Arc::new(t),
                     Err(e) => {

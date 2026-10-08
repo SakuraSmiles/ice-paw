@@ -5,11 +5,12 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::repo;
 use crate::error::AppResult;
 use crate::harness::mcp::manager::{ServerEntry, ServerStatus};
+use crate::harness::mcp::server_secrets;
 use crate::harness::mcp::types::{
     McpServerConfig, McpToolDefinition, NewMcpServer, ServerSnapshot, UpdateMcpServer,
 };
@@ -51,11 +52,23 @@ pub async fn list_mcp_servers(
 /// 创建 MCP Server 并异步启动
 #[tauri::command]
 pub async fn create_mcp_server(
+    app: AppHandle,
     pool: State<'_, SqlitePool>,
     manager: State<'_, Arc<McpServerManager>>,
     registry: State<'_, Arc<McpRegistry>>,
     input: NewMcpServer,
 ) -> AppResult<McpServerConfig> {
+    // 2026-10-08 P1 槽位化脱水：实值入 Stronghold 槽位 `mcpserver:{id}`，
+    // DB 只落哨兵清单（键名 → __SLOT__）——库文件/list 回传零凭据
+    let mut input = input;
+    let env = input.env.clone().unwrap_or_else(|| serde_json::json!({}));
+    if server_secrets::has_plaintext(&env) || server_secrets::has_plaintext(&input.headers) {
+        server_secrets::store_secrets(&app, &input.id, &env, &input.headers)?;
+        input.env = Some(server_secrets::to_manifest(&env));
+        input.headers = server_secrets::to_manifest(&input.headers);
+    } else {
+        input.env = Some(env);
+    }
     let saved = repo::mcp_server::create(pool.inner(), &input).await?;
 
     // 后台启动（不阻塞返回）
@@ -81,11 +94,31 @@ pub async fn create_mcp_server(
 /// 更新 MCP Server 配置并异步重启
 #[tauri::command]
 pub async fn update_mcp_server(
+    app: AppHandle,
     pool: State<'_, SqlitePool>,
     manager: State<'_, Arc<McpServerManager>>,
     registry: State<'_, Arc<McpRegistry>>,
     input: UpdateMcpServer,
 ) -> AppResult<McpServerConfig> {
+    // 2026-10-08 P1 槽位化读-改-写：先解析两字段的最终生效实值（None 字段
+    // 从槽位取既有值，避免部分更新把另一半清掉），任一含实值 → 槽位 upsert
+    // + DB 落哨兵清单
+    let existing = repo::mcp_server::get_by_id(pool.inner(), &input.id).await?;
+    let final_env = match &input.env {
+        Some(v) => v.clone(),
+        None => server_secrets::resolve_value(&app, &input.id, "env", &existing.env)?,
+    };
+    let final_headers = match &input.headers {
+        Some(v) => v.clone(),
+        None => server_secrets::resolve_value(&app, &input.id, "headers", &existing.headers)?,
+    };
+    let mut input = input;
+    if server_secrets::has_plaintext(&final_env) || server_secrets::has_plaintext(&final_headers) {
+        server_secrets::store_secrets(&app, &input.id, &final_env, &final_headers)?;
+        input.env = Some(server_secrets::to_manifest(&final_env));
+        input.headers = Some(server_secrets::to_manifest(&final_headers));
+    }
+
     // 先停止旧服务
     manager.stop_server(&input.id, &registry).await;
 
@@ -115,13 +148,19 @@ pub async fn update_mcp_server(
 /// 删除 MCP Server
 #[tauri::command]
 pub async fn delete_mcp_server(
+    app: AppHandle,
     pool: State<'_, SqlitePool>,
     manager: State<'_, Arc<McpServerManager>>,
     registry: State<'_, Arc<McpRegistry>>,
     id: String,
 ) -> AppResult<()> {
     manager.stop_server(&id, &registry).await;
-    repo::mcp_server::delete(pool.inner(), &id).await
+    repo::mcp_server::delete(pool.inner(), &id).await?;
+    // 2026-10-08 P1：槽位清理（失败 warn 不卡删除主流程——孤儿密文无害）
+    if let Err(e) = crate::crypto::delete_slot(&app, &server_secrets::slot_of(&id)) {
+        tracing::warn!(target: "ice_paw.mcp", "删除 MCP Server 凭据槽位失败（孤儿密文无害）: {e}");
+    }
+    Ok(())
 }
 
 /// 重试失败的 MCP Server
