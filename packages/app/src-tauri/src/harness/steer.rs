@@ -165,15 +165,21 @@ pub(crate) async fn consume_steer_backlog(
             return Ok(()); // 无积压（普通回合正常收尾 / 已被并发触发源消费）
         }
 
-        // 静默窗口（连发聚合）：窗口内又有新 user 行 → 重置继续等（说完一起听）
-        let mut seen = backlog.len();
+        // 静默窗口（连发聚合）：窗口内又有新 user 行 → 重置继续等（说完一起听）。
+        // 2026-10-08 节流：旧实现每 3s 全量重查三腿谓词——查询耗时（生产库曾
+        // 5~25s，慢于轮询间隔）会并发堆积打满连接池（插话后切页卡死实案的
+        // 放大器）。改为比较 user_message 事件 id 单调性（毫秒级索引查询，
+        // 新物化 user 行必落该事件，语义等价）；出窗后再全量查一次（查询本
+        // 体已随 59 号索引 + 事件驱动重构回到毫秒级）。
+        let mut last_event_id = repo::message::latest_user_message_event_id(pool, &conv.id)
+            .await
+            .unwrap_or(0);
         let quiet_deadline = Instant::now() + QUIET_TIMEOUT;
         loop {
             tokio::time::sleep(CHAIN_HEAD_QUIET).await;
-            match repo::message::list_unconsumed_user_anchors(pool, &conv.id).await {
-                Ok(b) if b.len() > seen => seen = b.len(),
-                Ok(_) => break,
-                Err(_) => break,
+            match repo::message::latest_user_message_event_id(pool, &conv.id).await {
+                Ok(id) if id > last_event_id => last_event_id = id, // 连发：重置静默计时
+                _ => break,
             }
             if Instant::now() >= quiet_deadline {
                 break;

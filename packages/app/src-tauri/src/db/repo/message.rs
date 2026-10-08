@@ -278,17 +278,25 @@ pub async fn list_unconsumed_user_anchors(
     pool: &SqlitePool,
     conversation_id: &str,
 ) -> AppResult<Vec<TurnAnchor>> {
+    // 2026-10-08 生产实案重构：messages 侧驱动（全行 × per-row 双 EXISTS ×
+    // content_blocks 大 JSON LIKE）在生产库实测 5~25s——大事件量会话的
+    // tool_result 占位行占绝对大头却全部要付全款。反转为 user_message 事件
+    // 驱动（走 59 号 (kind, session_id, turn_id) 索引 + 毫秒级 NOT EXISTS），
+    // 三腿谓词语义不变（A∧B∧C 与 B∧C∧A 同集），只在最终候选行上评估——
+    // 真实用户消息 content 非空，LIKE 短路不执行。外层子查询包裸列名防
+    // JOIN 列歧义（谓词常量四处共用不能带前缀）。
     let sql = format!(
-        "SELECT m.id, substr(m.content, 1, 120), m.created_at \
-           FROM messages m \
-          WHERE m.conversation_id = ? AND {REAL_USER_ANCHOR_PREDICATE} \
-            AND EXISTS (SELECT 1 FROM session_events e \
-                         WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
-                           AND e.kind = 'user_message') \
-            AND NOT EXISTS (SELECT 1 FROM session_events e \
-                             WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
-                               AND e.kind IN ('turn_context','turn_ended')) \
-          ORDER BY m.created_at ASC, m.rowid ASC"
+        "SELECT id, substr(content, 1, 120), created_at FROM ( \
+            SELECT m.id AS id, m.role AS role, m.content AS content, \
+                   m.content_blocks AS content_blocks, m.created_at AS created_at, m.rowid AS rowid \
+              FROM session_events e \
+              JOIN messages m ON m.id = e.turn_id AND m.conversation_id = e.session_id \
+             WHERE e.session_id = ? AND e.kind = 'user_message' \
+               AND NOT EXISTS (SELECT 1 FROM session_events t \
+                                WHERE t.kind IN ('turn_context','turn_ended') \
+                                  AND t.session_id = e.session_id AND t.turn_id = e.turn_id) \
+         ) WHERE {REAL_USER_ANCHOR_PREDICATE} \
+          ORDER BY created_at ASC, rowid ASC"
     );
     let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(&sql)
         .bind(conversation_id)
@@ -313,21 +321,45 @@ pub async fn list_unconsumed_user_anchors(
 /// 里（turn_ended watcher 不再触发、前端「排队中」角标随重启清零），扫出来
 /// 逐会话消费自愈；正常 boot（无搁浅）零命中零成本。
 pub async fn conversations_with_unconsumed_anchors(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    // 2026-10-08 同 list_unconsumed_user_anchors 反转事件驱动（boot 全库版生产
+    // 实测 4~6s，同根因）：kind='user_message' 前缀走 59 号索引，NOT EXISTS
+    // 点查同索引。三腿谓词语义不变（外层子查询防列歧义）。
     let sql = format!(
-        "SELECT DISTINCT m.conversation_id \
-           FROM messages m \
-           JOIN conversations c ON c.id = m.conversation_id \
-          WHERE c.kind = 'chat' AND {REAL_USER_ANCHOR_PREDICATE} \
-            AND EXISTS (SELECT 1 FROM session_events e \
-                         WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
-                           AND e.kind = 'user_message') \
-            AND NOT EXISTS (SELECT 1 FROM session_events e \
-                             WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
-                               AND e.kind IN ('turn_context','turn_ended')) \
-          ORDER BY m.conversation_id"
+        "SELECT DISTINCT conversation_id FROM ( \
+            SELECT m.conversation_id AS conversation_id, m.role AS role, \
+                   m.content AS content, m.content_blocks AS content_blocks \
+              FROM session_events e \
+              JOIN messages m ON m.id = e.turn_id AND m.conversation_id = e.session_id \
+              JOIN conversations c ON c.id = m.conversation_id \
+             WHERE c.kind = 'chat' AND e.kind = 'user_message' \
+               AND NOT EXISTS (SELECT 1 FROM session_events t \
+                                WHERE t.kind IN ('turn_context','turn_ended') \
+                                  AND t.session_id = e.session_id AND t.turn_id = e.turn_id) \
+         ) WHERE {REAL_USER_ANCHOR_PREDICATE} \
+          ORDER BY conversation_id"
     );
     let ids: Vec<String> = sqlx::query_scalar(&sql).fetch_all(pool).await?;
     Ok(ids)
+}
+
+/// 该会话最新 `user_message` 事件的全局 id（无则 0）。
+///
+/// steer 消费循环的静默窗「连发聚合」判定用（2026-10-08 节流）：旧实现每 3s
+/// 全量重查锚点三腿谓词——查询耗时（生产曾 5~25s）超过轮询间隔时会并发堆积
+/// 打满连接池（生产卡死实案的放大器）。新物化 user 行必落 `user_message`
+/// 事件，比较事件 id 单调性即可等价判定「有没有新锚点候选」——本查询走
+/// 59 号索引前缀，毫秒级。
+pub async fn latest_user_message_event_id(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> AppResult<i64> {
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(id) FROM session_events WHERE session_id = ? AND kind = 'user_message'",
+    )
+    .bind(conversation_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(id.unwrap_or(0))
 }
 
 /// 回合制分页结果：rows 为 rowid ASC 时间正序消息；has_more = 还有更早回合

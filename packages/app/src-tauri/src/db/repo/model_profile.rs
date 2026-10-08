@@ -510,6 +510,25 @@ mod tests {
         .await
         .unwrap();
 
+        // 59 号索引在 session_events 上建——伪造库需有该表（真实 49 库由 44 建；
+        // 列集最小化，run 只需要表存在，2026-10-08 补）
+        sqlx::query(
+            "CREATE TABLE session_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT 'user',
+                turn_id TEXT,
+                message_id TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // 伪造「1..49 已应用」登记（checksum 乱填 = heal 自愈对象）。run() 只对
         // 未登记的 50 执行，1..48 的表不存在无妨——run 不校验 schema 只看登记。
         sqlx::query(
