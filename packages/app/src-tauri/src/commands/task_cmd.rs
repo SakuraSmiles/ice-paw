@@ -6,8 +6,10 @@
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
+
+use crate::harness::chat_state::ChatState;
 
 use crate::db::models::{NewScheduledTask, ScheduledTaskRow, ScheduledTaskUpdate, TaskRunRow};
 use crate::db::repo::task;
@@ -157,12 +159,23 @@ pub async fn run_scheduled_task_now(
     id: String,
 ) -> AppResult<()> {
     // 存在性当场校验（404 回显而非静默）
-    task::get_by_id(&pool, &id)
+    let task = task::get_by_id(&pool, &id)
         .await?
         .ok_or_else(|| AppError::NotFound {
             resource: "scheduled_task",
             id: id.clone(),
         })?;
+    // 2026-10-08 P1：载体会话忙 = 同步拒绝——fire-and-forget 的 spawn 内撞忙
+    // 只能落日志，用户点「立即运行」会零反馈零记录（ExecOutcome::Busy 的 doc
+    // 自述「手动触发应提示用户」此前未兑现）。预检窗口外的撞忙由 spawn 内
+    // warn 兜底；任务调度计划不受影响（不动 next_run）。
+    if let Some(conv_id) = task.target_conv_id.as_deref() {
+        if app.state::<ChatState>().is_streaming(conv_id) {
+            return Err(AppError::Validation(
+                "任务无法立即运行: 载体会话正在生成中，无法插入任务回合。请等当前回合结束后再点「立即运行」；任务调度计划未受影响，到点会照常执行。".into(),
+            ));
+        }
+    }
     scheduler::run_now(app, pool.inner().clone(), id);
     Ok(())
 }

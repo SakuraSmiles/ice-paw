@@ -283,12 +283,8 @@ impl McpClient for SearchConversationsTool {
             return Err(AppError::Validation("检索词不能为空".into()));
         }
         let limit = parsed.limit.unwrap_or(20).clamp(1, 50);
-        // LIKE 转义（%/_ 用户字面量）
-        let esc = q
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let pattern = format!("%{esc}%");
+        // LIKE 转义（%/_ 用户字面量）——共享 db::repo::escape_like（2026-10-08 起单一真相源）
+        let pattern = format!("%{}", crate::db::repo::escape_like(q));
         // 2026-10-08 P1 边界收窄（用户拍板）：检索范围 = 同项目会话（含频道）+
         // 本 agent 自己的散落会话——与 MA-3 项目边界/委派沙箱的信息边界对齐，
         // 不再全库可检索。project_id 绑 None 时第一支恒不中（SQL NULL 比较），

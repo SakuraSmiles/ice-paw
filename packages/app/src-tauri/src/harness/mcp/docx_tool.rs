@@ -222,6 +222,17 @@ impl McpClient for InspectDocxTool {
             )));
         }
 
+        // 2026-10-08 P1：源文件尺寸闸（读前 metadata，防超大文件整读进内存）；
+        // 上限与解压闸同族（64MB）
+        let meta = tokio::fs::metadata(&canonical)
+            .await
+            .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;
+        if meta.len() > crate::harness::doc::MAX_ENTRY_BYTES as u64 {
+            return Err(AppError::Validation(format!(
+                "文档无效: 文件大小 {}MB 超过 64MB 上限，疑似损坏或误用（inspect_docx 面向普通 Word 文档）。",
+                meta.len() / (1024 * 1024)
+            )));
+        }
         let bytes = tokio::fs::read(&canonical)
             .await
             .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;
@@ -1768,6 +1779,16 @@ impl EditDocxTool {
             )));
         }
 
+        // 2026-10-08 P1：源文件尺寸闸（同 inspect 位，读前 metadata）
+        let meta = tokio::fs::metadata(&canonical)
+            .await
+            .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;
+        if meta.len() > crate::harness::doc::MAX_ENTRY_BYTES as u64 {
+            return Err(AppError::Validation(format!(
+                "文档无效: 文件大小 {}MB 超过 64MB 上限，疑似损坏或误用（edit_docx 面向普通 Word 文档）。",
+                meta.len() / (1024 * 1024)
+            )));
+        }
         let bytes = tokio::fs::read(&canonical)
             .await
             .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;

@@ -39,6 +39,9 @@ mod corpus_tests;
 // Phase B 视觉路径：PDF 页面 → PNG（扫描件/图片型 PDF 读图用）。
 pub use pdf_render::{page_count, render_page_to_png};
 
+// 2026-10-08 P1：docx 攻击面上限常量（解压/源文件双闸共用），docx_tool 复用
+pub(crate) use docx_pkg::MAX_ENTRY_BYTES;
+
 // inspect_docx 三级投影（S0b）：mcp::docx_tool 薄壳消费。
 pub use docx_inspect::{inspect_document, InspectProjection, InspectReport, InspectRequest};
 

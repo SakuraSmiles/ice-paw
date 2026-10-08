@@ -215,13 +215,14 @@ pub async fn search(
         return Ok(vec![]);
     }
     let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let pattern = format!("%{query}%");
+    // 2026-10-08 P1：检索词字面量转义（%/_ 不当通配符）——与 discovery_tools 同款
+    let pattern = format!("%{}", super::escape_like(query));
     let sql = format!(
         "SELECT d.kb_id AS kb_id, k.name AS kb_name, d.file_path AS file_path, d.title AS title, d.summary AS summary
          FROM kb_document d JOIN kb k ON d.kb_id = k.id
          WHERE d.kb_id IN ({placeholders})
-           AND (d.title LIKE ? OR d.summary LIKE ? OR d.tags LIKE ? OR d.file_path LIKE ?)
-         ORDER BY (d.title LIKE ?) DESC, d.indexed_at DESC
+           AND (d.title LIKE ? ESCAPE '\\' OR d.summary LIKE ? ESCAPE '\\' OR d.tags LIKE ? ESCAPE '\\' OR d.file_path LIKE ? ESCAPE '\\')
+         ORDER BY (d.title LIKE ? ESCAPE '\\') DESC, d.indexed_at DESC
          LIMIT ?"
     );
     let mut q = sqlx::query_as::<_, KbSearchHit>(&sql);
@@ -323,15 +324,16 @@ pub async fn search_chunks(
         return Ok(vec![]);
     }
     let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let pattern = format!("%{query}%");
+    // 2026-10-08 P1：同上，字面量转义 + ESCAPE 子句
+    let pattern = format!("%{}", super::escape_like(query));
     let sql = format!(
         "SELECT c.doc_id, k.name AS kb_name, d.file_path, d.title, c.chunk_idx, c.content
          FROM kb_document_chunk c
          JOIN kb_document d ON c.doc_id = d.id
          JOIN kb k ON d.kb_id = k.id
          WHERE d.kb_id IN ({placeholders})
-           AND c.content LIKE ?
-         ORDER BY (d.title LIKE ?) DESC, c.chunk_idx ASC
+           AND c.content LIKE ? ESCAPE '\\'
+         ORDER BY (d.title LIKE ? ESCAPE '\\') DESC, c.chunk_idx ASC
          LIMIT ?"
     );
     let mut q = sqlx::query_as::<_, ChunkSearchHit>(&sql);

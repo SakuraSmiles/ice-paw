@@ -521,8 +521,8 @@ pub async fn execute_task(
                 crate::harness::inbox::deliver(app, pool, &source, dst, &final_text, false, false)
                     .await;
             let note = match deliver_result {
-                Ok(_) => "\\n[转发投递：已送达]".to_string(),
-                Err(e) => format!("\\n[转发投递失败：{e}]"),
+                Ok(_) => "\n[转发投递：已送达]".to_string(),
+                Err(e) => format!("\n[转发投递失败：{e}]"),
             };
             let _ = sqlx::query(
                 "UPDATE task_runs SET summary = COALESCE(summary,'') || ? WHERE id = ?",
@@ -658,6 +658,16 @@ pub fn run_now(app: AppHandle, pool: SqlitePool, task_id: String) {
     tauri::async_runtime::spawn(async move {
         match task::get_by_id(&pool, &task_id).await {
             Ok(Some(t)) => match execute_task(&app, &pool, &t, false).await {
+                // 2026-10-08 P1：撞忙至少留痕（命令层 run_scheduled_task_now 已做
+                // 同步预检，此处是预检窗口外撞忙的兜底——无 run 记录是预期：
+                // 任务不算执行过，调度计划不动）
+                Ok(ExecOutcome::Busy) => {
+                    tracing::warn!(
+                        target: "ice_paw.scheduler",
+                        task = %t.name,
+                        "手动触发撞忙：载体会话在途，本次未执行（无 run 记录）"
+                    );
+                }
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!(target: "ice_paw.scheduler", "手动触发失败: {e}");

@@ -11,7 +11,7 @@
 //! 已知微差（接受）：扫描器对**配对形式**的 `<w:tab></w:tab>` 不输出 `\t`（只认
 //! 自闭合），模型统一输出——Word/WPS 恒发自闭合形式，真实文档无此差异。
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use crate::error::{AppError, AppResult};
 
@@ -57,7 +57,8 @@ pub(super) fn read_entry(bytes: &[u8], name: &str) -> AppResult<Option<String>> 
             return Err(AppError::Internal(format!("docx 内读取 {name} 失败: {e}")));
         }
     };
-    entry.read_to_end(&mut buf).map_err(AppError::Io)?;
+    // 2026-10-08 P1：解压上限闸（zip bomb 防）——共享 docx_pkg::read_capped
+    super::docx_pkg::read_capped(&mut entry, &mut buf, name)?;
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 

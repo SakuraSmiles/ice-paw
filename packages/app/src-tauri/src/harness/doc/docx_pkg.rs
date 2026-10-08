@@ -475,8 +475,31 @@ fn read_zip_entry<R: Read + std::io::Seek>(
             return Err(AppError::Internal(format!("docx 内读取 {name} 失败: {e}")));
         }
     };
-    entry.read_to_end(&mut buf).map_err(AppError::Io)?;
+    read_capped(&mut entry, &mut buf, name)?;
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+
+/// 单个 zip entry 解压上限（64MB）。zip 声明尺寸可伪造（中央目录值），恶意
+/// 文档可以 5MB 压缩体声明 8GB——无上限 `read_to_end` 会把应用直接 OOM
+/// （2026-10-08 P1：用户单方上传恶意 docx 即可触发，无需 agent 配合）。
+/// 正常 document.xml <5MB，64MB 余量 10 倍+。
+pub(crate) const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
+
+/// 带上限读 entry：`take(CAP+1)` 使超限时恰好读出 CAP+1 字节即判定，内存
+/// 上界恒定（超限报错而非截断——截断后的 XML 会以「结构错误」失败，语义
+/// 误导且难排查；显式报「文档无效」诚实得多）。
+pub(super) fn read_capped<R: Read>(entry: &mut R, buf: &mut Vec<u8>, name: &str) -> AppResult<()> {
+    entry
+        .take(MAX_ENTRY_BYTES as u64 + 1)
+        .read_to_end(buf)
+        .map_err(AppError::Io)?;
+    if buf.len() > MAX_ENTRY_BYTES {
+        return Err(AppError::Internal(format!(
+            "文档无效: 部件 {name} 解压后超过 {}MB 上限，疑似损坏或恶意文档。",
+            MAX_ENTRY_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(())
 }
 
 // =========================================================================
@@ -607,6 +630,23 @@ mod tests {
 
     fn s(x: &str) -> &[u8] {
         x.as_bytes()
+    }
+
+    /// 2026-10-08 P1：解压上限闸——高压缩比 entry（重复字节）超 64MB 即拒，
+    /// 不再把解压流整读进内存（zip bomb 防：用户单方上传恶意 docx 即可触发
+    /// OOM 的面就此闭合）。压缩体 ~64KB，声明 size 真实——伪造声明同效。
+    #[test]
+    fn read_zip_entry_rejects_oversized_entry() {
+        let bomb = vec![b'A'; MAX_ENTRY_BYTES + 1024];
+        let zipped = zip_of(&[("word/document.xml", &bomb)]);
+        assert!(
+            zipped.len() < 1024 * 1024,
+            "前提：压缩体应远小于解压体（实际 {}B）",
+            zipped.len()
+        );
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zipped)).unwrap();
+        let err = read_zip_entry(&mut archive, "word/document.xml").unwrap_err();
+        assert!(err.to_string().contains("文档无效"), "实际: {err}");
     }
 
     /// 合成最小 docx 骨架（CT + document + 可选 rels/settings/media）。

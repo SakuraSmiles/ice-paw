@@ -70,6 +70,11 @@ pub(super) fn parse(xml: &str) -> AppResult<Element> {
         cfg.expand_empty_elements = true; // <w:tab/> → Start+End，建树只需一种路径
     }
 
+    // 嵌套深度上限（2026-10-08 P1）：十万层深嵌套会让建树路径栈溢出——栈溢出
+    // 是 abort，dispatch_catch_panic 的 catch_unwind 兜不住（进程直接死）。
+    // OOXML 实际深度 <30，512 属宽松上限。
+    const MAX_XML_DEPTH: usize = 512;
+
     let mut stack: Vec<Element> = Vec::new();
     let mut roots: Vec<Element> = Vec::new();
     loop {
@@ -77,9 +82,23 @@ pub(super) fn parse(xml: &str) -> AppResult<Element> {
             .read_event()
             .map_err(|e| AppError::Internal(format!("XML 解析失败: {e}")))?;
         match ev {
-            Event::Start(e) => stack.push(element_from_event(&e, reader.decoder())),
+            Event::Start(e) => {
+                stack.push(element_from_event(&e, reader.decoder()));
+                if stack.len() > MAX_XML_DEPTH {
+                    return Err(AppError::Internal(format!(
+                        "文档无效: XML 嵌套超过 {MAX_XML_DEPTH} 层，疑似恶意文档。"
+                    )));
+                }
+            }
             // expand_empty_elements=true 时理论上不再出现；防御性处理
-            Event::Empty(e) => stack.push(element_from_event(&e, reader.decoder())),
+            Event::Empty(e) => {
+                stack.push(element_from_event(&e, reader.decoder()));
+                if stack.len() > MAX_XML_DEPTH {
+                    return Err(AppError::Internal(format!(
+                        "文档无效: XML 嵌套超过 {MAX_XML_DEPTH} 层，疑似恶意文档。"
+                    )));
+                }
+            }
             Event::End(_) => {
                 let el = stack.pop().ok_or_else(|| {
                     AppError::Internal("XML 结构错误：End 无对应 Start".to_string())
@@ -191,6 +210,34 @@ mod tests {
         // 原始形态：实体不解码（解码时机在消费者）
         let el = parse(r#"<w:t>a &amp; b</w:t>"#).unwrap();
         assert_eq!(el.raw_text(), "a &amp; b");
+    }
+
+    /// 2026-10-08 P1：深度上限——十万层嵌套会让建树路径栈溢出（abort，
+    /// dispatch_catch_panic 的 catch_unwind 兜不住）；超 512 层即拒。
+    #[test]
+    fn parse_rejects_deeply_nested_xml() {
+        let mut xml = String::with_capacity(2400);
+        for _ in 0..513 {
+            xml.push_str("<a>");
+        }
+        for _ in 0..513 {
+            xml.push_str("</a>");
+        }
+        let err = match parse(&xml) {
+            Err(e) => e,
+            Ok(_) => panic!("超深嵌套 XML 应被拒绝"),
+        };
+        assert!(err.to_string().contains("文档无效"), "实际: {err}");
+
+        // 贴上限 512 层正常通过（OOXML 实际 <30，512 属宽松）
+        let mut ok = String::with_capacity(2400);
+        for _ in 0..512 {
+            ok.push_str("<a>");
+        }
+        for _ in 0..512 {
+            ok.push_str("</a>");
+        }
+        assert!(parse(&ok).is_ok());
     }
 
     #[test]
