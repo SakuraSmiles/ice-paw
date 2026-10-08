@@ -22,10 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (rust-toolchain.toml 钉版)
         run: |
-          rustup update stable
-          rustup component add clippy
+          # rustup show 触发钉版工具链安装（components 由文件声明自动带上）；
+          # 钉死本地/CI 同版——根治 clippy 新 lint 本地旧版拦不住的漂移红线
+          rustup show
 
       - name: Cargo cache (registries only)
         uses: actions/cache@v4

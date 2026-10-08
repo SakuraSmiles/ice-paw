@@ -1,0 +1,12 @@
+# 工具链钉版（2026-10-08，CI double_must_use 红线根治项）
+#
+# 本地与 CI 工具链版本漂移是三次 CI 红线的根因（U0-1 collapsible_match /
+# 本次 async-trait double_must_use——本地旧 clippy 无新 lint，全绿推上去 CI 红）。
+# 钉死具体版本：本地撞新 lint 即时可见，CI 与本地逐字节同一套 clippy 规则。
+# 升级流程：本地先 `rustup toolchain install 1.100.0` 全绿后改此文件一起提交。
+#
+# rustup 对此文件的处理：cargo/clippy 在本仓库任何子目录运行都会自动安装
+# 并切换到钉版（components 一并装上）；CI 的 `rustup show` 同样触发。
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
