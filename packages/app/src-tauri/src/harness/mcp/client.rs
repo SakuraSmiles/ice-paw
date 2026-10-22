@@ -311,6 +311,10 @@ impl McpRegistry {
         self.register_sync(Arc::new(
             super::attachment_image_tool::ViewAttachmentImageTool,
         ));
+        // 本地图片双向通道（2026-10-22）：agent 看图片文件免桌面共享 +
+        // 把效果图作为对话内容呈现给用户（图块回传走视觉适配链）
+        self.register_sync(Arc::new(super::image_tools::ViewImageTool));
+        self.register_sync(Arc::new(super::image_tools::ShowImageTool));
         // @引用会话钻取（P2：压缩快照按页读全文；越权守卫=目标被当前会话引用过）
         self.register_sync(Arc::new(super::read_reference_tool::ReadReferenceTool));
         // agentic 工具集（文件读写编辑 / shell / grep / git / web）

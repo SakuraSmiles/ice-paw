@@ -497,17 +497,6 @@ const parseToolUseBlocks = memoized((contentBlocks: string): { id: string; name:
   } catch { return []; }
 });
 
-/** 解析 tool_result 块。memo 化同上。 */
-const parseToolResultBlocks = memoized((contentBlocks: string): { toolUseId: string; content: string; isError: boolean }[] => {
-  try {
-    const blocks: unknown[] = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b): b is { tool_use_id: string; content: string; is_error?: boolean; type: string } =>
-      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_result'
-    ).map((b) => ({ toolUseId: b.tool_use_id, content: b.content, isError: b.is_error ?? false }));
-  } catch { return []; }
-});
-
 /** 解析 thinking 块。memo 化同上。durationMs = 后端落库的思考段耗时
  *  （旧消息无此字段 → null，label 只显示「思考」）。 */
 const parseThinkingBlocks = memoized((contentBlocks: string): { thinking: string; durationMs: number | null }[] => {
@@ -520,25 +509,68 @@ const parseThinkingBlocks = memoized((contentBlocks: string): { thinking: string
   } catch { return []; }
 });
 
+/** tool_result 查询结果的图片集（view_image/show_image/UE5 提取图的渲染数据源；
+ *  base64 data + mediaType，与 ImagePreview/openImagePreview 的 images 形状一致）。 */
+interface ToolResultEntry {
+  content: string;
+  isError: boolean;
+  images: { data: string; mediaType: string }[];
+}
+
 /** tool_use_id → tool_result 全局索引（替代逐 tool_use 向后扫 + 逐次 JSON.parse
  *  的 O(n²)：messages 每次（末条整对象替换式）更新时 O(n) 重建，parse 走 memo，
- *  重建即查表。tool_use_id 全局唯一，同 id 复用仅见于畸形数据——取最后出现。 */
+ *  重建即查表。tool_use_id 全局唯一，同 id 复用仅见于畸形数据——取最后出现。
+ *  2026-10-22：行内顺序扫描原始 blocks——tool_result 与其后的 Image 块（工具
+ *  返图：view_image/show_image/UE5 提取）按序归属到最近的 tool_result，图随
+ *  索引条目携带（此前前端完全不渲染这些图——agent 看得见用户看不见）。 */
 const toolResultIndex = computed(() => {
-  const idx = new Map<string, { content: string; isError: boolean }>();
+  const idx = new Map<string, ToolResultEntry>();
   for (const m of chat.messages) {
     if (m.role !== "user") continue;
-    for (const r of parseToolResultBlocks(m.content_blocks)) {
-      idx.set(r.toolUseId, { content: r.content, isError: r.isError });
+    let blocks: unknown[];
+    try {
+      blocks = JSON.parse(m.content_blocks);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(blocks)) continue;
+    let current: ToolResultEntry | null = null;
+    for (const b of blocks) {
+      if (typeof b !== "object" || b === null) continue;
+      const rec = b as Record<string, unknown>;
+      if (rec.type === "tool_result" && typeof rec.tool_use_id === "string") {
+        current = {
+          content: typeof rec.content === "string" ? rec.content : "",
+          isError: rec.is_error === true,
+          images: [],
+        };
+        idx.set(rec.tool_use_id, current);
+      } else if (rec.type === "image" && current) {
+        // 图片外置行已由 repo 读侧水合回内联 base64
+        if (typeof rec.data === "string" && rec.data) {
+          current.images.push({ data: rec.data, mediaType: String(rec.media_type ?? "image/png") });
+        }
+      }
     }
   }
   return idx;
 });
 
 /** 查 tool_use_id 对应的 tool_result（查全局索引，见 toolResultIndex）。*/
-function findToolResult(
-  toolUseId: string,
-): { content: string; isError: boolean } | null {
+function findToolResult(toolUseId: string): ToolResultEntry | null {
   return toolResultIndex.value.get(toolUseId) ?? null;
+}
+
+/** item 内 show_image 工具呈现给用户的图片集（agent 汇报效果图——渲染为
+ *  对话内容级图片卡，非工具行）。按 item 的工具调用序收集。 */
+function showImagesOfItem(item: { msg: { id: string; content_blocks?: string } }): { data: string; mediaType: string }[] {
+  const out: { data: string; mediaType: string }[] = [];
+  for (const tu of parseToolUseBlocks(item.msg.content_blocks ?? "[]")) {
+    if (tu.name !== "show_image") continue;
+    const r = findToolResult(tu.id);
+    if (r) out.push(...r.images);
+  }
+  return out;
 }
 
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
@@ -1592,6 +1624,20 @@ const RESUMABLE_REASONS = new Set([
                   <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item) || isTurnStreaming(item)" />
                 </div>
 
+                <!-- show_image 呈现图（2026-10-22）：agent 汇报效果图作为对话内容
+                     渲染（气泡兄弟块——纯图片汇报无文本时气泡不渲染，图卡独立在场）。
+                     流式期间工具未完成无 result，图随落库后的历史渲染出现 -->
+                <div v-if="showImagesOfItem(item).length" class="show-image-card">
+                  <img
+                    v-for="(im, i) in showImagesOfItem(item)"
+                    :key="item.msg.id + '-show-' + i"
+                    :src="`data:${im.mediaType};base64,${im.data}`"
+                    class="show-image"
+                    loading="lazy"
+                    @click="openImagePreview(showImagesOfItem(item), i)"
+                  >
+                </div>
+
                 <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
                 <div v-if="parseToolUseBlocks(item.msg.content_blocks).length > 0 && !(isLiveAssistant(item) && toolCallList.length > 0)" class="tools-strip">
                   <div v-for="tu in parseToolUseBlocks(item.msg.content_blocks)" :key="tu.id">
@@ -1657,6 +1703,18 @@ const RESUMABLE_REASONS = new Set([
                               <Transition name="tool-slide">
                                 <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
                                   <ToolExpandDetail :name="tu.name" :args-json="tu.input" :result="findToolResult(tu.id)" />
+                                  <!-- view_image 返图（2026-10-22）：agent 看的图用户
+                                       展开工具行同见（show_image 的图走气泡级卡片，不在此双渲染） -->
+                                  <div v-if="tu.name === 'view_image' && findToolResult(tu.id)?.images.length" class="tool-result-images">
+                                    <img
+                                      v-for="(im, i) in findToolResult(tu.id)!.images"
+                                      :key="tu.id + '-img-' + i"
+                                      :src="`data:${im.mediaType};base64,${im.data}`"
+                                      class="tool-result-img"
+                                      loading="lazy"
+                                      @click="openImagePreview(findToolResult(tu.id)!.images, i)"
+                                    >
+                                  </div>
                                 </div>
                               </Transition>
                             </template>
@@ -2039,6 +2097,14 @@ const RESUMABLE_REASONS = new Set([
 .user-text { display:block; white-space:pre-wrap; }
 .user-images { display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }
 .user-image { max-width:200px; max-height:200px; border-radius:var(--ip-radius-lg); object-fit:cover; border:1px solid var(--ip-color-border-default); }
+
+/* show_image 呈现图（2026-10-22）：agent 汇报效果图——对话内容级图片卡，
+   图片内容规范（max-width 限定 + 圆角 lg + lazy + 点击进预览器已在模板） */
+.show-image-card { display:flex; flex-direction:column; gap:var(--ip-spacing-2); margin-top:var(--ip-spacing-1); }
+.show-image { max-width:min(420px, 100%); border-radius:var(--ip-radius-lg); cursor:zoom-in; }
+/* view_image 工具行展开区返图（agent 看的图，用户展开同见） */
+.tool-result-images { display:flex; flex-direction:column; gap:var(--ip-spacing-1_5); margin-top:var(--ip-spacing-1_5); }
+.tool-result-img { max-width:min(360px, 100%); border-radius:var(--ip-radius-md); cursor:zoom-in; }
 
 /* 用户附件卡片（office/pdf）—— 不透明白实体卡片：深绿气泡上的清晰层次，
    堆叠时不透明避免半透明叠加发灰/透字（半透明玻璃在重叠场景不可扩展）。

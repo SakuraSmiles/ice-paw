@@ -37,6 +37,8 @@ export const TOOL_LABELS: Record<string, string> = {
   // 附件与引用
   read_attachment_page: "读取附件页",
   view_attachment_image: "查看附件图",
+  view_image: "查看图片",
+  show_image: "展示图片",
   read_reference: "读取引用",
   // Word 文档
   inspect_docx: "查看文档",

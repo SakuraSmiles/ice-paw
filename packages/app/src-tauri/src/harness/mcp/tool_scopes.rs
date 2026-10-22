@@ -44,6 +44,8 @@ pub const TOOL_GROUPS: &[(&str, &[&str])] = &[
             "copy_file",
             "create_directory",
             "search_files",
+            "view_image",
+            "show_image",
             "run_command",
             "git",
         ],
@@ -218,6 +220,8 @@ mod tests {
             "search_files",
             "git",
             "web_fetch",
+            "view_image",
+            "show_image",
             // 配置与计划
             "read_agent_config",
             "list_model_profiles",

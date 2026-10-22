@@ -7,6 +7,7 @@
 //! 不区分内部/外部工具。
 
 pub mod attachment_image_tool;
+pub mod image_tools;
 pub mod bundled;
 pub mod client;
 pub mod external;
