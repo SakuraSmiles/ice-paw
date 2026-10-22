@@ -1003,7 +1003,7 @@ describe("chatStore", () => {
       expect(store.bgStreams.size).toBe(0);
     });
 
-    it("clearActiveConversation()：思考结论态 + 回合锚点全清（此前漏清 thinkingDuration/lastThinkingContent 与锚点）", () => {
+    it("clearActiveConversation()：思考结论态清 + 在途快照/归属锚保留（2026-10-22 语义翻转）", () => {
       const store = useChatStore();
       store.conversations = [fakeConv("c1")];
       store.activeConvId = "c1";
@@ -1016,8 +1016,26 @@ describe("chatStore", () => {
       expect(store.streamingToolCalls.size).toBe(0);
       expect(store.thinkingDuration).toBeNull();
       expect(store.lastThinkingContent).toBeNull();
-      expect(store.sendingConvId).toBeNull();
+      // 归属锚保留：在途回合的 done 归属判断 + 60s 超时锚（此前强清 = 症状 2
+      // 「切项目后回合失去全部跟踪」）
+      expect(store.sendingConvId).toBe("c1");
       expect(store.turnFirstIdx).toBeNull();
+      // 在途快照写入（与 selectConversation 切走同款）——切回可恢复流式文本
+      expect(store.bgStreams.get("c1")).toEqual({ text: "partial text", thinking: "thinking…" });
+      expect(store.sending).toBe(false);
+    });
+
+    it("clearActiveConversation()：既有其他会话的后台快照不丢（切空间不丢跨会话状态）", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c2";
+      const existing = new Map([["c1", { text: "A 会话在途", thinking: "" }]]);
+      store.bgStreams = existing;
+      store.sending = false; // 当前会话空闲，无新快照写入
+
+      store.clearActiveConversation();
+
+      expect(store.bgStreams.get("c1")).toEqual({ text: "A 会话在途", thinking: "" });
     });
 
     it("clearActiveConversation()：保留 conversations 列表与草稿（切空间语义——只清激活会话运行时）", () => {

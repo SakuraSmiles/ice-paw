@@ -1128,11 +1128,16 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId.value = null;
     messages.value = [];
     sending.value = false;
-    clearTurnAnchors();
+    // 2026-10-22：turnFirstIdx（激活会话的流式视图锚）照清；sendingConvId 与
+    // bgStreams **不在此清**——二者是「在途回合」的跨视图跟踪（done bg 分支的
+    // 归属判断 + 60s 超时锚 + 侧栏后台流式标识），生命周期由 chat:done / 超时
+    // 收口。生产实案症状 2：生成中切项目空间走本函数，三连强清后切回会话
+    // 只能靠 loadMessages 权威刷新兜——invoke 一挂起就停在流式残留视图
+    // （「哪怕已完成也一直显示进行中」）。彻底清空归 reset 显式做。
+    turnFirstIdx.value = null;
     resetRoundStreaming();
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
-    bgStreams.value = new Map();
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
     pendingAskRequests.value = new Map();
@@ -1146,12 +1151,27 @@ export const useChatStore = defineStore("chat", () => {
     // 事件监听器由 useChatEvents 管理（App.vue 卸载时拆卸）；这里只清状态 + 超时
     conversations.value = [];
     resetSessionRuntimeState();
+    // 彻底重置语义：后台流式快照与在途锚一并清（resetSessionRuntimeState
+    // 已把这两项拆出——切空间路径须保留，2026-10-22）
+    bgStreams.value = new Map();
+    clearTurnAnchors();
     draftText.value = "";
   }
 
   /** 清除当前选中会话（切项目空间时调用）：保留 conversations 列表与草稿，
-   *  只重置激活会话相关状态，让右侧回到「欢迎/新建会话」态，不携带上个空间的会话。*/
+   *  只重置激活会话相关状态，让右侧回到「欢迎/新建会话」态，不携带上个空间的会话。
+   *  2026-10-22：在途回合先写后台快照（与 selectConversation 切走同款）——此前
+   *  无差别清 bgStreams，生成中切项目 = 快照/60s 锚/侧栏标识三连丢；既有其他
+   *  会话的后台快照也一并保留（切空间不丢跨会话状态）。*/
   function clearActiveConversation() {
+    const oldId = activeConvId.value;
+    if (oldId && sending.value) {
+      // 原地 set（勿整替 Map）：整替触发 streamingConvIds 的 keys 迭代依赖
+      bgStreams.value.set(oldId, {
+        text: streamingText.value,
+        thinking: streamingThinking.value,
+      });
+    }
     resetSessionRuntimeState();
     lastFinishReason.value = null;
     clearBudget();
