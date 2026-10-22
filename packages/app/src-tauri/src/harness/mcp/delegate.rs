@@ -13,8 +13,10 @@
 //! 3. cancel 级联：父 loop 的 token `.child_token()` 注册进 ChatState——父「停止
 //!    生成」一键停整棵委派树；子 loop 退出自注销（RAII）；
 //! 4. 专家跑完整 loop，inline await 完成信号（[`TurnSummary`]，数据源=turn_ended
-//!    事件 + 最终正文——「真相在产物」）；壁钟护栏 15min 只兜「永不回来」的异常，
-//!    正常终止器是子 loop 自己的 budget/stuck；
+//!    事件 + 最终正文——「真相在产物」）；活性护栏只兜「loop 已死但完成信号永不
+//!    到来」的异常（5min 窗口查 ChatState 注册表，仍在处理即续期——2026-10-22
+//!    取代旧 15min 纯墙钟，长任务不再被误掐），正常终止器是子 loop 自己的
+//!    budget/stuck/doom；
 //! 5. tool_result 回传 child_conversation_id + 终态摘要（主 LLM 可引用/续派）；
 //!    另附 `progress` 机器事实报告（子会话 session_events 提取的成功工具计数 /
 //!    最后失败 / 涉及文件）——正常完成也带，模型自述 ≠ 事实，验收/核对由此起。
@@ -61,10 +63,6 @@ use super::client::{McpClient, ToolContext};
 use super::manager::McpServerManager;
 use super::types::AuthorizationLevel;
 use super::McpRegistry;
-
-/// 壁钟护栏：子 loop 自身的 budget/stuck 是主要终止器，这里只兜「永不回来」
-/// 的异常挂死（如 provider 流卡死不响应 cancel）。超时先 cancel 子会话再回 Err。
-const WALL_CLOCK_GUARD_SECS: u64 = 15 * 60;
 
 pub struct DelegateTool;
 
@@ -515,7 +513,7 @@ impl McpClient for DelegateTool {
 
         // --- 5. 专家跑完整回合 + inline await 完成信号 ---
         let task_text = parsed.task.clone();
-        let done_rx = session_runner::run_agent_turn(
+        let mut done_rx = session_runner::run_agent_turn(
             &TurnEnv {
                 emitter: crate::harness::r#loop::emitter::tauri_emitter(
                     app.clone(),
@@ -574,19 +572,36 @@ impl McpClient for DelegateTool {
         // spawn 成功：子会话注销责任移交子 loop 的 RAII 守卫（任何退出路径必注销）
         let _ = scopeguard::ScopeGuard::into_inner(cancel_guard);
 
-        // --- 6. 壁钟护栏 await（子 loop 的 budget/stuck 才是主要终止器） ---
-        let summary =
-            match tokio::time::timeout(Duration::from_secs(WALL_CLOCK_GUARD_SECS), done_rx).await {
-                Ok(Ok(summary)) => summary,
-                // 超时：先 cancel 子会话（其 loop 会走 finalize_cancel 自清）再回 Err；
-                // 附机器事实进度行——统筹者拿到「做到哪了」而非只有一句超时
+        // --- 6. 活性护栏 await（2026-10-22 改造：纯墙钟 → 活性续期） ---
+        // 旧 15min 墙钟（WALL_CLOCK_GUARD_SECS）把「还在正常处理的长任务」掐死
+        // （用户实案多次：长任务被取消，实际处理正常）。子 loop 自带的
+        // budget/stuck/doom 才是主要终止器；此护栏只兜「loop 已死但完成信号
+        // 永不到来」的异常——判据 = ChatState 注册表：子会话仍在流式（注册中，
+        // RAII 守卫保证 loop 退出即注销）→ 续等下一窗；不在册且 done 未到 →
+        // loop 异常退出，立即按异常处理（不再等满墙钟）。父侧取消经
+        // parent_cancel.child_token() 级联，done_rx 正常到达，不受影响。
+        const ACTIVITY_POLL_SECS: u64 = 5 * 60;
+        let summary = loop {
+            match tokio::time::timeout(Duration::from_secs(ACTIVITY_POLL_SECS), &mut done_rx)
+                .await
+            {
+                Ok(Ok(summary)) => break summary,
+                // 窗口到：查子会话活性——还在处理就续（无总时长上限；真死循环由
+                // 子 loop 的 doom/budget 兜底，不会无限烧）
+                Err(_) if chat_state.is_streaming(&child_conv_id) => {
+                    tracing::info!(
+                        target: "ice_paw.delegate",
+                        child_conv = %child_conv_id,
+                        "委派护栏续期（子会话仍在处理）"
+                    );
+                    continue;
+                }
+                // 不在册且无完成信号：loop 异常退出（RAII 已注销但 done 丢失）
                 Err(_) => {
-                    chat_state.stop(&child_conv_id);
                     let prog = progress_summary_line(&ctx.pool, &child_conv_id).await;
                     return Err(AppError::Internal(format!(
-                        "委派超时（{} 分钟壁钟护栏）——子会话 {child_conv_id} 已被取消，\
-                     请缩小任务范围或换一个 agent。{prog}",
-                        WALL_CLOCK_GUARD_SECS / 60
+                        "子会话处理中止（仍在册状态消失且完成信号未到达）——\
+                         请如实告知用户该委派异常中止，可在轨迹页查看子会话已落库的部分。{prog}"
                     )));
                 }
                 // RecvError：spawn 任务在发送完成信号前消失（panic / runtime 关闭）
@@ -597,7 +612,8 @@ impl McpClient for DelegateTool {
                      可在轨迹页查看子会话已落库的部分。{prog}"
                     )));
                 }
-            };
+            }
+        };
 
         tracing::info!(
             target: "ice_paw.delegate",
