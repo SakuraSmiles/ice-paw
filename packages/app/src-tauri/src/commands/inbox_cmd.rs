@@ -186,6 +186,16 @@ pub async fn set_conversation_auto_approve(
     on: bool,
 ) -> AppResult<()> {
     repo::conversation::set_auto_approve(pool.inner(), &conversation_id, on).await?;
+    // 2026-10-22：级联既有委派子会话——出生继承（delegate.rs）只覆盖「父已开
+    // 才委派」的时序；先委派后开全自动的子会话原不回补，仍弹审批（用户实案
+    // 「子 agent 有时还需要确认授权」）。开关双向级联（关也级联关——语义
+    // 「含此会话发起的委派任务」对称）；内存 registry 同步逐个写。
+    for child in repo::conversation::list_delegation_children(pool.inner(), &conversation_id)
+        .await?
+    {
+        repo::conversation::set_auto_approve(pool.inner(), &child, on).await?;
+        crate::harness::auto_approve::global().set(&child, on).await;
+    }
     crate::harness::auto_approve::global()
         .set(&conversation_id, on)
         .await;

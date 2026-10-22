@@ -100,6 +100,22 @@ pub async fn set_auto_approve(pool: &SqlitePool, id: &str, on: bool) -> AppResul
     Ok(())
 }
 
+/// 该会话的全部委派子会话 id（全自动开关联联回补用，2026-10-22）。
+///
+/// 治「出生继承非实时联动」缺口（delegate.rs 注释自认）：父未开全自动时委派
+/// 出去的子 agent，父后来才开 → 子会话不回补 → 仍弹审批（用户实案「子 agent
+/// 有时还需要确认」）。开关时级联既有子会话（含已完成的——列值只影响未来
+/// 回合，回写无害）。
+pub async fn list_delegation_children(pool: &SqlitePool, parent_id: &str) -> AppResult<Vec<String>> {
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM conversations WHERE parent_conversation_id = ? AND kind = 'delegation'",
+    )
+    .bind(parent_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
 /// boot 扫描：全部开启全自动的会话 id（注册表种子）。
 pub async fn list_auto_approve_ids(pool: &SqlitePool) -> AppResult<Vec<String>> {
     let rows: Vec<(String,)> =
@@ -384,4 +400,62 @@ pub async fn set_conversation_agent(
         });
     }
     Ok(())
+}
+
+
+// =========================================================================
+// 单测
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn fresh_pool() -> SqlitePool {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn seed_agent(pool: &SqlitePool, id: &str) {
+        sqlx::query("INSERT INTO agents (id, name, provider, model, api_key_ref) VALUES (?, ?, 'mock', 'm', ?)")
+            .bind(id).bind(id).bind(id)
+            .execute(pool).await.unwrap();
+    }
+
+    async fn seed_conv(pool: &SqlitePool, id: &str, kind: &str, parent: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title, kind, parent_conversation_id)              VALUES (?, 'a1', ?, ?, ?)",
+        )
+        .bind(id).bind(id).bind(kind).bind(parent)
+        .execute(pool).await.unwrap();
+    }
+
+    /// 2026-10-22：全自动级联回补的查询面——只收 delegation 子会话，
+    /// 1v1/频道/无关父不命中
+    #[tokio::test]
+    async fn delegation_children_filters_kind_and_parent() {
+        let pool = fresh_pool().await;
+        seed_agent(&pool, "a1").await;
+        seed_conv(&pool, "parent", "chat", None).await;
+        seed_conv(&pool, "other-parent", "chat", None).await;
+        seed_conv(&pool, "child1", "delegation", Some("parent")).await;
+        seed_conv(&pool, "child2", "delegation", Some("parent")).await;
+        seed_conv(&pool, "other-child", "delegation", Some("other-parent")).await;
+        seed_conv(&pool, "plain", "chat", Some("parent")).await; // 同父但非委派
+
+        let mut ids = list_delegation_children(&pool, "parent").await.unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["child1", "child2"]);
+    }
 }
