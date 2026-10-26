@@ -811,6 +811,11 @@ pub(crate) async fn run_agent_turn(
         tool_app: env.tool_app.clone(),
         pool: pool.clone(),
         provider: llm_provider,
+        eff_vision: crate::harness::provider::effective_supports_vision(
+            agent.supports_vision,
+            &agent.provider,
+            &agent.model,
+        ),
         api_key,
         messages: assembled.messages,
         temperature: agent.temperature,
@@ -923,6 +928,9 @@ pub(crate) struct StreamLoopInput {
     pub tool_app: Option<AppHandle>,
     pub pool: SqlitePool,
     pub provider: Arc<dyn LlmProvider>,
+    /// agent 有效视觉能力（2026-10-26 工具返图落库/LLM 分家）：run_agent_turn
+    /// 侧算好传入（spawn 内无 agent 行）——LoopConfig.eff_vision 的数据源。
+    pub eff_vision: bool,
     pub api_key: String,
     pub messages: Vec<crate::infra::protocol::ChatMessage>,
     pub temperature: f64,
@@ -971,6 +979,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         tool_app,
         pool,
         provider,
+        eff_vision,
         api_key,
         messages,
         temperature,
@@ -1052,6 +1061,9 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             asst_msg_id,
             user_msg_id,
             agent_id,
+            // 工具返图落库/LLM 分家（2026-10-26）：StreamLoopInput 传入（run_agent_turn
+            // 侧用 agent 行 + 模型表 OR 语义算好）
+            eff_vision,
             sender_agent_name: sender_name,
             sender_agent_id,
             project_id,

@@ -42,6 +42,9 @@ pub(crate) struct LoopConfig {
     pub user_msg_id: String,
     /// RAG: 当前 Agent ID（透传给 ToolContext）
     pub agent_id: String,
+    /// agent 有效视觉能力（2026-10-26：工具返图落库/LLM 分家——Image 块恒落库
+    /// 供前端展示，阶段 G 推进 ctx.messages 前非视觉按此剥离，勿向下轮请求塞图）。
+    pub eff_vision: bool,
     /// 频道 v1：执行成员名字快照（C10 双轨 sender 事件侧——loop_engine 构造
     /// EventCtx 时 `.with_sender_name` 注入，进 assistant_message payload.sender；
     /// 1v1 回合 None = 隐含会话 agent，零标注）。

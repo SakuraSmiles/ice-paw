@@ -1146,9 +1146,23 @@ async fn stream_loop_inner(
             source_rowid: None,
             source_seq: None,
         });
+        // 2026-10-26 工具返图落库/LLM 分家：tool_executor 对非视觉 agent 也把
+        // Image 块 push 进 blocks（落库 = 前端展示数据源——用户实案：非视觉
+        // agent 的 view_image/show_image 不展示图）。此处推进 in-flight LLM
+        // 视图前按 eff_vision 剥离：非视觉不向下轮请求塞图（代读文本已在
+        // ToolResult content，模型语义不丢）；跨回合历史回灌由
+        // ModalCapabilityStage 同规则治理（入口③）。
+        let llm_tool_blocks: Vec<ContentBlock> = if ctx.config.eff_vision {
+            tool_result_blocks
+        } else {
+            tool_result_blocks
+                .into_iter()
+                .filter(|b| !matches!(b, ContentBlock::Image { .. }))
+                .collect()
+        };
         ctx.messages.push(ChatMessage {
             role: "user".into(),
-            content: tool_result_blocks,
+            content: llm_tool_blocks,
             source_rowid: None,
             source_seq: None,
         });

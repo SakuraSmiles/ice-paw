@@ -603,7 +603,7 @@ pub(crate) async fn execute_tool_round(
                         .await;
                         for (bytes, media_type) in tool_images {
                             let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                            let tmp = vec![ContentBlock::image(data, media_type)];
+                            let tmp = vec![ContentBlock::image(data.clone(), media_type.clone())];
                             let outcome = crate::harness::modal::adapt_blocks_for_vision(
                                 &tmp,
                                 false,
@@ -655,11 +655,17 @@ pub(crate) async fn execute_tool_round(
                                     content.push_str(&extra);
                                 }
                             }
+                            // 2026-10-26：Image 块仍然 push（落库给前端展示——用户实案：
+                            // 非视觉 agent 的 view_image/show_image 只出单行文本、图不展示。
+                            // 给用户看的图不依赖 agent 视觉能力）。LLM 侧由 loop_engine
+                            // 阶段 G 按 eff_vision 剥离（下轮请求不含 Image，代读文本已
+                            // 在 content 里——模型语义不丢，仅不重发图字节）。
+                            tool_result_blocks.push(ContentBlock::Image { data, media_type });
                             tracing::info!(
                                 target: "ice_paw.tool_image",
                                 tool = %tc_name,
                                 ocr_replaced = outcome.ocr_replaced,
-                                "工具回传图片，非视觉 agent 已代读/剥离（不再塞 Image 块）"
+                                "工具回传图片，非视觉 agent 已代读（Image 块仅落库供前端展示，LLM 侧由阶段 G 剥离）"
                             );
                         }
                     }
