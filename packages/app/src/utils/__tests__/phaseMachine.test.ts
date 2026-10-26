@@ -100,7 +100,7 @@ describe("phaseMachine", () => {
   });
 
   it("多工具并行：toolCount 聚合（3 个 open）", () => {
-    let s = nextPhase(initialPhase(), "chat:tool-call-delta", { name: "search_files" }, { openCount: 3, waitingCount: 0, lastName: "search_files" });
+    const s = nextPhase(initialPhase(), "chat:tool-call-delta", { name: "search_files" }, { openCount: 3, waitingCount: 0, lastName: "search_files" });
     expect(s.phase).toBe("tool_calling");
     expect(s.ctx.toolCount).toBe(3);
     expect(phaseLabel(s)).toContain("3 个工具调用");

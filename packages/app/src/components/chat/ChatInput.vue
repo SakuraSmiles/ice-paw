@@ -20,6 +20,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
 import { shortCode } from "../../utils/refs";
 import { phaseOf } from "../../utils/streamingPhase";
+import { phaseLabel } from "../../utils/phaseMachine";
 import { bridge } from "../../api/bridge";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import BudgetPill from "./BudgetPill.vue";
@@ -44,16 +45,21 @@ const input = computed({
   set: (v: string) => { chat.draftText = v; },
 });
 
-// 生成中阶段文案（0.9 阶段提示）：输入区 hint 与气泡 footer 同源读 phaseOf，
-// 生成中不再只显示「正在生成…」，而随流式状态显示「思考中/回答中/压缩中…」。
-const sendingPhase = computed(() =>
-  phaseOf({
+// 生成中阶段文案（0.9 阶段提示 → 批 3 升级）：权威相位（事件驱动状态机，
+// 含审批/选择等待态）优先，phaseOf 推断兜底（旧事件/回放）——与气泡相位行
+// /cursor-bar 同源（ChatMessages activePhaseLabel），输入区 hint 不再只显「思考中」。
+const sendingPhase = computed(() => {
+  const s = chat.streamOf(chat.activeConvId ?? "");
+  if (s && s.sending) {
+    return phaseLabel(s.phase);
+  }
+  return phaseOf({
     streamingText: chat.streamingText,
     streamingThinking: chat.streamingThinking,
     streamingToolCalls: chat.streamingToolCalls.values(),
     summarizing: chat.summarizing,
-  }),
-);
+  });
+});
 
 // Steer 插话衔接态（§11 过渡提示的轻量版）：回合 A 被 abort 收尾（chat:done →
 // sending=false）到回合 B 起跑之间存在 3s+ 静默窗（后端 CHAIN_HEAD_QUIET 聚合

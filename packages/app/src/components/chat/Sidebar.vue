@@ -1,4 +1,7 @@
 <script setup lang="ts">
+// 侧栏相位短词（2026-10-26 批 3）：桶内权威相位的 3-6 字（等审批/重试中/委派中…），
+// 替代统一「生成中」——多会话并发的仪表盘语义。无桶/非在途回退「生成中」。
+import { phaseShortLabel } from "../../utils/phaseMachine";
 // Sidebar.vue — 左侧会话列表面板
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
@@ -209,6 +212,11 @@ import { useAgentStore } from "../../stores/agent";
 import AgentPicker from "./AgentPicker.vue";
 
 const chat = useChatStore();
+
+function phaseShort(convId: string): string {
+  const p = chat.phaseOfConv(convId);
+  return p ? phaseShortLabel(p) : "生成中";
+}
 const agent = useAgentStore();
 // 新建会话逻辑（与欢迎页共用 useNewConversation，保证项目内限成员一致）
 const { showPicker, pickerAgentIds, ctaKind, createError, startNew, onPickAgent } = useNewConversation();
@@ -458,8 +466,8 @@ function timeAgoLabel(dateStr: string): string {
               />
               <span class="conv-agent-name">统筹 · {{ channelCoordinatorName }}</span>
             </span>
-            <span v-if="chat.streamingConvIds.has(scopeChannel.id)" class="stream-indicator" title="正在生成…">
-              <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
+            <span v-if="chat.streamingConvIds.has(scopeChannel.id)" class="stream-indicator" :title="'正在' + phaseShort(scopeChannel.id) + '…'">
+              <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>{{ phaseShort(scopeChannel.id) }}
             </span>
             <span v-else class="conv-time">{{ timeAgoLabel(scopeChannel.updated_at) }}</span>
           </div>
@@ -559,8 +567,8 @@ function timeAgoLabel(dateStr: string): string {
             />
             <span class="conv-agent-name">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
           </span>
-          <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" title="正在生成…">
-            <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
+          <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" :title="'正在' + phaseShort(conv.id) + '…'">
+            <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>{{ phaseShort(conv.id) }}
           </span>
           <span v-else class="conv-time">{{ timeAgoLabel(conv.updated_at) }}</span>
         </div>
@@ -720,8 +728,8 @@ function timeAgoLabel(dateStr: string): string {
                     />
                     <span class="conv-agent-name">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
                   </span>
-                  <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" title="正在生成…">
-                    <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
+                  <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" :title="'正在' + phaseShort(conv.id) + '…'">
+                    <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>{{ phaseShort(conv.id) }}
                   </span>
                   <span v-else class="conv-time">{{ timeAgoLabel(conv.updated_at) }}</span>
                 </div>

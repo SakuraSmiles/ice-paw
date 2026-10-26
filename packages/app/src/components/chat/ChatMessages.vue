@@ -38,6 +38,8 @@ import type { ParsedRef } from "../../utils/refs";
 import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
 import { buildToolResultIndex } from "../../utils/blockParsers";
+import { phaseLabel } from "../../utils/phaseMachine";
+import { usePhaseClock } from "../../composables/usePhaseClock";
 import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
 import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
 import { toolDisplayName } from "../../utils/toolLabels";
@@ -76,6 +78,30 @@ const streamingPhase = computed(() =>
     summarizing: chat.summarizing,
   }),
 );
+
+// ===== 相位状态机呈现（2026-10-26 批 3）=====
+// 权威相位 = 桶内 phase（事件驱动 reducer）；phaseOf 推断降级为兜底
+//（事件缺失/旧回放）。等待用户相位（审批/选择）恒用权威值（phaseOf 推不出）。
+const phaseMachineLabel = computed(() => {
+  const s = chat.streamOf(chat.activeConvId ?? "");
+  if (!s || !s.sending) return null;
+  return s.phase;
+});
+
+// 相位行数据源（气泡相位行 + cursor-bar 共用）：权威优先、推断兜底、进程感后缀
+const { phaseProgress } = usePhaseClock();
+const activePhaseLabel = computed(() => {
+  const p = phaseMachineLabel.value;
+  if (p) {
+    // 等待用户相位不带进度（用户不该被催）；退避同理（倒计时已在文案里）
+    const waiting = p.phase === "awaiting_approval" || p.phase === "awaiting_choice";
+    if (waiting) return phaseLabel(p);
+    const prog = phaseProgress.value;
+    if (prog) return phaseLabel(p, { round: prog.round ?? undefined, elapsedLabel: prog.elapsedLabel });
+    return phaseLabel(p);
+  }
+  return streamingPhase.value; // 兜底：推断档
+});
 
 // 滚动跟随 + 分页 + 阅读位置记忆（逻辑抽到 composable：自动贴底 / 上滚暂停 /
 // 顶部触发分页 / 每会话滚动锚点——切走再回来按意图贴底或原位恢复）
@@ -1792,6 +1818,15 @@ const RESUMABLE_REASONS = new Set([
                     </template>
                   </div>
                 </div>
+
+                <!-- live 相位行（2026-10-26 批 3）：注意力所在处——正在生成的
+                     气泡自身携带权威相位 + 进程感（读历史滚到上方也能从此行看到
+                     「正在执行 xx · 第 N 轮 · Xs」）；等待用户/退避相位不带进度 -->
+                <div v-if="isLiveAssistant(item) && phaseMachineLabel" class="cursor-bar phase-inline">
+                  <div class="cursor-track">
+                    <StatusGlyph status="running" /><span class="cursor-label">{{ activePhaseLabel }}</span>
+                  </div>
+                </div>
               </template>
             </div>
 
@@ -1850,7 +1885,7 @@ const RESUMABLE_REASONS = new Set([
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
-        <StatusGlyph status="running" /><span class="cursor-label">{{ streamingPhase }}</span>
+        <StatusGlyph status="running" /><span class="cursor-label">{{ activePhaseLabel }}</span>
       </div>
     </div>
 
@@ -2224,6 +2259,8 @@ const RESUMABLE_REASONS = new Set([
 
 /* ===== 流式光标 ===== */
 .cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap: var(--ip-spacing-2_5); padding:4px var(--ip-spacing-12) 0; }
+/* live 气泡内联相位行（批 3）：复用 cursor 视觉语言，去横向大边距（随内容列） */
+.phase-inline { padding: var(--ip-spacing-0_5) 0 0 var(--ip-spacing-2); }
 .cursor-track { display:flex; align-items:center; gap: var(--ip-spacing-2); padding:4px 0; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }
 /* 生成指示的脉冲点已由 StatusGlyph running 像素格取代（2026-09-04 语系统一）；
