@@ -759,9 +759,11 @@ function timeAgoLabel(dateStr: string): string {
 
 <style scoped>
 .sidebar {
-  /* 宽度改由 useResizablePanel 响应式绑定（内联 style）——把手 overlay 定位挂靠 */
+  /* 宽度改由 useResizablePanel 响应式绑定（内联 style）——把手 overlay 定位挂靠。
+     高度 100%（原 100vh——TitleBar 批 3 后侧栏住进 app-shell 列布局，100vh
+     会溢出栏高 36px 产生内部滚动） */
   position: relative;
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background-color: var(--ip-color-bg-primary);

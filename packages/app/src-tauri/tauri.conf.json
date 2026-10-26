@@ -20,7 +20,8 @@
         "minHeight": 600,
         "dragDropEnabled": false,
         "visible": false,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=52428800"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=52428800",
+        "decorations": false
       }
     ],
     "security": {

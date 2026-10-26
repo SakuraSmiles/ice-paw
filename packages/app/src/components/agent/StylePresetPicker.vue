@@ -183,7 +183,7 @@ function onConfirm() {
   flex-direction: column;
   width: 600px;
   max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 96px);
+  max-height: calc(100vh - 132px); /* 96 + TitleBar 36（批 3 后可用高度少一栏） */
   padding: var(--ip-spacing-4);
   border-radius: var(--ip-radius-lg);
   background: var(--ip-color-bg-primary);
