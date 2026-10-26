@@ -28,6 +28,8 @@ import type {
   ChatToolResultPayload,
   ChatThinkingPayload,
   ChatProcessingPayload,
+  ChatRetryingPayload,
+  ChatRoundStatePayload,
   ChatSummaryStartedPayload,
   ChatSummaryInjectedPayload,
   ToolAuthRequestPayload,
@@ -60,6 +62,7 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatStartPayload>("chat:start", (e) => {
     const cid = e.payload.conversation_id;
+    chat.advancePhase(cid, "chat:start", {});
     // 2026-10-26 分桶：桶置位无条件（后台会话的 start 同样标志「在途」——
     // 侧栏 streamingConvIds / 委派卡兜底都靠它；旧架构靠 chunk 的 bgStreams.set
     // 兜住，桶架构由 start 权威置位）。锚（sendingConvId）**不在此设**——外部
@@ -134,6 +137,7 @@ export async function useChatEvents(): Promise<() => void> {
   // 防后台会话的摘要事件污染当前会话 footer。summary 是同步阻塞的 LLM 调用，
   // 顺带 resetSendTimeout 撑住 60s 静默窗口。
   await subscribe<ChatSummaryStartedPayload>("chat:summary-started", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:summary-started", {});
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
     chat.ensureStream(e.payload.conversation_id).summarizing = true;
@@ -142,6 +146,7 @@ export async function useChatEvents(): Promise<() => void> {
   // 摘要完成收尾（仅成功路径 emit；失败/返回空走确定性折叠无此事件——由首 token /
   // assistant-start 兜底复位）。此前前端未订阅此事件，本次为阶段提示接上。
   await subscribe<ChatSummaryInjectedPayload>("chat:summary-injected", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:summary-injected", {});
     if (e.payload.conversation_id !== chat.activeConvId) return;
     const s = chat.streamOf(e.payload.conversation_id);
     if (s) s.summarizing = false;
@@ -153,6 +158,7 @@ export async function useChatEvents(): Promise<() => void> {
   // tool_use_id 同时登记进 store 映射：同轮多卡并行委派时，每张 running 卡
   // 按自己的 tool_use id 精确跳转（旧行为所有卡都跳会话级唯一的 streaming 子会话）。
   await subscribe<DelegationStartedPayload>("chat:delegation-started", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:delegation-started", {});
     const { tool_use_id, child_conversation_id } = e.payload;
     if (tool_use_id && child_conversation_id) {
       chat.bindDelegationChild(tool_use_id, child_conversation_id);
@@ -181,10 +187,30 @@ export async function useChatEvents(): Promise<() => void> {
     chat.updateRoundsRenewed(e.payload);
   });
 
+  // 限流/网络退避（批 2 相位状态机）：chat:retrying → 桶相位 retrying（带
+  // attempt/max）；重置 60s 心跳（退避 sleep 期间无数据事件，超时探测白跑）。
+  await subscribe<ChatRetryingPayload>("chat:retrying", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:retrying", {
+      attempt: e.payload.attempt,
+      max_attempts: e.payload.max_attempts,
+      reason: e.payload.reason,
+    });
+    chat.resetSendTimeout();
+  });
+
+  // 轮性能快照（批 2 进程感）：后端每流后 emit（前端此前零订阅）——轮号/
+  // 回合累计时长进桶，气泡相位行 / cursor-bar 的「第 N 轮 · Xs」数据源。
+  await subscribe<ChatRoundStatePayload>("chat:round-state", (e) => {
+    const s = chat.ensureStream(e.payload.conversation_id);
+    s.round = e.payload.round;
+    s.elapsedMs = e.payload.elapsed_ms;
+  });
+
   // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
   // + 重置 streaming 状态 + push 新占位。
   await subscribe<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
     const aid = e.payload.conversation_id;
+    chat.advancePhase(aid, "chat:assistant-start", {});
     // 桶置位无条件（后台会话的多轮续跑同样在途；UI 部分按激活过滤）
     chat.ensureStream(aid).sending = true;
     if (aid !== chat.activeConvId) return;
@@ -217,6 +243,7 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatChunkPayload>("chat:chunk", (e) => {
     const cid = e.payload.conversation_id;
+    chat.advancePhase(cid, "chat:chunk", {});
     // 2026-10-26 分桶：写自己会话的桶（激活/后台分叉消灭——数据常驻各自桶）。
     // 原地 mutate 字段（勿整替 Map）：streamingConvIds 遍历 streams keys，
     // 整替会让 Sidebar/项目列表/任务台账等全部消费方在委派生成的每个
@@ -239,6 +266,7 @@ export async function useChatEvents(): Promise<() => void> {
 
   // ---- 工具调用事件（激活会话专属 UI 状态：后台会话的工具轮由 done 落库收尾） ----
   await subscribe<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:tool-call-start", { name: e.payload.name });
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
     const s = chat.ensureStream(e.payload.conversation_id);
@@ -251,6 +279,7 @@ export async function useChatEvents(): Promise<() => void> {
   });
 
   await subscribe<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:tool-call-delta", {});
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
     const s = chat.ensureStream(e.payload.conversation_id);
@@ -259,6 +288,7 @@ export async function useChatEvents(): Promise<() => void> {
   });
 
   await subscribe<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:tool-call-end", {});
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
     const s = chat.ensureStream(e.payload.conversation_id);
@@ -267,6 +297,7 @@ export async function useChatEvents(): Promise<() => void> {
   });
 
   await subscribe<ChatToolResultPayload>("chat:tool-result", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:tool-result", {});
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
     const s = chat.ensureStream(e.payload.conversation_id);
@@ -285,6 +316,7 @@ export async function useChatEvents(): Promise<() => void> {
   // ---- 思考过程 ----
   await subscribe<ChatThinkingPayload>("chat:thinking", (e) => {
     const cid = e.payload.conversation_id;
+    chat.advancePhase(cid, "chat:thinking", {});
     const s = chat.ensureStream(cid);
     if (!s.streamingThinking) s.thinkingStartTime = Date.now();
     s.streamingThinking += e.payload.content;
@@ -294,6 +326,7 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatDonePayload>("chat:done", (e) => {
     const cid = e.payload.conversation_id;
+    chat.advancePhase(cid, "chat:done", {});
     if (cid !== chat.activeConvId) {
       // 后台会话完成：后端已把最终态落库，清桶即可（不触活跃 UI，无需前端 freeze）
       chat.streams.delete(cid);
@@ -372,6 +405,7 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatErrorPayload>("chat:error", (e) => {
     const cid = e.payload.conversation_id;
+    chat.advancePhase(cid, "chat:error", {});
     // 标记：后端会紧跟一次 chat:done(abort) 收尾，chat:done 据此跳过 freeze + lastFinishReason
     recentErrorConvs.add(cid);
     if (cid !== chat.activeConvId) {
@@ -462,6 +496,7 @@ export async function useChatEvents(): Promise<() => void> {
 
   // ---- 工具授权请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
   await subscribe<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:tool-auth-request", {});
     const m = new Map(chat.pendingAuthRequests);
     // receivedAt 驱动 120s 倒计时渲染（与后端 TIMEOUT 同步到期自动消失）
     m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
@@ -488,14 +523,26 @@ export async function useChatEvents(): Promise<() => void> {
   }
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:tool-auth-request-cancel",
-    (e) => dropAuthEntry(e.payload.request_id),
+    (e) => {
+      dropAuthEntry(e.payload.request_id);
+      chat.advancePhase(e.payload.conversation_id, "chat:tool-auth-request-cancel", {});
+    },
   );
   // 应答已发生（前端卡片或系统 toast 按钮任一路径，单一 emit 入口在 Rust
   // approval_toast）——toast 按钮路径前端无乐观删，全靠此事件清条目，
   // 否则卡片残留到 120s 超时。invoke 路径 store 已乐观删，此处幂等双保险。
   await subscribe<{ request_id: string; allowed: boolean }>(
     "chat:tool-auth-responded",
-    (e) => dropAuthEntry(e.payload.request_id),
+    (e) => {
+      // responded payload 无 conversation_id——先从条目反查（删前）再清，
+      // 相位从 awaiting_approval 恢复执行态
+      let rCid: string | null = null;
+      for (const [cid, entry] of chat.pendingAuthRequests) {
+        if (entry.payload.request_id === e.payload.request_id) { rCid = cid; break; }
+      }
+      dropAuthEntry(e.payload.request_id);
+      if (rCid) chat.advancePhase(rCid, "chat:tool-auth-responded", {});
+    },
   );
 
   // ---- 配置提案请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
@@ -510,6 +557,7 @@ export async function useChatEvents(): Promise<() => void> {
   // 常驻等待无超时——清条目只有两路：用户作答（invoke 乐观删）或后端 cancel
   //（用户停止生成时 emit chat:ask-user-request-cancel）。
   await subscribe<AskUserRequestPayload>("chat:ask-user-request", (e) => {
+    chat.advancePhase(e.payload.conversation_id, "chat:ask-user-request", {});
     const m = new Map(chat.pendingAskRequests);
     m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
     chat.pendingAskRequests = m;
@@ -523,6 +571,7 @@ export async function useChatEvents(): Promise<() => void> {
         if (entry.payload.request_id === e.payload.request_id) { m.delete(cid); break; }
       }
       chat.pendingAskRequests = m;
+      chat.advancePhase(e.payload.conversation_id, "chat:ask-user-request-cancel", {});
     },
   );
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(

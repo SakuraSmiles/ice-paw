@@ -27,6 +27,13 @@ import type {
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
+import {
+  initialPhase as initialPhaseOf,
+  nextPhase,
+  type PhaseState,
+  type PhaseEventName,
+  type PhaseEventPayload,
+} from "../utils/phaseMachine";
 import { useProjectStore } from "./project";
 
 /** 授权等待上限，与后端 tool_executor::wait_for_auth_response 的 TIMEOUT 对齐
@@ -310,6 +317,11 @@ export const useChatStore = defineStore("chat", () => {
     thinkingStartTime: number | null;
     sendingConvId: string | null;
     turnFirstIdx: number | null;
+    /** 相位状态机（批 2）：事件驱动权威相位 + 进入时间戳 + 上下文。 */
+    phase: PhaseState;
+    /** 进程感（chat:round-state 驱动，批 2）：当前轮号 / 回合累计时长。 */
+    round: number;
+    elapsedMs: number;
   }
   function newStream(): SessionStream {
     return {
@@ -321,7 +333,30 @@ export const useChatStore = defineStore("chat", () => {
       thinkingStartTime: null,
       sendingConvId: null,
       turnFirstIdx: null,
+      phase: initialPhaseOf(),
+      round: 0,
+      elapsedMs: 0,
     };
+  }
+  /** 相位推进（桶内，事件层调用）：聚合桶内工具统计喂 reducer。 */
+  function advancePhase(convId: string, event: PhaseEventName, payload: PhaseEventPayload) {
+    const s = ensureStream(convId);
+    let openCount = 0;
+    let waitingCount = 0;
+    let lastName: string | undefined;
+    for (const c of s.streamingToolCalls.values()) {
+      if (!c.ended) openCount += 1;
+      else if (!c.result) waitingCount += 1;
+      lastName = c.name;
+    }
+    s.phase = nextPhase(
+      s.phase, event, payload, { openCount, waitingCount, lastName },
+    );
+  }
+  /** 任意会话的相位（侧栏 badge 用；无桶 = 非在途，返回 null）。 */
+  function phaseOfConv(convId: string) {
+    const s = streamOf(convId);
+    return s && s.sending ? s.phase : null;
   }
   /** 会话流式桶真相源。性能纪律（承 bgStreams 原约束）：事件层写桶字段用
    *  原地 mutate，勿整替 Map——streamingConvIds 的 keys 迭代依赖只在 Map 结构
@@ -1240,7 +1275,7 @@ export const useChatStore = defineStore("chat", () => {
     sendingConvId,
     // 2026-10-26 分桶：streams Map 为流式真相源（事件层按 conversation_id 写桶，
     // 全局字段全是激活桶投影）；ensureStream/streamOf 是桶写入口（测试与事件层用）
-    streams, ensureStream, streamOf,
+    streams, ensureStream, streamOf, advancePhase, phaseOfConv,
     pendingAuthRequests, pendingProposals, lastErrors,
     lastFailedSend, clearConvError, setConvError,
     activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError, lastErrorKind,
