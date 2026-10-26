@@ -376,7 +376,22 @@ describe("chatStore", () => {
         content: "file contents here",
         isError: false,
         durationMs: 42,
+        images: undefined,
       });
+    });
+
+    it("tool-result 携带 images（2026-10-26 live 图片展示）透传进流式调用状态", async () => {
+      const { store, handlers } = await setupStream();
+      // 流中工具调用（start 事件建条目——name 在 start payload）
+      handlers.get("chat:tool-call-start")!({ payload: { conversation_id: "c1", id: "tc-img", name: "view_image" } });
+      handlers.get("chat:tool-result")!({
+        payload: {
+          conversation_id: "c1", tool_use_id: "tc-img", content: "查看图片完成", is_error: false, duration_ms: 10,
+          images: [{ data: "iVBORw0KGgo=", media_type: "image/png" }],
+        },
+      });
+      const result = store.streamingToolCalls.get("tc-img")!.result!;
+      expect(result.images).toEqual([{ data: "iVBORw0KGgo=", media_type: "image/png" }]);
     });
 
     it("multi-round: chat:assistant-start triggers freeze + reset + new placeholder", async () => {

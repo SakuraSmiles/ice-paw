@@ -1351,3 +1351,162 @@ async fn no_fallback_keeps_legacy_behavior() {
     assert!(!names.contains(&"chat:model-switched".to_string()));
     assert!(!names.contains(&"chat:retrying".to_string()));
 }
+
+
+// =========================================================================
+// 工具返图落库/LLM 分家（a291676 + e5b1770 回归锁，2026-10-26）
+// =========================================================================
+
+/// 返图工具（view_image/show_image 形态）：execute_with_output 带一个 1×1 PNG。
+struct PngTool;
+
+#[async_trait]
+impl McpClient for PngTool {
+    fn name(&self) -> &str {
+        "show_image"
+    }
+    fn description(&self) -> &str {
+        "e2e 返图工具"
+    }
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
+    }
+    fn authorization_level(&self) -> crate::harness::mcp::types::AuthorizationLevel {
+        crate::harness::mcp::types::AuthorizationLevel::Always
+    }
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(crate::error::AppError::Internal("须走 execute_with_output".into()))
+    }
+    async fn execute_with_output(
+        &self,
+        _args: &str,
+        _ctx: &crate::harness::mcp::client::ToolContext,
+    ) -> AppResult<crate::harness::mcp::client::ToolOutput> {
+        // 1×1 红 PNG
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200, 40, 40]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("encode png");
+        Ok(crate::harness::mcp::client::ToolOutput::with_image(
+            "{\"path\":\"e2e.png\"}",
+            buf,
+        ))
+    }
+}
+
+/// 把 agent-1 的视觉能力显式改档（分家测试要确定性——seed 默认值随模型表漂移）。
+async fn set_agent_vision(pool: &SqlitePool, on: i64) {
+    sqlx::query("UPDATE agents SET supports_vision = ? WHERE id = 'agent-1'")
+        .bind(on)
+        .execute(pool)
+        .await
+        .expect("set vision");
+}
+
+fn count_images(blocks: &[ContentBlock]) -> usize {
+    blocks.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count()
+}
+
+/// **非视觉 agent**（分家核心断言）：返图工具执行后——
+/// 1. DB 的 tool_result 行 blocks 含 Image（落库 = 前端展示数据源）；
+/// 2. 下轮 LLM 请求不含任何 Image（绝不向非视觉模型塞图；代读文本在 content）；
+/// 3. chat:tool-result 事件携带 images（live 展示数据源）。
+#[tokio::test]
+async fn non_vision_agent_tool_image_persisted_but_stripped_from_llm() {
+    let pool = seeded_pool("{}").await;
+    set_agent_vision(&pool, 0).await;
+    let mut map = std::collections::HashMap::new();
+    map.insert("show_image".to_string(), Arc::new(PngTool) as Arc<dyn McpClient>);
+    let mut fx = run_turn_core(
+        pool,
+        Arc::new(MockProvider::new(
+            "mock-model",
+            MockScenario::ToolCallThenText {
+                tool_name: "show_image".into(),
+                arguments: r#"{"path":"e2e.png"}"#.into(),
+            },
+        )),
+        map,
+        FallbackPlan::empty(),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+    assert_eq!(summary.finish_reason, "stop", "工具轮 + 收尾轮应正常完成");
+
+    // 1) 落库：user tool_result 行 blocks 含 Image
+    let rows = message_rows(&fx.pool).await;
+    let tool_row = rows
+        .iter()
+        .find(|r| r.role == "user" && r.content_blocks.contains("tool_result"))
+        .expect("tool_result 行");
+    let blocks: Vec<ContentBlock> = serde_json::from_str(&tool_row.content_blocks).expect("blocks json");
+    assert_eq!(count_images(&blocks), 1, "Image 块必须落库（前端展示数据源）");
+
+    // 2) LLM 侧：所有请求的消息不含 Image（第二次请求含 tool_result 轮）
+    for (i, msgs) in fx.mock.received_messages().iter().enumerate() {
+        for m in msgs {
+            let n = count_images(&m.content);
+            assert_eq!(
+                n, 0,
+                "第 {i} 次请求的 {:?} 消息含 {n} 个 Image——非视觉 LLM 请求不得含图（阶段 G 剥离失效）",
+                m.role
+            );
+        }
+    }
+    assert!(fx.mock.received_messages().len() >= 2, "工具轮后应有第二次请求");
+
+    // 3) live 事件：chat:tool-result 携带 images
+    let events = fx.emitter.events.lock().expect("emitter").clone();
+    let tr = events
+        .iter()
+        .find(|(n, _)| n == "chat:tool-result")
+        .expect("tool-result 事件");
+    let imgs = tr.1["images"].as_array().expect("images 字段");
+    assert!(!imgs.is_empty(), "事件须携带图（live 展示数据源）");
+    assert!(imgs[0]["data"].as_str().is_some_and(|d| !d.is_empty()));
+}
+
+/// **视觉 agent**：Image 落库 + 下轮 LLM 请求保留 Image（模型直读）。
+#[tokio::test]
+async fn vision_agent_tool_image_persisted_and_passed_to_llm() {
+    let pool = seeded_pool("{}").await;
+    set_agent_vision(&pool, 1).await;
+    let mut map = std::collections::HashMap::new();
+    map.insert("show_image".to_string(), Arc::new(PngTool) as Arc<dyn McpClient>);
+    let mut fx = run_turn_core(
+        pool,
+        Arc::new(MockProvider::new(
+            "mock-model",
+            MockScenario::ToolCallThenText {
+                tool_name: "show_image".into(),
+                arguments: r#"{"path":"e2e.png"}"#.into(),
+            },
+        )),
+        map,
+        FallbackPlan::empty(),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+    assert_eq!(summary.finish_reason, "stop");
+
+    // 落库含 Image
+    let rows = message_rows(&fx.pool).await;
+    let tool_row = rows
+        .iter()
+        .find(|r| r.role == "user" && r.content_blocks.contains("tool_result"))
+        .expect("tool_result 行");
+    let blocks: Vec<ContentBlock> = serde_json::from_str(&tool_row.content_blocks).expect("blocks json");
+    assert_eq!(count_images(&blocks), 1);
+
+    // 第二次请求（工具轮之后）的 user 消息含 Image——视觉模型直读
+    let received = fx.mock.received_messages();
+    assert!(received.len() >= 2, "工具轮后应有第二次请求");
+    let second = &received[1];
+    let tool_msgs: usize = second
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| count_images(&m.content))
+        .sum();
+    assert_eq!(tool_msgs, 1, "视觉 agent 的下轮请求应保留 1 个 Image 供模型直读");
+}
