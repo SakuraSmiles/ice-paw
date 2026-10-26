@@ -14,6 +14,14 @@ pub fn utc_now_str() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// 存库格式：本地时刻 → UTC 字符串（DB 惯例 UTC 存储；显示层转本地）。
+/// 单一真相源（2026-10-26 地基审计批 Y 收敛——曾 task_cmd/scheduler 逐字复制 ×2）。
+pub fn fmt_store(dt: chrono::DateTime<chrono::Local>) -> String {
+    dt.with_timezone(&chrono::Utc)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
 pub async fn create(
     pool: &SqlitePool,
     id: &str,

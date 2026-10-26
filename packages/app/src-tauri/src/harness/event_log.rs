@@ -14,7 +14,7 @@
 //! 接线一律在 harness/command 语义层，不放 repo 层（repo 不知 turn 语境，
 //! 且「占位 create + finalize」两点会双记）。
 //!
-//! 词表以本文件的 typed emitter 集为单一真相源（现 18 kind；migration 44 头注释
+//! 词表以本文件的 typed emitter 集为单一真相源（现 21 kind；migration 44 头注释
 //! 只记建表时初始集，已滞后勿再引用）。不入日志项：BatchWriter 流式 flush /
 //! 合成续写 prompt / 工具排序（瞬态过程非事实）。
 

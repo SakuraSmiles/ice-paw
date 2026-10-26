@@ -184,72 +184,31 @@ pub fn dead_scope_entries(scopes: &[String], tools: &[(String, Option<String>)])
 mod tests {
     use super::*;
 
-    /// 组名单快照完整性锁：register_builtin 的 39 件内置工具全覆盖、无重复入组、
-    /// 无组内重复。新增内置工具忘了进组 → 本测试红（固定名单快照语义的守门员，
-    /// 提醒维护者显式决定新工具归属——安全面不静默扩大）。
-    #[test]
-    fn groups_cover_all_registered_tools() {
-        let registered: &[&str] = &[
-            // 只读 / 文件
-            "read_file",
-            "list_directory",
-            "directory_tree",
-            "get_file_info",
-            "read_multiple_files",
-            // Word 四件
-            "inspect_docx",
-            "edit_docx",
-            "validate_docx",
-            "write_docx",
-            // KB
-            "search_kb",
-            "save_to_kb",
-            "read_kb_document",
-            // 附件与引用
-            "read_attachment_page",
-            "view_attachment_image",
-            "read_reference",
-            // agentic 工具集
-            "write_file",
-            "edit_file",
-            "delete_file",
-            "move_file",
-            "copy_file",
-            "create_directory",
-            "run_command",
-            "search_files",
-            "git",
-            "web_fetch",
-            "view_image",
-            "show_image",
-            // 配置与计划
-            "read_agent_config",
-            "list_model_profiles",
-            "list_projects",
-            "get_project_details",
-            "search_conversations",
-            "get_task_ledger",
-            "propose_config_change",
-            "update_plan",
-            // 定时任务三件（组装期注册，同 delegate/relay 性质）
-            "list_scheduled_tasks",
-            "create_scheduled_task",
-            "update_scheduled_task",
-            "delete_scheduled_task",
-            // 屏幕十一件
-            "capture_screen",
-            "list_windows",
-            "capture_window",
-            "mouse_move",
-            "mouse_click",
-            "mouse_drag",
-            "mouse_scroll",
-            "type_text",
-            "press_key",
-            "wait",
-            "request_screen_session",
-        ];
-        for tool in registered {
+    /// 组名单快照完整性锁：全部内置工具（真实注册表枚举 + 组装期注册件）全覆盖、
+    /// 无重复入组、无组内重复。新增内置工具忘了进组 → 本测试红（固定名单快照
+    /// 语义的守门员，提醒维护者显式决定新工具归属——安全面不静默扩大）。
+    ///
+    /// 2026-10-26 地基审计批 Y：名单真相源从「测试内手抄清单」改为 **真实注册表
+    /// 枚举**（`McpRegistry::with_builtin()` 快照）——旧实现里 register_builtin
+    /// 新增工具而测试名单/TOOL_GROUPS 两边都漏改时测试仍绿（锁没锁住真注册表）。
+    /// 组装期注册件（不在全局注册表）保留 5 件小名单：task 四件 + list_model_profiles
+    /// 在 session_runner 组装期注入（同 delegate/relay 性质，但进 TOOL_GROUPS）。
+    #[tokio::test]
+    async fn groups_cover_all_registered_tools() {
+        let registry = crate::harness::mcp::McpRegistry::with_builtin();
+        let mut registered: Vec<String> = registry.tool_names().await;
+        registered.extend(
+            [
+                // 组装期注册（session_runner 按 conv.kind 注入，不在 register_builtin）
+                "list_model_profiles",
+                "list_scheduled_tasks",
+                "create_scheduled_task",
+                "update_scheduled_task",
+                "delete_scheduled_task",
+            ]
+            .map(String::from),
+        );
+        for tool in &registered {
             assert!(
                 tool_group_of(tool).is_some(),
                 "内置工具 {tool} 未进任何组——固定名单快照要求显式归属（补 TOOL_GROUPS）"
@@ -266,7 +225,9 @@ mod tests {
         assert_eq!(
             seen.len(),
             registered.len(),
-            "组内总件数应 = 注册件数（无多余幽灵名）"
+            "组内总件数（{}）应 = 注册件数（{}）——无多余幽灵名",
+            seen.len(),
+            registered.len()
         );
     }
 

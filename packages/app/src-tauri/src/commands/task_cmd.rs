@@ -36,12 +36,8 @@ pub struct TaskView {
 /// 侧栏快速入口视图：跨任务最近执行（含任务名）。
 pub use crate::db::repo::task::RecentRunView;
 
-/// 存库格式：本地时刻 → UTC 字符串（DB 惯例 UTC 存储）。
-fn fmt_store(dt: chrono::DateTime<chrono::Local>) -> String {
-    dt.with_timezone(&chrono::Utc)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-}
+/// 存库格式：本地时刻 → UTC 字符串（单一真相源在 repo::task::fmt_store）。
+use crate::db::repo::task::fmt_store;
 
 /// 校验档位并算首个 next_run（enabled 任务必非空；一次性过期时间拒收——
 /// 用户想立即跑应该用「立即运行」而非创建一个过去的一次性任务）。

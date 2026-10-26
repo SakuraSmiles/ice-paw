@@ -32,7 +32,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, Local, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveTime, TimeZone};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -217,12 +217,8 @@ pub fn preview_next_runs(spec: &SchedSpec, n: usize) -> Vec<String> {
     out
 }
 
-/// 存库格式：本地调度时刻 → UTC 字符串（DB 惯例 UTC 存储；显示层转本地）。
-fn fmt_store(dt: DateTime<Local>) -> String {
-    dt.with_timezone(&Utc)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-}
+// 存库格式：本地调度时刻 → UTC 字符串（单一真相源在 repo::task::fmt_store）。
+use crate::db::repo::task::fmt_store;
 
 // =========================================================================
 // 执行器

@@ -29,6 +29,16 @@ const _: () = assert!(TERMINATE_AT > NUDGE_AT);
 
 /// AppError 变体 Display 壳前缀（error.rs `#[error]` 模板首段）。工具错误经
 /// `e.to_string()` 落 tool_result 时带这层壳，剥掉后才露工具层的真家族前缀。
+///
+/// **两分类纪律（2026-10-26 地基审计批 Y）**：error.rs 每个变体必须显式归入
+/// 「剥壳表」（本表）或「保持表」（[`SELF_SUFFICIENT_SHELLS`]）之一——测试
+/// `variant_shell_policy_covers_all_app_error_variants` 锁定，新增变体时红，
+/// 强制维护者分类。判据：**inner 是否携带比壳更稳定的家族语义**。
+/// - 包装变体（本表 8 个）：inner 是工具层三段式文案（有自己的稳定家族前缀），
+///   剥壳才不混家族（Q2 实案：Validation 壳把 move_file 参数解析失败/文件不存在
+///   全折成「参数校验失败」）。
+/// - 自足变体（保持表 5 个）：壳本身就是最好的稳定家族，剥壳反而把动态字段
+///   （资源 id / 工具名 / 取消语义）暴露进签名，打散家族。
 const VARIANT_SHELL_PREFIXES: &[&str] = &[
     "参数校验失败: ",
     "内部错误: ",
@@ -38,6 +48,23 @@ const VARIANT_SHELL_PREFIXES: &[&str] = &[
     "JSON 错误: ",
     "数据库错误: ",
     "数据库迁移错误: ",
+];
+
+/// 自足变体壳：Display 即稳定家族，**刻意不剥**（与剥壳表互斥的另一半）。
+/// - NotFound/AuthorizationRequired 的 inner 是 `{resource}={id}` / `工具 '{tool}' —
+///   {reason}` 动态字段——剥壳 = 每个缺资源/每把工具各成一签名，连败检测失效；
+/// - Cancelled 无负载无冒号——剥壳 = 空串签名；
+/// - Llm/Stream 的 inner 是 provider 原文（"HTTP 429: ..."），按壳归「LLM 调用错误」
+///   一族足够（round 级错误的轮次归因在 termination，不在 doom 家族）。
+///
+/// 仅测试消费（两分类锁的「另一半」对位表，生产 error_kind 刻意不查它）。
+#[cfg(test)]
+const SELF_SUFFICIENT_SHELLS: &[&str] = &[
+    "资源未找到: ",
+    "LLM 调用错误: ",
+    "流式解析错误: ",
+    "操作已取消",
+    "授权失败: ",
 ];
 
 /// 错误签名：首行截到首个冒号（含中文全角）为止。
@@ -229,6 +256,47 @@ mod tests {
         );
         // 无壳形态不受影响（回归：裸家族串原样截取）
         assert_eq!(error_kind("文件不存在: x.rs"), "文件不存在");
+    }
+
+    /// 壳清单与 error.rs 同步锁（2026-10-26 地基审计批 Y）：AppError 每个
+    /// 变体的 Display 壳必须恰归「剥壳表 / 保持表」之一——error.rs 新增变体
+    /// 时本测试红，强制维护者显式分类（防壳清单静默漂移——审计时 13 变体
+    /// 只有 8 个在表、5 个无登记无理由）。
+    #[test]
+    fn variant_shell_policy_covers_all_app_error_variants() {
+        use crate::error::AppError;
+        let samples: Vec<AppError> = vec![
+            // 剥壳表 8 个（构造等价样本即可——只看 Display 首段壳）
+            AppError::Validation("x".into()),
+            AppError::Internal("x".into()),
+            AppError::Io(std::io::Error::other("x")),
+            AppError::Stronghold("x".into()),
+            AppError::Tauri("x".into()),
+            AppError::Json(serde_json::from_str::<i32>("!").unwrap_err()),
+            AppError::Database(sqlx::Error::RowNotFound),
+            AppError::Migrate(sqlx::migrate::MigrateError::Execute(sqlx::Error::RowNotFound)),
+            // 保持表 5 个
+            AppError::NotFound { resource: "agent", id: "some-id".into() },
+            AppError::Llm("x".into()),
+            AppError::Stream("x".into()),
+            AppError::Cancelled,
+            AppError::AuthorizationRequired { tool: "run_command".into(), reason: "r".into() },
+        ];
+        for e in &samples {
+            let s = e.to_string();
+            let stripped = VARIANT_SHELL_PREFIXES.iter().any(|p| s.starts_with(p));
+            let kept = SELF_SUFFICIENT_SHELLS.iter().any(|p| s.starts_with(p));
+            assert!(
+                stripped ^ kept,
+                "AppError 变体壳未分类（剥壳表/保持表二选一）: {s:?}"
+            );
+            // 保持表条目走 error_kind 后家族=壳本身（稳定）；剥壳表条目 inner 见上
+        }
+        // 保持表语义抽查：动态 inner 不进签名（这正是它们不剥的原因）
+        let nf = AppError::NotFound { resource: "agent", id: "id-A".into() }.to_string();
+        let ng = AppError::NotFound { resource: "conversation", id: "id-B".into() }.to_string();
+        assert_eq!(error_kind(&nf), error_kind(&ng), "不同缺资源应同家族（壳级）");
+        assert_eq!(error_kind(&nf), "资源未找到");
     }
 
     #[test]
