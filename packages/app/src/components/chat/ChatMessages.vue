@@ -37,6 +37,7 @@ import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/re
 import type { ParsedRef } from "../../utils/refs";
 import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
+import { buildToolResultIndex } from "../../utils/blockParsers";
 import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
 import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
 import { toolDisplayName } from "../../utils/toolLabels";
@@ -509,66 +510,16 @@ const parseThinkingBlocks = memoized((contentBlocks: string): { thinking: string
   } catch { return []; }
 });
 
-/** tool_result 查询结果的图片集（view_image/show_image/UE5 提取图的渲染数据源；
- *  base64 data + mediaType，与 ImagePreview/openImagePreview 的 images 形状一致）。 */
-interface ToolResultEntry {
-  content: string;
-  isError: boolean;
-  images: { data: string; mediaType: string }[];
-}
-
-/** 行级 tool_result 解析（memo 按行 contentBlocks 字符串缓存——同串零重 parse）。
- *  行内顺序扫描原始 blocks：tool_result 与其后的 Image 块（工具返图：
- *  view_image/show_image/UE5 提取）按序归属到最近的 tool_result，图随条目携带。
- *  ⚠️ 勿退回 computed 内裸 JSON.parse（0.9.7 生产实案：丢 memo 后生成中每次
- *  messages 更新全量重 parse 全部 user 行——大会话行含图片 base64 水合，
- *  MB 级×数千行=秒级主线程长任务，invoke 响应/组件挂载排队饿死——设置二级
- *  菜单跳不动、工具集/日志页一直加载中、点会话（缓存页轻切换）反而能跳）。 */
-const parseResultRow = memoized(
-  (contentBlocks: string): [string, ToolResultEntry][] => {
-    let blocks: unknown[];
-    try {
-      blocks = JSON.parse(contentBlocks);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(blocks)) return [];
-    const out: [string, ToolResultEntry][] = [];
-    let current: ToolResultEntry | null = null;
-    for (const b of blocks) {
-      if (typeof b !== "object" || b === null) continue;
-      const rec = b as Record<string, unknown>;
-      if (rec.type === "tool_result" && typeof rec.tool_use_id === "string") {
-        current = {
-          content: typeof rec.content === "string" ? rec.content : "",
-          isError: rec.is_error === true,
-          images: [],
-        };
-        out.push([rec.tool_use_id, current]);
-      } else if (rec.type === "image" && current) {
-        // 图片外置行已由 repo 读侧水合回内联 base64
-        if (typeof rec.data === "string" && rec.data) {
-          current.images.push({ data: rec.data, mediaType: String(rec.media_type ?? "image/png") });
-        }
-      }
-    }
-    return out;
-  },
-);
+/** tool_result 条目类型（2026-10-26 解析器抽 utils/blockParsers，配性能基准锁）。 */
+type ToolResultEntry = import("../../utils/blockParsers").ToolResultEntry;
 
 /** tool_use_id → tool_result 全局索引（替代逐 tool_use 向后扫 + 逐次 JSON.parse
  *  的 O(n²)：messages 每次（末条整对象替换式）更新时 O(n) 重建，行 parse 走
  *  memo（未变行零成本），重建即查表。tool_use_id 全局唯一，同 id 复用仅见于
- *  畸形数据——取最后出现。2026-10-22：增图携带（见 parseResultRow）。 */
+ *  畸形数据——取最后出现。2026-10-26：解析器抽 utils/blockParsers（性能基准
+ *  锁 blockParsers.perf.test——变更单行后重建 <200ms，防 0.9.7 memo 丢失回归）。 */
 const toolResultIndex = computed(() => {
-  const idx = new Map<string, ToolResultEntry>();
-  for (const m of chat.messages) {
-    if (m.role !== "user") continue;
-    for (const [id, entry] of parseResultRow(m.content_blocks)) {
-      idx.set(id, entry);
-    }
-  }
-  return idx;
+  return buildToolResultIndex(chat.messages);
 });
 
 /** 查 tool_use_id 对应的 tool_result（查全局索引，见 toolResultIndex）。*/
