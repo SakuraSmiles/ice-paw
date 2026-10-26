@@ -362,12 +362,19 @@ export const useChatStore = defineStore("chat", () => {
    *  原地 mutate，勿整替 Map——streamingConvIds 的 keys 迭代依赖只在 Map 结构
    *  变化时失效（Sidebar/TaskPanel/TaskLedger 40ms tick 重算约束）。 */
   const streams = ref<Map<string, SessionStream>>(new Map());
-  /** 取或建该会话的流式桶（写入口；返回 reactive 桶可直改字段）。 */
+  /** 取或建该会话的流式桶（写入口；返回 reactive 桶可直改字段）。
+   *  ⚠️ 建桶分支必须 re-get 返回代理（2026-10-26 CI 时序敏感根治）：Vue 的
+   *  reactive Map 只在 get 时包代理、set 存裸 target——直接返回 s 时调用方
+   *  在裸引用上 mutate 不经 proxy set trap（零依赖触发），「建桶后的首次写
+   *  是否可见」取决于读写的相对时序（本地快机碰巧对、CI 慢机暴露——
+   *  ChatMessages.tool-collapse 沉淀用例 CI 独挂的真根因，当时双 nextTick
+   *  只是绕开竞态未治本）。 */
   function ensureStream(convId: string): SessionStream {
     let s = streams.value.get(convId);
     if (!s) {
       s = newStream();
       streams.value.set(convId, s);
+      return streams.value.get(convId)!; // 代理而非裸 target
     }
     return s;
   }
@@ -379,7 +386,10 @@ export const useChatStore = defineStore("chat", () => {
   const activeStream = computed<SessionStream>(() =>
     activeConvId.value ? streamOf(activeConvId.value) ?? EMPTY_STREAM : EMPTY_STREAM,
   );
-  const EMPTY_STREAM: SessionStream = newStream();
+  // 空视图（无激活会话/无桶时投影的只读哨兵）：freeze 防误写——computed
+  // 投影链下任何对其的字段赋值都是 bug（写进共享哨兵会污染所有空视图且
+  // 不触发反应性），冻结后在 dev 直接抛错暴露。
+  const EMPTY_STREAM: SessionStream = Object.freeze(newStream()) as unknown as SessionStream;
 
   // 全局字段 = 激活桶投影（组件读点零改动；写点收口到 ensureStream 桶操作）
   const sending = computed(() => activeStream.value.sending);

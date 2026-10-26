@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises } from "@vue/test-utils";
+import { watch, nextTick } from "vue";
 import { useChatStore } from "../chat";
 import { useChatEvents } from "../../composables/useChatEvents";
 import { invoke } from "@tauri-apps/api/core";
@@ -306,6 +307,42 @@ describe("chatStore", () => {
   });
 
   describe("streaming state machine", () => {
+    describe("分桶反应性回归锁（2026-10-26 CI 时序敏感根治的防回归）", () => {
+      it("ensureStream 建桶返回可追踪代理（与 streamOf 同一引用）——裸引用 mutate 不触发反应性的结构性防线", () => {
+        const store = useChatStore();
+        const a = store.ensureStream("c1"); // 建桶分支
+        const b = store.streamOf("c1");     // Map.get（Vue reactive 包装处）
+        expect(a).toBe(b); // 裸 target ≠ 代理——旧实现建桶分支返回裸引用时此处必挂
+      });
+
+      it("桶字段 mutate 立即触发依赖该字段的 effect（watch 同步链路）", async () => {
+        const store = useChatStore();
+        store.activeConvId = "c1";
+        const seen: boolean[] = [];
+        const stop = watch(() => store.sending, (v) => seen.push(v));
+        const s = store.ensureStream("c1"); // 建桶即写（旧实现的盲区：裸引用首写零触发）
+        s.sending = true;
+        await nextTick();
+        expect(seen).toContain(true);
+        stop();
+      });
+
+      it("空视图投影读安全（无激活会话恒 false/空值，不抛错）", () => {
+        const store = useChatStore(); // 无 activeConvId → 投影走冻结哨兵
+        expect(store.sending).toBe(false);
+        expect(store.streamingText).toBe("");
+        expect(store.streamingToolCalls.size).toBe(0);
+        expect(store.sendingConvId).toBeNull();
+      });
+
+      it("ensureStream 幂等：重复调用返回同一代理引用（捕获引用跨 await 安全）", () => {
+        const store = useChatStore();
+        const a = store.ensureStream("c1");
+        const b = store.ensureStream("c1");
+        expect(a).toBe(b);
+      });
+    });
+
     /** 设置活跃会话 + 注入 mock handlers + 显式注册事件监听 */
     async function setupStream() {
       const handlers = captureHandlers();
