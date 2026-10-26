@@ -67,11 +67,14 @@ function editAgent(overrides?: Partial<Agent>): Agent {
   } as Agent;
 }
 
-/** 内置工具清单（组计数数据源；两组足够驱动渲染） */
+/** 内置工具清单（组计数数据源；两组足够驱动渲染）。is_platform 位 = Y4
+ *  机制化：平台元工具名单从后端出口读取（含组装期注册件的补位行），
+ *  前端不再手抄镜像——本夹具带一枚平台件驱动白名单过滤断言。 */
 const BUILTINS = [
-  { name: "read_file", description: "read", group: "files" },
-  { name: "write_file", description: "write", group: "files" },
-  { name: "search_kb", description: "kb", group: "kb" },
+  { name: "read_file", description: "read", group: "files", is_platform: false },
+  { name: "write_file", description: "write", group: "files", is_platform: false },
+  { name: "search_kb", description: "kb", group: "kb", is_platform: false },
+  { name: "propose_config_change", description: "平台元工具", group: null, is_platform: true },
 ];
 
 /** 外部 server 快照（scopeOptions 只消费 id/name） */

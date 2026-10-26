@@ -4,9 +4,9 @@
 //! UPDATE/DELETE（唯一删除路径是会话 CASCADE）。seq 由 INSERT 内子查询
 //! 分配，单语句原子（见 migration 44 头注释）。
 //!
-//! Phase 0 定位是影子写入：调用方（`harness::event_log`）append 失败仅
-//! warn 不阻断主流程；产生的「缺口」无 seq 空洞（MAX+1 连续），只能靠
-//! Phase 1 derive 对账发现——这是已文档化的定位取舍，不是疏漏。
+//! Phase 0 定位是影子写入：调用方（`harness::event_log`）append 失败不
+//! 阻断主流程（消息类事实有限重试 + 失败 error 级披露，见 Y2）；产生的
+//! 「缺口」无 seq 空洞（MAX+1 连续），只能靠 Phase 1 derive 对账发现。
 //!
 //! ## append-only 的显式边界（Phase 2B backfill）
 //!
@@ -402,6 +402,24 @@ pub async fn find_zero_event_sessions(pool: &SqlitePool) -> AppResult<Vec<String
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Y3 发送路径按需 backfill 资格探询：[`find_zero_event_sessions`] 谓词的
+/// 单会话版（有消息行 ∧ 零事件）。每次发送前置调用一次（两次 EXISTS 探询，
+/// 均走索引）；boot 竞态窗之外恒 false 零成本。
+pub async fn conversation_needs_backfill(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> AppResult<bool> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = ?)
+            AND NOT EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = ?)",
+    )
+    .bind(session_id)
+    .bind(session_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(n != 0)
 }
 
 /// 版本化重跑候选：现有事件**全部**为 backfill 合成的会话（零真实事件）。

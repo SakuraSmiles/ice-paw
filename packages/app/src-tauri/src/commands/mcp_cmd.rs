@@ -253,7 +253,15 @@ pub struct BuiltinToolInfo {
     /// 所属工具组键（tool_scopes::TOOL_GROUPS 反查；None = 未分组——前端落
     /// 「其他」组展示，且不是合法 scope 组）。组语义固定名单快照，见 tool_scopes.rs。
     pub group: Option<String>,
+    /// 平台元工具位（`session_runner::PLATFORM_TOOLS` 单一真相源）：恒可见、
+    /// 不参与工具集收窄表达。Y4（2026-10-26）——前端平台名单从本出口读取，
+    /// 「两处手抄同步」不变式退役。
+    pub is_platform: bool,
 }
+
+/// 平台元工具补位行的固定描述（这些行只为透出名字与 `is_platform` 位，
+/// 不进任何展示清单）。
+const PLATFORM_TOOL_ROW_DESC: &str = "平台元工具：恒可用，不参与工具集收窄";
 
 /// 列出所有内置工具（read_file / write_file / directory_tree …）。
 ///
@@ -263,18 +271,86 @@ pub struct BuiltinToolInfo {
 ///
 /// 注：用 `with_builtin()` 构造一个只含内置工具的临时 registry 再列出，
 /// 天然排除了已注册进 global registry 的外部 MCP Server 工具。
+///
+/// Y4：出口附带 `is_platform` 位，且**不在注册表里的平台元工具**（组装期按
+/// conv.kind 注册，如 ask_user / task 四件）以仅名字行补位在尾部——前端
+/// 「平台元工具名单」（旧 enabled_tools 白名单迁移过滤）从这一份出口读，
+/// 勿再手抄镜像（设置页展示侧自行过滤平台行，行为不变）。
 #[tauri::command]
 pub async fn list_builtin_tools() -> AppResult<Vec<BuiltinToolInfo>> {
     let registry = McpRegistry::with_builtin();
     let mut defs = registry.list_tool_defs().await;
     // HashMap 遍历无序 → 按工具名排序，保证前端展示稳定
     defs.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(defs
+    let mut infos: Vec<BuiltinToolInfo> = defs
         .into_iter()
         .map(|d| BuiltinToolInfo {
+            is_platform: crate::harness::session_runner::PLATFORM_TOOLS
+                .contains(&d.name.as_str()),
             group: crate::harness::mcp::tool_scopes::tool_group_of(&d.name).map(String::from),
             name: d.name,
             description: d.description,
         })
-        .collect())
+        .collect();
+    // 平台元工具补位：组装期注册件不在 builtin registry，缺谁补谁
+    //（名字行 + is_platform=true；McpSettings 展示侧过滤平台行）。
+    for name in crate::harness::session_runner::PLATFORM_TOOLS {
+        if !infos.iter().any(|i| i.name == *name) {
+            infos.push(BuiltinToolInfo {
+                name: (*name).to_string(),
+                description: PLATFORM_TOOL_ROW_DESC.to_string(),
+                group: None,
+                is_platform: true,
+            });
+        }
+    }
+    infos.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(infos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Y4 锁：`is_platform` 出口与 PLATFORM_TOOLS 单一真相源一致——
+    /// ① 名单内每一员都出现在出口且 is_platform=true（注册表内的
+    /// propose_config_change 等走注记，组装期注册的 ask_user 等走补位行）；
+    /// ② 名单外零误标；③ 出口无重名。新增平台工具只改 PLATFORM_TOOLS，
+    /// 前端零改动（旧「两处手抄同步」不变式退役）。
+    #[tokio::test]
+    async fn platform_tool_flag_matches_platform_tools_const() {
+        let infos = list_builtin_tools().await.unwrap();
+        let by_name = |n: &str| infos.iter().find(|i| i.name == n);
+
+        for name in crate::harness::session_runner::PLATFORM_TOOLS {
+            let info = by_name(name)
+                .unwrap_or_else(|| panic!("平台元工具 {name} 未出现在 list_builtin_tools 出口"));
+            assert!(info.is_platform, "{name} 应标 is_platform=true");
+        }
+        let flagged: Vec<&str> = infos
+            .iter()
+            .filter(|i| i.is_platform)
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(
+            flagged.len(),
+            crate::harness::session_runner::PLATFORM_TOOLS.len(),
+            "is_platform 位应与 PLATFORM_TOOLS 一一对应: {flagged:?}"
+        );
+
+        // 典型形态：注册表内平台件（有真实描述）与补位行（固定描述）并存
+        let propose = by_name("propose_config_change").unwrap();
+        assert_ne!(propose.description, PLATFORM_TOOL_ROW_DESC);
+        let ask = by_name("ask_user").unwrap();
+        assert_eq!(ask.description, PLATFORM_TOOL_ROW_DESC);
+        assert_eq!(ask.group, None);
+
+        // 名单外零误标 + 无重名
+        assert!(!by_name("read_file").unwrap().is_platform);
+        let mut names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "出口不应有重名工具");
+    }
 }

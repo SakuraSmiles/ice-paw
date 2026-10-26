@@ -506,31 +506,27 @@ function onSelectPreset(p: StylePreset | null) {
 // （平台元工具除外，恒可见无需表达），保存工具面改动时随批摘除白名单；
 // 不动工具面则不碰（零强制迁移）。后端交集语义保留为手写 yaml 双设场景的
 // 防御组合，UI 不再并列呈现两套真相。
-/** 平台元工具（恒可见，无需进 scopes 表达）——与 session_runner::PLATFORM_TOOLS 同步 */
-const PLATFORM_TOOL_NAMES = new Set([
-  "propose_config_change",
-  // 与后端 session_runner::PLATFORM_TOOLS 同步（两处同步不变式）
-  "list_model_profiles",
-  "read_agent_config",
-  "delegate_to_agent",
-  "send_message_to_session",
-  "list_conversations",
-  "list_scheduled_tasks",
-  "create_scheduled_task",
-  "update_scheduled_task",
-  "delete_scheduled_task",
-  "ask_user",
-]);
-/** 旧白名单需要并入草稿的条目（平台元工具过滤掉——迁移后行为不变，纯去噪） */
-const whitelistMigrated = (props.agent?.enabled_tools ?? []).filter(
-  (t) => !PLATFORM_TOOL_NAMES.has(t),
-);
-const savedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? []), ...whitelistMigrated]);
+/** 平台元工具名单（恒可见，无需进 scopes 表达）——Y4 机制化：从
+ *  `list_builtin_tools` 出口的 `is_platform` 位读取（后端
+ *  session_runner::PLATFORM_TOOLS 单一真相源），前端不再手抄镜像名单。
+ *  草稿三件套的初始化随之延迟到 loadScopeSources 内（名单到位才好过滤
+ *  旧白名单里的平台条目）。 */
+/** 已保存基线（保存判定 dirty 的对照）——初始空，由 initScopeDrafts 填充 */
+const savedScopes = ref<string[]>([]);
 /** 草稿（勾选变更不触后端）；「全部工具」= 清空草稿 = 摘除恢复全开 */
-const selectedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? []), ...whitelistMigrated]);
-const scopeMode = ref<"all" | "custom">(
-  (props.agent?.tool_scopes?.length ?? 0) + whitelistMigrated.length > 0 ? "custom" : "all",
-);
+const selectedScopes = ref<string[]>([]);
+const scopeMode = ref<"all" | "custom">("all");
+/** 草稿三件套初始化（平台名单到位后一次性填充；空集兜底 = 白名单平台条目
+ *  并入草稿成 chip 可手动摘，不阻塞编辑） */
+function initScopeDrafts(platform: Set<string>) {
+  /** 旧白名单需要并入草稿的条目（平台元工具过滤掉——迁移后行为不变，纯去噪） */
+  const whitelistMigrated = (props.agent?.enabled_tools ?? []).filter(
+    (t) => !platform.has(t),
+  );
+  savedScopes.value = [...(props.agent?.tool_scopes ?? []), ...whitelistMigrated];
+  selectedScopes.value = [...savedScopes.value];
+  scopeMode.value = savedScopes.value.length > 0 ? "custom" : "all";
+}
 const customScope = computed(() => scopeMode.value === "custom");
 const scopesDirty = computed(
   () =>
@@ -576,10 +572,16 @@ function removeExtraScope(v: string) {
 const legacyWhitelistCount = ref(props.agent?.enabled_tools?.length ?? 0);
 
 async function loadScopeSources() {
+  /** 平台名单先行提取：草稿初始化依赖它（Y4——从后端读，拉失败回落空集） */
+  let platform = new Set<string>();
   try {
     const builtins = await bridge.mcp.listBuiltinTools();
     const counts: Record<string, number> = {};
     for (const t of builtins) {
+      if (t.is_platform) {
+        platform.add(t.name);
+        continue; // 平台件不进组计数（恒可见，不是 scope 选项语义）
+      }
       const g = t.group ?? "other";
       counts[g] = (counts[g] ?? 0) + 1;
     }
@@ -587,6 +589,7 @@ async function loadScopeSources() {
   } catch {
     // 内置清单拉失败：组选项照常（计数显示「—」），不阻塞编辑
   }
+  initScopeDrafts(platform);
   try {
     mcpServers.value = await bridge.mcp.list();
   } catch (e) {

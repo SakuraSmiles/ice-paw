@@ -1129,7 +1129,11 @@ pub(crate) fn inject_into_system(
 /// 领域工具，收窄不应切断 agent 的自我配置、委派与跨会话通讯（delegate /
 /// send / list 在组装期按 conv.kind 注册，filter 兜底全局注册表可能含它们的
 /// 场景）。模块级：组装期收窄披露日志与 filter 共用同一份名单。
-const PLATFORM_TOOLS: &[&str] = &[
+///
+/// Y4（2026-10-26）：本常量是平台元工具名单的**单一真相源**——`pub` 供
+/// `commands::mcp_cmd::list_builtin_tools` 以 `is_platform` 字段透出，前端
+/// 从该出口读取，不再手抄镜像名单（旧「两处同步」不变式随之退役）。
+pub const PLATFORM_TOOLS: &[&str] = &[
     "propose_config_change",
     // 实体引用脱敏只读（2026-10-08 接线）：propose_config_change 的 description
     // 指路 list_model_profiles——不恒保留则「指路但路被 tool_scopes 拆」，

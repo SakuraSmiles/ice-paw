@@ -88,6 +88,11 @@ pub async fn send_message(
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     // （先于写消息：conv/agent/provider 任一失败都应**不落任何 DB 行**，避免孤儿用户消息。）
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
+    // Y3（批次 Y）：boot 后台 backfill 竞态窗闭合——旧 legacy 会话（有行零
+    // 事件）在 boot 扫尾完成前收到首条新消息会永久失去 backfill 资格（真实
+    // 事件混入 → mixed_epoch 常驻 + LLM 缺旧行）。发送前按需补跑该会话；
+    // 不命中 = 两次 EXISTS 探询零成本，失败仅 warn 不阻塞发送。
+    crate::harness::backfill::ensure_session_backfilled(pool.inner(), &conv_id).await;
     // 频道 v1 分流：项目频道（kind='channel'）走频道引擎（C8 两步拆分——物化
     // 无条件成功 + 尝试触发）。执行成员由路由决定，此刻无需会话 agent 凭据；
     // 归档频道在引擎入口拒绝（三段式文案）。1v1 路径零改动。

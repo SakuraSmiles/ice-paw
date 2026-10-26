@@ -2,9 +2,13 @@
 //!
 //! 单一 append-only 事件日志的写入入口：每个持久化事实对应一个 `log_*`
 //! emitter，payload 为强类型 struct（含 `v` 版本字段），序列化后经
-//! [`crate::db::repo::session_event::append`] 落库。Phase 0 影子定位：
-//! **append 失败仅 warn，不阻断主流程**——产生的缺口无 seq 空洞（MAX+1
-//! 连续），只能靠 Phase 1 derive 对账发现，是已文档化的定位取舍。
+//! [`crate::db::repo::session_event::append`] 落库。append 失败**不阻断
+//! 主流程**（对话照常进行），失败治理分两档（Y2，2026-10-26）：消息类事实
+//! （user_message / assistant_message / tool_result_message）走**有限重试**
+//! （立即 1 次 + 退避 1 次，同步 await 循环内完成）——Phase 2B 后事件是
+//! LLM 历史唯一读路径，一次 DB 写失败 = 该消息从上下文永久消失；其余 kind
+//! 单次尝试。最终失败一律 error 级 + kind/turn_id 结构化字段披露（产生的
+//! 缺口无 seq 空洞，MAX+1 连续），只能靠 Phase 1 derive 对账发现。
 //!
 //! 硬规则（保序）：事件一律 inline `.await`，禁止 `tokio::spawn` 包裹。
 //! `turn_ended` 必须在 cleanup() unregister 之前落，保证跨 turn 的 seq 序
@@ -678,7 +682,24 @@ pub struct ContextBreakdownRound {
 // Emitters（全部 warn-only；inline await，禁止 spawn）
 // =========================================================================
 
-/// 内部公共入口：序列化 + append + 失败 warn。
+/// Y2 消息类事实重试的退避间隔（立即重试与第二次重试之间）。
+/// 取值权衡：短到不拖慢回合尾部事件序，长到跨过 busy_timeout 抖动尖峰。
+const MESSAGE_FACT_RETRY_BACKOFF_MS: u64 = 250;
+
+/// Y2（批次 Y）：消息类事实 = derive 读路径产出消息行的三类事件。它们的
+/// 丢失直接从 LLM 上下文永久消失（messages 行还在，但 Phase 2B 后读路径
+/// 不看行），因此 append 失败走有限重试；其余 kind（过程 / 治理 / 轨迹
+/// 事实）维持单次尝试——丢失只影响可观测性。两档失败最终都由 reconcile
+/// 的 MISSING_IN_DERIVED 兜底检测（延迟 ≥1 turn）。
+fn is_message_fact(kind_str: &str) -> bool {
+    matches!(
+        kind_str,
+        kind::USER_MESSAGE | kind::ASSISTANT_MESSAGE | kind::TOOL_RESULT_MESSAGE
+    )
+}
+
+/// 内部公共入口：序列化 + append + 失败分级治理（Y2：消息类有限重试 +
+/// 最终失败 error 级结构化披露）。
 async fn append_event(
     pool: &SqlitePool,
     ctx: &EventCtx,
@@ -690,27 +711,41 @@ async fn append_event(
     let json = match serde_json::to_string(payload) {
         Ok(j) => j,
         Err(e) => {
-            tracing::warn!(target: "ice_paw.event_log", "事件 payload 序列化失败 kind={kind} err={e}");
+            tracing::error!(target: "ice_paw.event_log", kind, conv = %ctx.conv_id, turn_id = %ctx.turn_id, "事件 payload 序列化失败: {e}");
             return;
         }
     };
-    match session_event::append(
-        pool,
-        &ctx.conv_id,
-        kind,
-        actor,
-        // 空串降级 NULL：轮外事件（channel_coordinator 等）无 turn 归组，
-        // 存空串会让 reconcile 的 turn 集合出现 "" 假锚点。
-        if ctx.turn_id.is_empty() {
-            None
-        } else {
-            Some(&ctx.turn_id)
-        },
-        message_id,
-        &json,
-    )
-    .await
-    {
+    // 空串降级 NULL：轮外事件（channel_coordinator 等）无 turn 归组，
+    // 存空串会让 reconcile 的 turn 集合出现 "" 假锚点。
+    let turn_id: Option<&str> = if ctx.turn_id.is_empty() {
+        None
+    } else {
+        Some(ctx.turn_id.as_str())
+    };
+    let mut result =
+        session_event::append(pool, &ctx.conv_id, kind, actor, turn_id, message_id, &json).await;
+    // 消息类事实有限重试（立即 1 次 + 退避 1 次）：同步 await 循环内完成，
+    // 不违反 inline-await 铁律（无 spawn；重试期间后续事件写入按序等待）。
+    if result.is_err() && is_message_fact(kind) {
+        if let Err(e) = &result {
+            tracing::warn!(target: "ice_paw.event_log", kind, conv = %ctx.conv_id, turn_id = %ctx.turn_id, "消息类事件写入失败，立即重试（1/2）: {e}");
+        }
+        result =
+            session_event::append(pool, &ctx.conv_id, kind, actor, turn_id, message_id, &json)
+                .await;
+        if result.is_err() {
+            if let Err(e) = &result {
+                tracing::warn!(target: "ice_paw.event_log", kind, conv = %ctx.conv_id, turn_id = %ctx.turn_id, "消息类事件重试仍失败，退避 {MESSAGE_FACT_RETRY_BACKOFF_MS}ms 后重试（2/2）: {e}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(
+                MESSAGE_FACT_RETRY_BACKOFF_MS,
+            ))
+            .await;
+            result = session_event::append(pool, &ctx.conv_id, kind, actor, turn_id, message_id, &json)
+                .await;
+        }
+    }
+    match result {
         Ok(_) => {
             // 落库成功 → 广播通知（同步非阻塞；订阅方 lib.rs 转 Tauri event 推前端）。
             // 不违反「inline await 禁 spawn」：send 是同步操作，无任务逃逸。
@@ -720,7 +755,11 @@ async fn append_event(
             });
         }
         Err(e) => {
-            tracing::warn!(target: "ice_paw.event_log", "事件写入失败 kind={kind} conv={} err={e}", ctx.conv_id);
+            if is_message_fact(kind) {
+                tracing::error!(target: "ice_paw.event_log", kind, conv = %ctx.conv_id, turn_id = %ctx.turn_id, "事件写入失败（消息类事实重试已耗尽——该消息将从 LLM 读路径缺席，reconcile 可检测）: {e}");
+            } else {
+                tracing::error!(target: "ice_paw.event_log", kind, conv = %ctx.conv_id, turn_id = %ctx.turn_id, "事件写入失败: {e}");
+            }
         }
     }
 }
@@ -1425,6 +1464,106 @@ mod tests {
         assert!(back.is_error);
         assert_eq!(back.duration_ms, 1_234);
         assert_eq!(back.tool_use_id.as_deref(), Some("tu-1"));
+    }
+
+    /// Y2：消息类事实 append 瞬态失败 → 立即重试自愈（事件在场、语义完整）。
+    ///
+    /// 注入手段 = BEFORE INSERT 触发器 `RAISE(FAIL)`——FAIL 不回滚同语句内
+    /// 先行的副作用（ABORT/ROLLBACK 会把计数 UPDATE 一起回滚，做不出
+    /// fail-once 语义），计数表因此能跨尝试累计。
+    #[tokio::test]
+    async fn message_fact_append_retries_transient_failure() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed(&pool).await;
+        sqlx::query("CREATE TABLE evt_retry_probe (n INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO evt_retry_probe VALUES (0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"CREATE TRIGGER evt_fail_once BEFORE INSERT ON session_events
+               WHEN (SELECT n FROM evt_retry_probe) = 0
+               BEGIN
+                 UPDATE evt_retry_probe SET n = n + 1;
+                 SELECT RAISE(FAIL, '注入瞬态失败');
+               END"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        log_user_message(&pool, &ctx(), "msg-r1", "重试语义", &[], None).await;
+
+        // 计数表只记触发器注入次数（成功插入不命中 WHEN 条件、零计数）：
+        // 恰 1 次 = 首试被注入失败、立即重试时条件已不成立 → 直接成功
+        let (n,): (i64,) = sqlx::query_as("SELECT n FROM evt_retry_probe")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "瞬态失败恰注入一次，重试即治愈");
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "瞬态失败被重试治愈，事件在场");
+        assert_eq!(rows[0].kind, "user_message");
+        assert_eq!(rows[0].message_id.as_deref(), Some("msg-r1"));
+    }
+
+    /// Y2：重试策略按 kind 分野——消息类耗尽 3 次（首试 + 立即 + 退避）后
+    /// 不 panic、事件缺席但调用正常返回；非消息类（message_error 等）单次
+    /// 不重试。持续失败经同一触发器注入（无 fail-once 条件）。
+    #[tokio::test]
+    async fn append_retry_policy_is_scoped_to_message_facts() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed(&pool).await;
+        sqlx::query("CREATE TABLE evt_retry_probe (n INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO evt_retry_probe VALUES (0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"CREATE TRIGGER evt_fail_always BEFORE INSERT ON session_events
+               BEGIN
+                 UPDATE evt_retry_probe SET n = n + 1;
+                 SELECT RAISE(FAIL, '注入持续失败');
+               END"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 消息类：3 次尝试全部失败 → 正常返回（不 panic、不阻断调用方）
+        log_user_message(&pool, &ctx(), "msg-r2", "耗尽语义", &[], None).await;
+        // 非消息类：单次尝试
+        log_message_error(&pool, &ctx(), "msg-r2", "test", "boom").await;
+
+        let (n,): (i64,) = sqlx::query_as("SELECT n FROM evt_retry_probe")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 4, "消息类 3 次（含退避重试）+ 非消息类 1 次");
+        assert_eq!(
+            session_event::list_by_session(&pool, "conv-1", None)
+                .await
+                .unwrap()
+                .len(),
+            0,
+            "持续失败下零事件落库"
+        );
     }
 
     #[tokio::test]

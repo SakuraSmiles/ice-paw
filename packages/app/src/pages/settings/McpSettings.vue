@@ -27,6 +27,9 @@ async function reload() {
     ]);
     servers.value = serverList;
     builtinTools.value = builtins
+      // 平台元工具补位行不进本清单（Y4：它们随 list_builtin_tools 出口透出
+      // 供 AgentForm 读名单；设置页展示的是领域工具面，行为不变）
+      .filter(t => !t.is_platform)
       .map(t => ({
         name: t.name,
         desc: BUILTIN_TOOL_META[t.name] ?? t.description,

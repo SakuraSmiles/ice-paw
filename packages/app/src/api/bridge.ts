@@ -459,10 +459,12 @@ const mcp = {
     catch { return false; }
   },
   /** 列出内置工具清单（后端 register_builtin 单一来源，前端不再手抄）。
-   *  group = 工具组键（tool_scopes::TOOL_GROUPS 反查；null = 未分组，展示落「其他」） */
-  async listBuiltinTools(): Promise<{ name: string; description: string; group: string | null }[]> {
+   *  group = 工具组键（tool_scopes::TOOL_GROUPS 反查；null = 未分组，展示落「其他」）；
+   *  is_platform = 平台元工具位（session_runner::PLATFORM_TOOLS 单一真相源，Y4——
+   *  组装期注册的平台件以仅名字行补位在出口内，平台名单从这里读勿手抄） */
+  async listBuiltinTools(): Promise<{ name: string; description: string; group: string | null; is_platform: boolean }[]> {
     try {
-      return await invoke<{ name: string; description: string; group: string | null }[]>("list_builtin_tools");
+      return await invoke<{ name: string; description: string; group: string | null; is_platform: boolean }[]>("list_builtin_tools");
     }
     catch (err) { throw wrapInvokeError("mcp.listBuiltinTools", err); }
   },

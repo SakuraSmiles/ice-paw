@@ -205,6 +205,38 @@ async fn backfill_session(pool: &SqlitePool, conv_id: &str) -> AppResult<Session
     })
 }
 
+/// Y3（批次 Y）：发送路径按需 backfill——闭合「boot 后台 backfill 未完成时
+/// 用户向旧 legacy 会话发消息」的竞态窗。
+///
+/// 窗口形态：boot 扫尾是后台任务（数秒），期间旧会话收到首条新消息会先获得
+/// 真实事件 → `find_zero_event_sessions` 永不再命中 → 永不 backfill →
+/// mixed_epoch 常驻 + LLM 缺旧行 + 每轮 error 日志噪音，**后果永久**。
+///
+/// 修法 = 发送前置守卫：单会话资格探询（`conversation_needs_backfill`，
+/// 两次 EXISTS）命中才补跑（幂等事务，单会话快）。新会话 / 已 backfill /
+/// 混合纪元天然不命中；探询或补跑失败仅 warn 不阻塞发送（维持 no_events
+/// 行为，boot 重试兜底仍在）。
+pub async fn ensure_session_backfilled(pool: &SqlitePool, conv_id: &str) {
+    let needs = match session_event::conversation_needs_backfill(pool, conv_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.backfill", conv = %conv_id, "按需 backfill 资格探询失败（不阻塞发送）: {e}");
+            return;
+        }
+    };
+    if !needs {
+        return;
+    }
+    match backfill_session(pool, conv_id).await {
+        Ok(out) => {
+            tracing::info!(target: "ice_paw.backfill", conv = %conv_id, events = out.events, "发送路径按需 backfill 完成（boot 竞态窗闭合）");
+        }
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.backfill", conv = %conv_id, "发送路径按需 backfill 失败（不阻塞发送，boot 重试兜底）: {e}");
+        }
+    }
+}
+
 /// 合成期间的 turn 累积器（收尾产 turn_ended）。
 struct TurnState {
     id: String,
@@ -1028,5 +1060,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v, Some(BACKFILL_VERSION.to_string()));
+    }
+
+    /// 测试 8（Y3）：发送路径按需 backfill——空会话/已有事件/不存在均不命中
+    /// 零写入；零事件 legacy 会话补跑后对账零 diff + 路由 Derive（发送路径
+    /// 语义：补跑完成即可安全开新回合，真实事件落在合成事件之后时序正确）；
+    /// 幂等（再调不重复写入）。
+    #[tokio::test]
+    async fn on_demand_backfill_covers_send_path_race_window() {
+        let pool = migrated_pool().await;
+        seed_conv(&pool, "conv-od").await;
+
+        // 空会话（零消息行）：不命中、零写入
+        ensure_session_backfilled(&pool, "conv-od").await;
+        assert_eq!(events_of(&pool, "conv-od").await.len(), 0);
+
+        // 不存在的会话：静默通过（发送路径守卫不产 Err）
+        ensure_session_backfilled(&pool, "conv-none").await;
+
+        // 旧 legacy 行 → 按需补跑
+        insert_row(
+            &pool,
+            "conv-od",
+            "u1",
+            "user",
+            "你好",
+            r#"[{"type":"text","text":"你好"}]"#,
+            "2026-08-01 10:00:00",
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv-od",
+            "a1",
+            "assistant",
+            "你好！",
+            r#"[{"type":"text","text":"你好！"}]"#,
+            "2026-08-01 10:00:05",
+        )
+        .await;
+        ensure_session_backfilled(&pool, "conv-od").await;
+
+        let events = events_of(&pool, "conv-od").await;
+        assert_eq!(
+            kinds_of(&events),
+            vec!["user_message", "assistant_message", "turn_ended"]
+        );
+
+        // 补跑后即可安全开新回合：对账零 diff + 路由 Derive
+        let rep = reconcile_session(&pool, "conv-od").await.unwrap();
+        assert!(rep.diffs.is_empty(), "diffs: {:#?}", rep.diffs);
+        let reg = ReadRouteRegistry::new();
+        assert_eq!(
+            reg.resolve(&pool, "conv-od").await.unwrap().route,
+            ReadRoute::Derive
+        );
+
+        // 已有事件：再调不命中（幂等，不重复写入）
+        ensure_session_backfilled(&pool, "conv-od").await;
+        assert_eq!(events_of(&pool, "conv-od").await.len(), 3);
     }
 }
