@@ -855,6 +855,8 @@ export interface ChatToolCallEndPayload {
 export interface ChatToolResultPayload {
   conversation_id: string; message_id: string; tool_use_id: string; content: string; is_error: boolean;
   duration_ms: number;
+  /** 工具回传图（2026-10-26 live 展示；缺席 = 无图） */
+  images?: { data: string; media_type: string }[];
 }
 export interface ChatThinkingPayload {
   conversation_id: string; message_id: string; content: string;

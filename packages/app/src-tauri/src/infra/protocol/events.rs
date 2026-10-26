@@ -254,6 +254,15 @@ pub struct ChatToolCallEndPayload {
     pub id: String,
 }
 
+/// 工具回传图（`chat:tool-result` 的随附图片，2026-10-26 live 展示）。
+/// base64 + media_type——前端工具行展开/图片卡的 live 数据源（历史渲染走
+/// DB 行 blocks，不经此）。
+#[derive(Clone, Serialize)]
+pub struct ToolResultImagePayload {
+    pub data: String,
+    pub media_type: String,
+}
+
 /// `chat:tool-result` 事件 payload
 #[derive(Clone, Serialize)]
 pub struct ChatToolResultPayload {
@@ -264,6 +273,11 @@ pub struct ChatToolResultPayload {
     pub is_error: bool,
     /// 工具执行耗时（毫秒），含授权等待
     pub duration_ms: u64,
+    /// 工具回传图（view_image/show_image/UE5 提取；视觉/非视觉 agent 都带——
+    /// 前端展示与 agent 视觉能力无关，2026-10-26 落库/LLM 分家配套）。
+    /// None = 无图（绝大多数工具），旧前端零影响。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<ToolResultImagePayload>>,
 }
 
 /// `chat:thinking` 事件 payload

@@ -530,23 +530,17 @@ pub(crate) async fn execute_tool_round(
 
         match final_result {
             Ok(out) => {
-                crate::harness::r#loop::emitter::emit_ser(
-                    emitter,
-                    "chat:tool-result",
-                    &ChatToolResultPayload {
-                        conversation_id: tool_ctx.conv_id.clone(),
-                        message_id: asst_msg_id.to_string(),
-                        tool_use_id: tc_id.clone(),
-                        content: out.text.clone(),
-                        is_error: false,
-                        duration_ms,
-                    },
-                );
+                let text_for_emit = out.text.clone();
                 tool_result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: tc_id.clone(),
                     content: out.text,
                     is_error: Some(false),
                 });
+                // live 图片随事件（2026-10-26：chat:tool-result 附图——前端工具行
+                // 展开在轮末落库前就能看到图；收集与下方 Image push 同步）
+                let mut emit_images: Vec<
+                    crate::infra::protocol::ToolResultImagePayload,
+                > = Vec::new();
                 // 门②（事2）：工具回传图 → 按 agent「有效视觉能力」统一适配。
                 // 图源两路：工具原生 image_png + 文本内嵌 base64 提取图（2026-09-12
                 // UE5 实案扩充——外部 server 把截图 base64 塞在 JSON 文本里返回）。
@@ -585,7 +579,13 @@ pub(crate) async fn execute_tool_round(
                     if eff_vision {
                         for (bytes, media_type) in tool_images {
                             let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                            tool_result_blocks.push(ContentBlock::Image { data, media_type });
+                            tool_result_blocks.push(ContentBlock::Image {
+                                data: data.clone(),
+                                media_type: media_type.clone(),
+                            });
+                            emit_images.push(
+                                crate::infra::protocol::ToolResultImagePayload { data, media_type },
+                            );
                             tracing::info!(
                                 target: "ice_paw.tool_image",
                                 tool = %tc_name,
@@ -660,7 +660,13 @@ pub(crate) async fn execute_tool_round(
                             // 给用户看的图不依赖 agent 视觉能力）。LLM 侧由 loop_engine
                             // 阶段 G 按 eff_vision 剥离（下轮请求不含 Image，代读文本已
                             // 在 content 里——模型语义不丢，仅不重发图字节）。
-                            tool_result_blocks.push(ContentBlock::Image { data, media_type });
+                            tool_result_blocks.push(ContentBlock::Image {
+                                data: data.clone(),
+                                media_type: media_type.clone(),
+                            });
+                            emit_images.push(
+                                crate::infra::protocol::ToolResultImagePayload { data, media_type },
+                            );
                             tracing::info!(
                                 target: "ice_paw.tool_image",
                                 tool = %tc_name,
@@ -670,6 +676,25 @@ pub(crate) async fn execute_tool_round(
                         }
                     }
                 }
+                // chat:tool-result（2026-10-26 从分支首挪到图片处理后——携带 live 图；
+                // 视觉/非视觉都带，与落库 blocks 同源）
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
+                    "chat:tool-result",
+                    &ChatToolResultPayload {
+                        conversation_id: tool_ctx.conv_id.clone(),
+                        message_id: asst_msg_id.to_string(),
+                        tool_use_id: tc_id.clone(),
+                        content: text_for_emit,
+                        is_error: false,
+                        duration_ms,
+                        images: if emit_images.is_empty() {
+                            None
+                        } else {
+                            Some(emit_images)
+                        },
+                    },
+                );
             }
             Err(err_content) => {
                 crate::harness::r#loop::emitter::emit_ser(
@@ -682,6 +707,7 @@ pub(crate) async fn execute_tool_round(
                         content: err_content.clone(),
                         is_error: true,
                         duration_ms,
+                        images: None,
                     },
                 );
                 tool_result_blocks.push(ContentBlock::ToolResult {

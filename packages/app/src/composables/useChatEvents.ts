@@ -272,7 +272,13 @@ export async function useChatEvents(): Promise<() => void> {
     const map = new Map(chat.streamingToolCalls);
     const call = map.get(e.payload.tool_use_id);
     if (call) {
-      call.result = { content: e.payload.content, isError: e.payload.is_error, durationMs: e.payload.duration_ms };
+      call.result = {
+        content: e.payload.content,
+        isError: e.payload.is_error,
+        durationMs: e.payload.duration_ms,
+        // 工具回传图（2026-10-26 live 展示——落库前的工具行展开数据源）
+        images: e.payload.images?.map((im) => ({ data: im.data, media_type: im.media_type })),
+      };
       map.set(e.payload.tool_use_id, { ...call });
       chat.streamingToolCalls = map;
     }

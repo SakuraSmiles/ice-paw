@@ -401,7 +401,7 @@ export const useChatStore = defineStore("chat", () => {
     name: string;
     arguments: string;
     ended: boolean;
-    result?: { content: string; isError: boolean; durationMs: number } | null;
+    result?: { content: string; isError: boolean; durationMs: number; images?: { data: string; media_type: string }[] } | null;
   }
   const streamingToolCalls = ref<Map<string, ToolCallState>>(new Map());
   const streamingThinking = ref("");

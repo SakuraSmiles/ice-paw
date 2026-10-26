@@ -539,6 +539,21 @@ function showImagesOfItem(item: { msg: { id: string; content_blocks?: string } }
   return out;
 }
 
+/** live 期间 show_image 的图片集（2026-10-26）：轮末落库前 item.msg.content_blocks
+ *  还没有 tool_result——从流式工具调用的事件携带图取（chat:tool-result images）。
+ *  落库后历史渲染接管（showImagesOfItem），live item 冻结瞬间两者短暂并存同图——
+ *  done 时 messages 刷新后 live 分支消失，无双渲染。 */
+const liveShowImages = computed(() => {
+  const out: { data: string; mediaType: string }[] = [];
+  for (const call of chat.streamingToolCalls.values()) {
+    if (call.name !== "show_image" || !call.result?.images) continue;
+    for (const im of call.result.images) {
+      out.push({ data: im.data, mediaType: im.media_type });
+    }
+  }
+  return out;
+});
+
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
 function getToolHasError(toolUseId: string): boolean {
   return findToolResult(toolUseId)?.isError ?? false;
@@ -1592,15 +1607,19 @@ const RESUMABLE_REASONS = new Set([
 
                 <!-- show_image 呈现图（2026-10-22）：agent 汇报效果图作为对话内容
                      渲染（气泡兄弟块——纯图片汇报无文本时气泡不渲染，图卡独立在场）。
-                     流式期间工具未完成无 result，图随落库后的历史渲染出现 -->
-                <div v-if="showImagesOfItem(item).length" class="show-image-card">
+                     live 期间（2026-10-26）从事件携带图即时显示（chat:tool-result
+                     images），轮末落库后历史渲染接管 -->
+                <div
+                  v-if="showImagesOfItem(item).length || (isLiveAssistant(item) && liveShowImages.length)"
+                  class="show-image-card"
+                >
                   <img
-                    v-for="(im, i) in showImagesOfItem(item)"
+                    v-for="(im, i) in (showImagesOfItem(item).length ? showImagesOfItem(item) : liveShowImages)"
                     :key="item.msg.id + '-show-' + i"
                     :src="`data:${im.mediaType};base64,${im.data}`"
                     class="show-image"
                     loading="lazy"
-                    @click="openImagePreview(showImagesOfItem(item), i)"
+                    @click="openImagePreview(showImagesOfItem(item).length ? showImagesOfItem(item) : liveShowImages, i)"
                   >
                 </div>
 
@@ -1752,6 +1771,18 @@ const RESUMABLE_REASONS = new Set([
                               <Transition name="tool-slide">
                                 <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
                                   <ToolExpandDetail :name="call.name" :args-json="call.arguments || '{}'" :result="call.result ?? null" />
+                                  <!-- view_image live 返图（2026-10-26）：chat:tool-result
+                                       事件携带——轮末落库前展开即见（历史渲染走 findToolResult） -->
+                                  <div v-if="call.name === 'view_image' && call.result?.images?.length" class="tool-result-images">
+                                    <img
+                                      v-for="(im, i) in call.result!.images!"
+                                      :key="call.id + '-img-' + i"
+                                      :src="`data:${im.media_type};base64,${im.data}`"
+                                      class="tool-result-img"
+                                      loading="lazy"
+                                      @click="openImagePreview(call.result!.images!.map(x => ({ data: x.data, mediaType: x.media_type })), i)"
+                                    >
+                                  </div>
                                 </div>
                               </Transition>
                             </template>
