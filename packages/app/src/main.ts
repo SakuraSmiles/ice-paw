@@ -48,6 +48,9 @@ requestAnimationFrame(() => {
     const splash = document.getElementById("boot-splash");
     if (!splash) return;
     splash.classList.add("boot-splash-out");
+    // 入场编排信号（感官升级批 2）：AppLayout 的两区 stagger 与本淡出**同帧**
+    // 开始——挂 boot-ready 会在不透明骨架背后提前播完，淡出时 stagger 已结束。
+    window.dispatchEvent(new CustomEvent("icepaw:splash-out"));
     window.setTimeout(() => splash.remove(), 360);
   };
   // 就绪事件先到 → 等满最少展示时长再退场；先到的是时限 → 直接退（就绪事件

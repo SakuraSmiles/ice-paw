@@ -1,10 +1,35 @@
 <!-- AppLayout — 应用主布局：左侧 Sidebar + 右侧 router-view -->
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import Sidebar from "../chat/Sidebar.vue";
 import AuthNoticeStack from "../chat/AuthNoticeStack.vue";
 import TitleBar from "./TitleBar.vue";
+
+/** 启动入场编排（感官升级批 2）：splash 淡出（main.ts 320ms）与两区入场
+ * stagger（窗口栏 0ms / 主体 60ms）**同帧开始**——触发信号 = main.ts finish()
+ * 派发的 icepaw:splash-out（⚠️ 挂 boot-ready 会在不透明骨架背后提前播完，
+ * 淡出时 stagger 已结束）。兜底两道：splash 节点已不在（退场后再挂载，如
+ * HMR 重挂 → 直接入场）/ 11.5s 超时（main.ts 10s 强制退场 + 360ms 移除之后，
+ * 上报链断裂时 app 不得永远隐身）。reduced-motion 下全局 transition 归零
+ * （tokens §12），入场瞬时完成。 */
+const entered = ref(false);
+let enterTimer = 0;
+function markEntered() {
+  entered.value = true;
+}
+onMounted(() => {
+  if (!document.getElementById("boot-splash")) {
+    markEntered();
+    return;
+  }
+  window.addEventListener("icepaw:splash-out", markEntered, { once: true });
+  enterTimer = window.setTimeout(markEntered, 11500);
+});
+onUnmounted(() => {
+  window.removeEventListener("icepaw:splash-out", markEntered);
+  window.clearTimeout(enterTimer);
+});
 
 const route = useRoute();
 
@@ -27,7 +52,7 @@ watch(
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'is-entered': entered }">
     <!-- 自绘窗口栏（感官升级批 3 · L3）：decorations:false 后承接拖拽/三键，
          全宽压顶与侧栏同底色成「框」——见 TitleBar 组件头取舍注释 -->
     <TitleBar />
@@ -62,7 +87,26 @@ watch(
   overflow: hidden;
 }
 
+/* ---- 启动入场 stagger（批 2）：!is-entered 期间两区保持初始偏移（窗口栏
+   自上 -8px / 主体自左 -12px），boot-ready 翻转后依次过渡到自然位（主体延迟
+   60ms）。TitleBar 是子组件根元素，父 scoped 样式可直接选中（根元素继承父
+   scope id）。---- */
+.app-shell:not(.is-entered) > .titlebar {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.app-shell:not(.is-entered) .app-layout {
+  opacity: 0;
+  transform: translateX(-12px);
+}
+.titlebar,
 .app-layout {
+  transition:
+    opacity 300ms var(--ip-ease-out, ease),
+    transform 300ms var(--ip-ease-out, ease);
+}
+.app-layout {
+  transition-delay: 60ms;
   flex: 1;
   min-height: 0;
   display: flex;
