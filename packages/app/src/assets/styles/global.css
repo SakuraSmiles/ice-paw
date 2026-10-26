@@ -91,6 +91,35 @@ body {
   opacity: 0;
 }
 
+/* 方向感知页级过渡（感官升级批 1）：跨层跳转（会话↔项目列表↔项目详情）
+   用侧向滑动表达层级方向——前进新页自右轻移入（返回反向），位移量克制
+   （16px）避免「整页飞入」的廉价感；out-in 顺序下进出不同帧发生，无叠影。
+   同层跳转维持 route-fade（AppLayout routeTransition 按 matched 深度分派）。 */
+.route-slide-forward-enter-active,
+.route-slide-back-enter-active {
+  transition: opacity 180ms var(--ip-ease-out, ease), transform 180ms var(--ip-ease-out, ease);
+}
+.route-slide-forward-leave-active,
+.route-slide-back-leave-active {
+  transition: opacity 120ms ease-in, transform 120ms ease-in;
+}
+.route-slide-forward-enter-from {
+  opacity: 0;
+  transform: translateX(16px);
+}
+.route-slide-forward-leave-to {
+  opacity: 0;
+  transform: translateX(-16px);
+}
+.route-slide-back-enter-from {
+  opacity: 0;
+  transform: translateX(-16px);
+}
+.route-slide-back-leave-to {
+  opacity: 0;
+  transform: translateX(16px);
+}
+
 /* 侧栏会话列表项：进出淡入上浮 + 离场绝对定位防跳 + 重排 FLIP
    （touchConversation 置顶/置顶重排时其他项平滑让位；锚 .conv-list
    的 position:relative 在 Sidebar scoped 样式中） */

@@ -107,9 +107,13 @@ watch(current, (cur) => {
         找不到该项目。<button class="btn-link" @click="router.push('/projects')">返回项目列表</button>
       </div>
       <router-view v-else v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" :key="route.path" />
-        </keep-alive>
+        <!-- tab 间切换走 route-fade 同族过渡（感官升级批 1：内层补齐——
+             项目三 tab 此前瞬时跳变）；keep-alive + :key 语义不变 -->
+        <Transition name="route-fade" mode="out-in">
+          <keep-alive>
+            <component :is="Component" :key="route.path" />
+          </keep-alive>
+        </Transition>
       </router-view>
     </div>
   </div>

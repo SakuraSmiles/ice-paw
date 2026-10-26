@@ -1,43 +1,38 @@
 <!-- AppLayout — 应用主布局：左侧 Sidebar + 右侧 router-view -->
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import Sidebar from "../chat/Sidebar.vue";
 import AuthNoticeStack from "../chat/AuthNoticeStack.vue";
 
-const ready = ref(false);
-onMounted(() => {
-  // 给浏览器一个渲染帧让 splash 先显示，再淡出
-  requestAnimationFrame(() => {
-    ready.value = true;
-  });
-});
+const route = useRoute();
+
+/** 页级过渡（感官升级批 1）：方向感知——按路由嵌套深度（route.matched
+ * 长度）判定前进/后退：跨层跳转（会话→项目列表→项目详情）走侧向滑动
+ * 表达层级方向，同层跳转（设置二级页、项目内 tab）保持淡入。
+ * matched 长度天然等于路由表嵌套层级，无需手写 depth 映射。
+ * watch pre-flush 在重渲染前更新过渡名，Transition 以新名接管进出对。 */
+const routeTransition = ref("route-fade");
+let prevDepth = route.matched.length;
+watch(
+  () => route.matched.length,
+  (depth) => {
+    const delta = depth - prevDepth;
+    prevDepth = depth;
+    routeTransition.value =
+      delta > 0 ? "route-slide-forward" : delta < 0 ? "route-slide-back" : "route-fade";
+  },
+);
 </script>
 
 <template>
-  <!-- 启动过渡层 -->
-  <Transition name="splash">
-    <div v-if="!ready" class="splash-overlay">
-      <div class="splash-content">
-        <svg class="splash-logo" width="48" height="48" viewBox="0 0 48 48" fill="none">
-          <rect width="48" height="48" rx="12" fill="var(--ip-primary-500)" />
-          <path d="M14 24l6 6 14-14" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <div class="splash-dots">
-          <span class="dot" />
-          <span class="dot" />
-          <span class="dot" />
-        </div>
-      </div>
-    </div>
-  </Transition>
-
   <div class="app-layout">
     <Sidebar />
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <!-- 页级过渡（UX #7）：淡入+微升 4px，out-in 顺序切换（无叠影）；
+        <!-- 页级过渡（UX #7 + 批 1 方向感知）：out-in 顺序切换（无叠影）；
              KeepAlive 缓存与滚动位置不受影响 -->
-        <Transition name="route-fade" mode="out-in">
+        <Transition :name="routeTransition" mode="out-in">
           <keep-alive>
             <component :is="Component" />
           </keep-alive>
@@ -65,62 +60,5 @@ onMounted(() => {
   min-width: 0;
   min-height: 0;
   background-color: var(--ip-color-bg-secondary);
-}
-
-/* ===== 启动过渡层 ===== */
-.splash-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--ip-z-modal-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--ip-color-bg-primary);
-}
-
-.splash-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--ip-spacing-5);
-}
-
-.splash-logo {
-  opacity: 0;
-  animation: logo-in 0.4s ease-out 0.1s forwards;
-}
-
-@keyframes logo-in {
-  from { opacity: 0; transform: scale(0.8); }
-  to { opacity: 1; transform: scale(1); }
-}
-
-.splash-dots {
-  display: flex;
-  gap: var(--ip-spacing-2);
-}
-
-.splash-dots .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ip-primary-400);
-  animation: dot-bounce 1.2s ease-in-out infinite;
-}
-
-.splash-dots .dot:nth-child(2) { animation-delay: 0.15s; }
-.splash-dots .dot:nth-child(3) { animation-delay: 0.3s; }
-
-@keyframes dot-bounce {
-  0%, 60%, 100% { opacity: 0.2; transform: scale(0.8); }
-  30% { opacity: 1; transform: scale(1.2); }
-}
-
-/* 淡出过渡 */
-.splash-leave-active {
-  transition: opacity 0.35s ease-out;
-}
-.splash-leave-to {
-  opacity: 0;
 }
 </style>

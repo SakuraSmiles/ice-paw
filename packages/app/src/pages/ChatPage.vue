@@ -185,9 +185,21 @@ watch(() => chat.activeConvId, () => {
    - display:none 销毁布局 → 滚动位置归零（切回 tab 从顶部开始），
      且隐藏期 scrollHeight=0 → 流式自动跟随 / 挂载期滚底全是 no-op；
    - visibility:hidden 保布局保滚动 → 「chat DOM 常驻，流式/滚动状态不因
-     切 tab 中断」的设计承诺真正成立；不可聚焦不可交互 */
+     切 tab 中断」的设计承诺真正成立；不可聚焦不可交互
+   感官升级批 1：opacity + visibility 同 duration 组合过渡 = 双 pane 交叉
+   淡出——visibility 的离散插值规则（任一端点为 visible 则过渡全程
+   visible）保证淡入侧立即参与绘制、淡出侧全程可绘，到点才真正 hidden；
+   ⚠️ 勿改成「visibility 0s + delay」写法（显示方向延迟期不绘制，淡入破
+   碎成结尾跳变）。布局/滚动语义零变化，pointer-events 即时断流。 */
+.chat-pane,
+.traj-pane {
+  transition:
+    opacity var(--ip-duration-message) var(--ip-ease-out, ease),
+    visibility var(--ip-duration-message) linear;
+}
 .pane-hidden {
   visibility: hidden;
   pointer-events: none;
+  opacity: 0;
 }
 </style>
