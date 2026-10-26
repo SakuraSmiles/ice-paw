@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
+import { nextTick } from "vue";
 import ChatMessages from "../ChatMessages.vue";
 import { useChatStore } from "../../../stores/chat";
 import type { Message } from "../../../types";
@@ -233,7 +234,11 @@ describe("③ 组级工具折叠", () => {
     const chat = useChatStore();
     chat.ensureStream("c1").sending = false; // chat:done 收尾（clearTurnAnchors 同步清锚点）
     chat.ensureStream("c1").turnFirstIdx = null;
+    // 分桶投影（sending = activeStream.sending 二级 computed）在慢机上的重渲染
+    // 竞态：双 nextTick 确保 DOM 沉淀完成（CI 复现实案 33b15aa）
     await flushPromises();
+    await nextTick();
+    await nextTick();
 
     expect(plainToolRows(w).length).toBe(0); // 回合结束沉淀为折叠
     expect(w.findAll(".tool-group-summary").length).toBe(1);
