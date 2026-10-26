@@ -59,26 +59,35 @@ export async function useChatEvents(): Promise<() => void> {
   }
 
   await subscribe<ChatStartPayload>("chat:start", (e) => {
-    if (e.payload.conversation_id !== chat.activeConvId) return;
+    const cid = e.payload.conversation_id;
+    // 2026-10-26 分桶：桶置位无条件（后台会话的 start 同样标志「在途」——
+    // 侧栏 streamingConvIds / 委派卡兜底都靠它；旧架构靠 chunk 的 bgStreams.set
+    // 兜住，桶架构由 start 权威置位）。锚（sendingConvId）**不在此设**——外部
+    // 回合判据 = 锚 ≠ 本会话，锚由 sendMessage 用户路径独占设置。UI 操作
+    // （loadMessages/占位 push/patch）仍按激活过滤。
+    const startStream0 = chat.ensureStream(cid);
+    startStream0.sending = true;
+    if (cid !== chat.activeConvId) return;
     // 外部回合（MA-3 消费 / 委派子会话）：incoming user 行已由后端落库（带来源
     // 标注双块），本地列表没有这条——不刷新的话来件卡要等切走再切回才出现、
     // 回复看起来凭空流出。chat:start 时权威刷新一次，来件卡与 assistant 占位
     //（DB 已建）一起带入，**勿再本地 push 占位**（会与 DB 行重复）。
-    // 判据 = sendingConvId 不是本会话：用户自己发起的回合（乐观气泡已在列表、
-    // 占位走本地 push）与消费回合在此分叉；hold 批准路径同样经此（spawn 的
-    // 回合照常 emit chat:start）。
+    // 判据 = 桶的 sendingConvId 不是本会话：用户自己发起的回合（乐观气泡已在
+    // 列表、占位走本地 push）与消费回合在此分叉；hold 批准路径同样经此（spawn
+    // 的回合照常 emit chat:start）。
     // 频道回合恒走权威刷新（2026-09-11）：占位行虽已出生打标 sender，但本地
     // push 的占位没有该字段（chat:start payload 不带）——群聊 live 流的成员
     // 回复要第一时间带头像昵称，只能从 DB 行取；用户消息 DB 行也已落库，整列
     // 权威替换零重复。
     const ucb = e.payload.user_content_blocks;
     const isChannelConv = chat.activeConversation?.kind === "channel";
-    if ((!ucb && chat.sendingConvId !== e.payload.conversation_id) || isChannelConv) {
+    const startStream = chat.ensureStream(e.payload.conversation_id);
+    if ((!ucb && startStream.sendingConvId !== e.payload.conversation_id) || isChannelConv) {
       // sending 即刻置位（等 assistant-start 才置的话 pipeline 段——历史加载/
       // 摘要/OCR 可达数秒——侧栏无「生成中」、停止钮不出现；纯文本回合尤明显）。
       // 60s 超时侧安全：chat:processing 不过滤会话恒重置计时，sendingConvId
       // 为 null 时超时回调直接 return，不误翻转（回合由 chat:done 收尾）。
-      chat.sending = true;
+      startStream.sending = true;
       void chat.loadMessages(e.payload.conversation_id);
       return;
     }
@@ -127,14 +136,15 @@ export async function useChatEvents(): Promise<() => void> {
   await subscribe<ChatSummaryStartedPayload>("chat:summary-started", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
-    chat.summarizing = true;
+    chat.ensureStream(e.payload.conversation_id).summarizing = true;
   });
 
   // 摘要完成收尾（仅成功路径 emit；失败/返回空走确定性折叠无此事件——由首 token /
   // assistant-start 兜底复位）。此前前端未订阅此事件，本次为阶段提示接上。
   await subscribe<ChatSummaryInjectedPayload>("chat:summary-injected", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
-    chat.summarizing = false;
+    const s = chat.streamOf(e.payload.conversation_id);
+    if (s) s.summarizing = false;
   });
 
   // MA-1 UX：委派子会话创建成功即通知——刷新会话列表让子会话行立刻可见
@@ -174,10 +184,11 @@ export async function useChatEvents(): Promise<() => void> {
   // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
   // + 重置 streaming 状态 + push 新占位。
   await subscribe<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
-    if (e.payload.conversation_id !== chat.activeConvId) return;
+    const aid = e.payload.conversation_id;
+    // 桶置位无条件（后台会话的多轮续跑同样在途；UI 部分按激活过滤）
+    chat.ensureStream(aid).sending = true;
+    if (aid !== chat.activeConvId) return;
     chat.resetSendTimeout();
-    // 确保 sending 为 true：多轮工具执行间隙可能触发静默超时把它置 false
-    chat.sending = true;
     chat.freezeCurrentAssistant();
     chat.resetRoundStreaming();
     // 频道回合：新占位继承列表内上一条 assistant 的成员身份（payload 只有
@@ -206,71 +217,60 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatChunkPayload>("chat:chunk", (e) => {
     const cid = e.payload.conversation_id;
-    if (cid !== chat.activeConvId) {
-      // 后台会话：累积文本到快照，切回时恢复（不触活跃 UI / messages）。
-      // 原地 mutate（勿整替 Map）：streamingConvIds 遍历 bgStreams.keys()，
-      // 整替会让 Sidebar/项目列表/任务台账等全部消费方在委派生成的每个
-      // 40ms tick 重算重渲染；已有键的 text 变化不触 keys 迭代依赖，新键
-      // set 照常触发（新后台流出现，streamingConvIds 本就该醒）。
-      const cur = chat.bgStreams.get(cid);
-      if (cur) cur.text += e.payload.delta;
-      else chat.bgStreams.set(cid, { text: e.payload.delta, thinking: "" });
-      return;
-    }
+    // 2026-10-26 分桶：写自己会话的桶（激活/后台分叉消灭——数据常驻各自桶）。
+    // 原地 mutate 字段（勿整替 Map）：streamingConvIds 遍历 streams keys，
+    // 整替会让 Sidebar/项目列表/任务台账等全部消费方在委派生成的每个
+    // 40ms tick 重算重渲染；字段变化不触 keys 迭代依赖。
+    const s = chat.ensureStream(cid);
+    s.streamingText += e.payload.delta;
+    // 数据到达即在途（对齐旧 bgStreams.set 键语义：后台 chunk 标志会话流式，
+    // 切回时 sending 恢复渲染——start 置位之外的兜底，幂等）
+    if (!s.sending) s.sending = true;
+    if (cid !== chat.activeConvId) return; // 后台：不触活跃 UI / messages
     chat.resetSendTimeout();
     // 首 token 复位「压缩中」：摘要失败的确定性折叠路径无 summary-injected 收尾，
     // 流式一旦开始即表明摘要阶段已过（纯文本回合无 assistant-start 兜底，只能靠这里）。
-    chat.summarizing = false;
-    chat.streamingText += e.payload.delta;
+    s.summarizing = false;
     const idx = chat.messages.length - 1;
     if (idx >= 0 && chat.messages[idx].role === "assistant") {
-      chat.messages[idx] = { ...chat.messages[idx], content: chat.streamingText };
+      chat.messages[idx] = { ...chat.messages[idx], content: s.streamingText };
     }
   });
 
-  // ---- 工具调用事件 ----
+  // ---- 工具调用事件（激活会话专属 UI 状态：后台会话的工具轮由 done 落库收尾） ----
   await subscribe<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
-    const map = new Map(chat.streamingToolCalls);
-    map.set(e.payload.id, {
+    const s = chat.ensureStream(e.payload.conversation_id);
+    s.streamingToolCalls.set(e.payload.id, {
       id: e.payload.id,
       name: e.payload.name,
       arguments: "",
       ended: false,
     });
-    chat.streamingToolCalls = map;
   });
 
   await subscribe<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
-    const map = new Map(chat.streamingToolCalls);
-    const call = map.get(e.payload.id);
-    if (call) {
-      call.arguments += e.payload.delta;
-      map.set(e.payload.id, { ...call });
-      chat.streamingToolCalls = map;
-    }
+    const s = chat.ensureStream(e.payload.conversation_id);
+    const call = s.streamingToolCalls.get(e.payload.id);
+    if (call) call.arguments += e.payload.delta;
   });
 
   await subscribe<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
-    const map = new Map(chat.streamingToolCalls);
-    const call = map.get(e.payload.id);
-    if (call) {
-      call.ended = true;
-      map.set(e.payload.id, { ...call });
-      chat.streamingToolCalls = map;
-    }
+    const s = chat.ensureStream(e.payload.conversation_id);
+    const call = s.streamingToolCalls.get(e.payload.id);
+    if (call) call.ended = true;
   });
 
   await subscribe<ChatToolResultPayload>("chat:tool-result", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.resetSendTimeout();
-    const map = new Map(chat.streamingToolCalls);
-    const call = map.get(e.payload.tool_use_id);
+    const s = chat.ensureStream(e.payload.conversation_id);
+    const call = s.streamingToolCalls.get(e.payload.tool_use_id);
     if (call) {
       call.result = {
         content: e.payload.content,
@@ -279,38 +279,25 @@ export async function useChatEvents(): Promise<() => void> {
         // 工具回传图（2026-10-26 live 展示——落库前的工具行展开数据源）
         images: e.payload.images?.map((im) => ({ data: im.data, media_type: im.media_type })),
       };
-      map.set(e.payload.tool_use_id, { ...call });
-      chat.streamingToolCalls = map;
     }
   });
 
   // ---- 思考过程 ----
   await subscribe<ChatThinkingPayload>("chat:thinking", (e) => {
     const cid = e.payload.conversation_id;
-    if (cid !== chat.activeConvId) {
-      // 同 chat:chunk 后台路径：原地 mutate，勿整替 Map（见该处注释）
-      const cur = chat.bgStreams.get(cid);
-      if (cur) cur.thinking += e.payload.content;
-      else chat.bgStreams.set(cid, { text: "", thinking: e.payload.content });
-      return;
-    }
-    chat.resetSendTimeout();
-    if (!chat.streamingThinking) {
-      chat.thinkingStartTime = Date.now();
-    }
-    chat.streamingThinking += e.payload.content;
+    const s = chat.ensureStream(cid);
+    if (!s.streamingThinking) s.thinkingStartTime = Date.now();
+    s.streamingThinking += e.payload.content;
+    if (!s.sending) s.sending = true; // 同 chunk：数据到达即在途
+    if (cid === chat.activeConvId) chat.resetSendTimeout();
   });
 
   await subscribe<ChatDonePayload>("chat:done", (e) => {
     const cid = e.payload.conversation_id;
     if (cid !== chat.activeConvId) {
-      // 后台会话完成：后端已把最终态落库，清掉快照即可（不触活跃 UI，无需前端 freeze）
-      chat.bgStreams.delete(cid);
+      // 后台会话完成：后端已把最终态落库，清桶即可（不触活跃 UI，无需前端 freeze）
+      chat.streams.delete(cid);
       recentErrorConvs.delete(cid);
-      // 回合锚点失效：若该后台会话正是 sendingConvId 指向的发起回合，一并清掉——
-      // 否则陈旧 id 被 60s 超时探测误判（会话已死 → 误翻 sending → 第二条消息
-      // 打进还在跑的其他回合，U1-2）
-      if (chat.sendingConvId === cid) chat.sendingConvId = null;
       return;
     }
     // 错误后的配套 chat:done(abort)：chat:error 已是终态（写了错误文案 + 重置），
@@ -318,7 +305,8 @@ export async function useChatEvents(): Promise<() => void> {
     if (recentErrorConvs.has(cid)) {
       recentErrorConvs.delete(cid);
       chat.clearSendTimeout();
-      chat.sending = false;
+      const s0 = chat.streamOf(cid);
+      if (s0) s0.sending = false;
       chat.clearTurnAnchors();
       chat.resetRoundStreaming();
       return;
@@ -355,7 +343,8 @@ export async function useChatEvents(): Promise<() => void> {
       );
     }
 
-    chat.sending = false;
+    const doneStream = chat.streamOf(cid);
+    if (doneStream) doneStream.sending = false;
     chat.resetRoundStreaming();
     // Steer 插话打断的 abort：静默衔接（设计稿 §11 transition prompt deferred）——
     // 不设 lastFinishReason（否则误显「已手动停止」）。预告在任何 chat:done 到达时
@@ -386,12 +375,13 @@ export async function useChatEvents(): Promise<() => void> {
     // 标记：后端会紧跟一次 chat:done(abort) 收尾，chat:done 据此跳过 freeze + lastFinishReason
     recentErrorConvs.add(cid);
     if (cid !== chat.activeConvId) {
-      // 后台会话出错：清掉快照（用户切回时走 DB 加载，看到错误态）
-      chat.bgStreams.delete(cid);
+      // 后台会话出错：清桶（用户切回时走 DB 加载，看到错误态）
+      chat.streams.delete(cid);
       return;
     }
     chat.clearSendTimeout();
-    chat.sending = false;
+    const es = chat.streamOf(cid);
+    if (es) es.sending = false;
     chat.clearTurnAnchors();
     chat.resetRoundStreaming();
     chat.lastFinishReason = null;

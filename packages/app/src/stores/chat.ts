@@ -96,27 +96,33 @@ export const useChatStore = defineStore("chat", () => {
     delegationChildByToolUse.value.set(toolUseId, childConvId);
   }
 
-  /** 流式态复位（轮末/会话切换共用的单一切入点）。
+  /** 流式态复位（轮末/会话切换共用的单一切入点）——重置激活桶的轮字段。
    *  防逐字段漂移：曾因切换的 bg 恢复分支漏清 streamingToolCalls，把上一会话的
    *  工具调用（父会话的 delegate_to_agent）泄漏进新会话的 live 气泡底部渲染。
    *  注意：thinkingDuration / lastThinkingContent 不在此清——轮末要保留供展开查看，
-   *  由会话切换处显式清。*/
-  function resetRoundStreaming() {
-    streamingText.value = "";
-    streamingThinking.value = "";
-    streamingToolCalls.value = new Map();
-    thinkingStartTime.value = null;
+   *  由会话切换处显式清。可传 convId 定向复位（事件层后台会话收尾用；
+   *  缺省 = 激活会话桶）。*/
+  function resetRoundStreaming(convId?: string) {
+    const s = convId ? streamOf(convId) : streamOf(activeConvId.value ?? "");
+    if (!s) return;
+    s.streamingText = "";
+    s.streamingThinking = "";
+    s.streamingToolCalls = new Map();
+    s.thinkingStartTime = null;
     // 摘要压缩进行中信号（chat:summary-started 置位）同生命周期复位——摘要发生在
     // Pipeline 起点、先于首轮流式，故随流式态一起清，防失败路径（无 summary-injected
     // 收尾）残留到下一回合。见 useChatEvents 的 summary-started/injected 订阅。
-    summarizing.value = false;
+    s.summarizing = false;
   }
 
   /** 回合终结统一收尾：清回合锚点（turnFirstIdx 令 streaming 视图折叠沉淀；
-   *  sendingConvId 令超时确认通道失效）。chat:done / chat:error / 停止时调用。 */
-  function clearTurnAnchors() {
-    sendingConvId.value = null;
-    turnFirstIdx.value = null;
+   *  sendingConvId 令超时确认通道失效）。chat:done / chat:error / 停止时调用。
+   *  可传 convId 定向（事件层后台 done/error 用；缺省 = 激活会话桶）。*/
+  function clearTurnAnchors(convId?: string) {
+    const s = convId ? streamOf(convId) : streamOf(activeConvId.value ?? "");
+    if (!s) return;
+    s.sendingConvId = null;
+    s.turnFirstIdx = null;
   }
 
   /** 把项目 scope 同步到目标会话所属项目（散落 = null）。目标会话不在缓存时
@@ -129,16 +135,6 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function selectConversation(id: string, keepScope = false) {
-    const oldId = activeConvId.value;
-    // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复。
-    // 原地 set（勿整替 Map）：整替会触发 streamingConvIds 的 keys 迭代依赖，
-    // Sidebar/项目列表/任务台账等全部消费方无谓重算；set 已有键不触迭代依赖。
-    if (oldId && sending.value) {
-      bgStreams.value.set(oldId, {
-        text: streamingText.value,
-        thinking: streamingThinking.value,
-      });
-    }
     activeConvId.value = id;
     // 导航一致性（按意图分流，2026-09-20 第一性原理定稿）：默认（跨空间跳转
     // ——轨迹/委派回父/@ 引用/来件卡）同步 scope 到会话归属（侧栏跟随防错位）；
@@ -148,26 +144,12 @@ export const useChatStore = defineStore("chat", () => {
     // 子会话后台新建）——由 openConversationAtTrajectory 在刷新会话列表后补
     // 一次同步。
     if (!keepScope) syncProjectScope(id);
-    // 流式态无条件先整体复位（跨会话隔离）：后台快照只追踪 text/thinking，
-    // 工具调用/多轮结构不入快照——不复位就会把上一会话的流式状态带进新会话视图。
-    resetRoundStreaming();
+    // 2026-10-26 分桶：流式数据常驻各自桶（streams Map），切会话零搬运零恢复
+    // ——旧 bgStreams 快照机制（只搬 text/thinking、工具/多轮结构丢失）整体退役。
+    // 轮级瞬态（thinkingDuration/lastThinkingContent 是回合级展示单值，非桶数据）
+    // 仍按切换清空。
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
-    // 提案/授权请求已按 convId 隔离存储（pendingProposals / pendingAuthRequests），
-    // 切换会话无需清空——切回原会话时 computed 自动恢复对应条目。
-    // 切入的会话若在后台流式（bgStreams 有），恢复其文本并在末条 assistant 继续渲染
-    const bg = bgStreams.value.get(id);
-    if (bg) {
-      sending.value = true;
-      streamingText.value = bg.text;
-      streamingThinking.value = bg.thinking;
-      // 回合归属同步：恢复的流式内容属于 id 的回合——sending 与 sendingConvId
-      // 必须一起动（60s 超时确认按 sendingConvId 问后端；缺失会误判、陈旧会误杀）
-      sendingConvId.value = id;
-      bgStreams.value.delete(id);
-    } else {
-      sending.value = false;
-    }
     lastFinishReason.value = null;
     clearBudget();
     clearChannelQueuedNotice();
@@ -308,9 +290,65 @@ export const useChatStore = defineStore("chat", () => {
     return true;
   }
 
-  // ===== 流式发送 =====
-  const sending = ref(false);
-  const streamingText = ref("");
+  // ===== 流式发送（2026-10-26 会话分桶：streams Map 为真相源，全局字段为激活桶投影） =====
+  interface ToolCallState {
+    id: string;
+    name: string;
+    arguments: string;
+    ended: boolean;
+    result?: { content: string; isError: boolean; durationMs: number; images?: { data: string; media_type: string }[] } | null;
+  }
+  /** 单会话的流式运行时状态（bgStreams 快照的全字段超集——切会话零搬运，
+   *  数据常驻各自桶；全局字段（sending/streamingText/…）是激活桶的 computed
+   *  投影，组件读点零改动）。 */
+  interface SessionStream {
+    sending: boolean;
+    streamingText: string;
+    streamingThinking: string;
+    streamingToolCalls: Map<string, ToolCallState>;
+    summarizing: boolean;
+    thinkingStartTime: number | null;
+    sendingConvId: string | null;
+    turnFirstIdx: number | null;
+  }
+  function newStream(): SessionStream {
+    return {
+      sending: false,
+      streamingText: "",
+      streamingThinking: "",
+      streamingToolCalls: new Map(),
+      summarizing: false,
+      thinkingStartTime: null,
+      sendingConvId: null,
+      turnFirstIdx: null,
+    };
+  }
+  /** 会话流式桶真相源。性能纪律（承 bgStreams 原约束）：事件层写桶字段用
+   *  原地 mutate，勿整替 Map——streamingConvIds 的 keys 迭代依赖只在 Map 结构
+   *  变化时失效（Sidebar/TaskPanel/TaskLedger 40ms tick 重算约束）。 */
+  const streams = ref<Map<string, SessionStream>>(new Map());
+  /** 取或建该会话的流式桶（写入口；返回 reactive 桶可直改字段）。 */
+  function ensureStream(convId: string): SessionStream {
+    let s = streams.value.get(convId);
+    if (!s) {
+      s = newStream();
+      streams.value.set(convId, s);
+    }
+    return s;
+  }
+  /** 读任意会话的桶（无则 undefined，不建）。 */
+  function streamOf(convId: string): SessionStream | undefined {
+    return streams.value.get(convId);
+  }
+  /** 激活会话的桶投影（无激活会话或无桶 → 只读空视图）。 */
+  const activeStream = computed<SessionStream>(() =>
+    activeConvId.value ? streamOf(activeConvId.value) ?? EMPTY_STREAM : EMPTY_STREAM,
+  );
+  const EMPTY_STREAM: SessionStream = newStream();
+
+  // 全局字段 = 激活桶投影（组件读点零改动；写点收口到 ensureStream 桶操作）
+  const sending = computed(() => activeStream.value.sending);
+  const streamingText = computed(() => activeStream.value.streamingText);
   const lastFinishReason = ref<string | null>(null);
   const currentModel = ref<string | null>(null);
 
@@ -395,21 +433,14 @@ export const useChatStore = defineStore("chat", () => {
     }, 5000);
   }
 
-  // ===== 流式工具调用/思考状态 =====
-  interface ToolCallState {
-    id: string;
-    name: string;
-    arguments: string;
-    ended: boolean;
-    result?: { content: string; isError: boolean; durationMs: number; images?: { data: string; media_type: string }[] } | null;
-  }
-  const streamingToolCalls = ref<Map<string, ToolCallState>>(new Map());
-  const streamingThinking = ref("");
+  // ===== 流式工具调用/思考状态（投影；真身在激活桶） =====
+  const streamingToolCalls = computed(() => activeStream.value.streamingToolCalls);
+  const streamingThinking = computed(() => activeStream.value.streamingThinking);
   /** 摘要压缩进行中（chat:summary-started 置位 / summary-injected·首 token 复位）。
    *  0.9 阶段提示：气泡 footer「压缩历史消息中」的驱动信号。回合级瞬态，
    *  随 resetRoundStreaming 复位（防失败路径残留）。 */
-  const summarizing = ref(false);
-  const thinkingStartTime = ref<number | null>(null);
+  const summarizing = computed(() => activeStream.value.summarizing);
+  const thinkingStartTime = computed(() => activeStream.value.thinkingStartTime);
   const thinkingDuration = ref<string | null>(null);
   /** 思考结束后保留内容，让用户仍可展开查看 */
   const lastThinkingContent = ref<string | null>(null);
@@ -483,21 +514,15 @@ export const useChatStore = defineStore("chat", () => {
   }
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  /** 本次在途发送所属会话（sending 是全局单份，跨会话切换后仍指向发起回合的会话）。
+  /** 本次在途发送所属会话（桶字段投影——跨会话切换后仍指向发起回合的会话）。
    *  60s 静默超时确认时用它问后端「该会话还在跑吗」。 */
-  const sendingConvId = ref<string | null>(null);
+  const sendingConvId = computed<string | null>(() => activeStream.value.sendingConvId);
 
   /** 当前回合首条消息（用户消息）在 messages 中的下标——回合进行期间该下标之后
    *  的消息保持 MarkdownRenderer 的 streaming 视图（代码块不折叠），避免多轮工具
    *  回合每轮冻结时代码块「展开→瞬间折叠」造成列表高度骤缩、滚动条跳动。
    *  回合结束（chat:done / 出错 / 下次发送）失效，折叠在回合边界一次性沉淀。 */
-  const turnFirstIdx = ref<number | null>(null);
-
-  /** 后台会话的流式文本快照：切走「正在流式」的会话时把已累积文本存这里，
-   *  切回时恢复。此前 streamingText 是全局单份 + chunk 处理器丢弃非激活会话的事件，
-   *  导致「流式中途切走再切回」时已渲染内容丢失、从一半继续渲染。
-   *  只追踪 text/thinking（工具调用/多轮结构后台不展示，最终态由后端 chat:done 落库）。*/
-  const bgStreams = ref<Map<string, { text: string; thinking: string }>>(new Map());
+  const turnFirstIdx = computed<number | null>(() => activeStream.value.turnFirstIdx);
 
   /** 重置 60s 静默超时（滑动窗口）：任何活动事件调用一次即重新计时。
    *
@@ -510,24 +535,31 @@ export const useChatStore = defineStore("chat", () => {
   function resetSendTimeout() {
     if (sendTimeout) clearTimeout(sendTimeout);
     sendTimeout = setTimeout(async () => {
-      if (!sending.value || pendingAuthRequests.value.size > 0) return;
-      const cid = sendingConvId.value;
-      if (!cid) return;
-      let alive: boolean;
-      try {
-        alive = await bridge.chat.isStreaming(cid);
-      } catch {
-        alive = false; // 后端不可达（应用关闭中等）——按已死处理
+      if (pendingAuthRequests.value.size > 0) { resetSendTimeout(); return; }
+      // 2026-10-26 分桶：跨会话保护——遍历所有 sending 桶逐个向后端确认
+      //（旧全局单锚只保护「发起回合」，桶架构下每个在途会话都该被收口；
+      // 通常 ≤2 个在途，探测成本可忽略）
+      const pending: string[] = [];
+      for (const [cid, s] of streams.value) {
+        if (s.sending) pending.push(cid);
       }
-      // await 期间回合可能已正常完成（chat:done 已翻转 sending）——不再动手
-      if (!sending.value) return;
-      if (alive) {
-        resetSendTimeout(); // 后端仍在跑：静默只是没有事件，继续等
-        return;
+      if (pending.length === 0) return;
+      for (const cid of pending) {
+        let alive: boolean;
+        try {
+          alive = await bridge.chat.isStreaming(cid);
+        } catch {
+          alive = false; // 后端不可达（应用关闭中等）——按已死处理
+        }
+        // await 期间回合可能已正常完成（chat:done 已删桶）——不再动手
+        const s = streamOf(cid);
+        if (!s || !s.sending) continue;
+        if (alive) continue; // 后端仍在跑：静默只是没有事件，继续等心跳
+        console.warn(`静默超时（60s 无活动且后端确认 ${cid} 无在途任务），重置发送状态`);
+        s.sending = false;
+        s.sendingConvId = null;
       }
-      console.warn("静默超时（60s 无活动且后端确认无在途任务），重置发送状态");
-      sending.value = false;
-      sendingConvId.value = null;
+      resetSendTimeout(); // 仍有在途桶则继续守
     }, 60000);
   }
 
@@ -707,7 +739,8 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     steerAbortExpected.value = null; // 正常回合开始，作废旧插话预告（防 stop-false 兜底残留）
-    sending.value = true;
+    const roundStream = ensureStream(activeConvId.value);
+    roundStream.sending = true;
     lastFailedSend.value = { content, blocks: contentBlocks ?? [] }; // 失败重发依据（chat:done 清）
     // 清掉当前会话的错误横幅（per-conv 隔离：只清本会话，不影响其它会话）
     if (activeConvId.value) {
@@ -745,11 +778,11 @@ export const useChatStore = defineStore("chat", () => {
     };
     messages.value = [...messages.value, userMsg];
     // 回合锚点：本轮所有消息的下标基线（streaming 视图判定 + 超时确认的会话归属）
-    turnFirstIdx.value = messages.value.length - 1;
+    roundStream.turnFirstIdx = messages.value.length - 1;
     // 本回合会话的闭包快照：失败回滚一律以此为键（await 在途期间用户可能已切走，
-    // activeConvId 会漂移；后续回合也可能占用 sendingConvId——本地快照不漂移）
+    // activeConvId 会漂移；后续回合也可能占用桶——本地快照不漂移）
     const roundConvId = activeConvId.value;
-    sendingConvId.value = roundConvId;
+    roundStream.sendingConvId = roundConvId;
 
     // 侧栏卡片：把该会话标记为「刚交互」（更新时间 + 置顶到列表上方）
     if (activeConvId.value) touchConversation(activeConvId.value);
@@ -773,19 +806,20 @@ export const useChatStore = defineStore("chat", () => {
       // 则切回 A 时恢复出无机制翻转的幽灵「生成中」（本 catch 已清超时保护），
       // 输入被锁死、只能手点停止。
       setConvError(roundConvId, detail, "send_failed");
-      bgStreams.value.delete(roundConvId);
+      streams.value.delete(roundConvId);
       // 回滚乐观插入的用户气泡（后端已拒，这行从未落库，留着会在切回时凭空消失；
       // 已切走时 messages 是新会话列表，跳过整替避免无谓重渲）
       if (roundConvId === activeConvId.value) {
         messages.value = messages.value.filter((msg) => msg.id !== userMsg.id);
       }
       // 回合锚点仍归属本回合才收尾：在途期间用户可能在别的会话发起了新回合
-      //（sendingConvId 已易主）——不得误杀新回合的 sending/超时保护。
-      if (sendingConvId.value === roundConvId) {
-        sending.value = false;
-        clearTurnAnchors(); // 回合终结统一收尾（sendingConvId + turnFirstIdx）
+      //（桶的 sendingConvId 已易主）——不得误杀新回合的 sending/超时保护。
+      const rs = streamOf(roundConvId);
+      if (rs && rs.sendingConvId === roundConvId) {
+        rs.sending = false;
+        clearTurnAnchors(roundConvId); // 回合终结统一收尾（sendingConvId + turnFirstIdx）
         clearSendTimeout();
-        streamingText.value = "";
+        rs.streamingText = "";
       }
     }
   }
@@ -801,8 +835,9 @@ export const useChatStore = defineStore("chat", () => {
     // cancel → finalize_cancel emit 的 chat:done(abort) 走 freezeCurrentAssistant
     // 统一把已生成的部分冻结到末条 assistant。若这里先清空，chat:done 的 freeze
     // 会写入空内容，导致取消时输出到一半的气泡消失。
-    sending.value = false;
-    clearTurnAnchors();
+    const stopStream = ensureStream(cid);
+    stopStream.sending = false;
+    clearTurnAnchors(cid);
     try {
       await bridge.chat.stopGeneration(cid);
     } catch (e) {
@@ -815,8 +850,8 @@ export const useChatStore = defineStore("chat", () => {
         alive = await bridge.chat.isStreaming(cid);
       } catch { /* 后端不可达——按已死处理（60s 超时确认同款语义） */ }
       if (alive) {
-        sending.value = true;
-        sendingConvId.value = cid;
+        stopStream.sending = true;
+        stopStream.sendingConvId = cid;
         resetSendTimeout();
       }
       setConvError(
@@ -1127,15 +1162,9 @@ export const useChatStore = defineStore("chat", () => {
     clearSendTimeout();
     activeConvId.value = null;
     messages.value = [];
-    sending.value = false;
-    // 2026-10-22：turnFirstIdx（激活会话的流式视图锚）照清；sendingConvId 与
-    // bgStreams **不在此清**——二者是「在途回合」的跨视图跟踪（done bg 分支的
-    // 归属判断 + 60s 超时锚 + 侧栏后台流式标识），生命周期由 chat:done / 超时
-    // 收口。生产实案症状 2：生成中切项目空间走本函数，三连强清后切回会话
-    // 只能靠 loadMessages 权威刷新兜——invoke 一挂起就停在流式残留视图
-    // （「哪怕已完成也一直显示进行中」）。彻底清空归 reset 显式做。
-    turnFirstIdx.value = null;
-    resetRoundStreaming();
+    // 2026-10-26 分桶：streams Map 常驻（跨视图跟踪真相源——done/超时收口），
+    // 切空间不再碰任何桶字段（0.9.7 症状 2 的快照语义由桶天然成立）；回合级
+    // 展示单值照清。
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
     pendingProposals.value = new Map();
@@ -1151,38 +1180,30 @@ export const useChatStore = defineStore("chat", () => {
     // 事件监听器由 useChatEvents 管理（App.vue 卸载时拆卸）；这里只清状态 + 超时
     conversations.value = [];
     resetSessionRuntimeState();
-    // 彻底重置语义：后台流式快照与在途锚一并清（resetSessionRuntimeState
-    // 已把这两项拆出——切空间路径须保留，2026-10-22）
-    bgStreams.value = new Map();
-    clearTurnAnchors();
+    // 彻底重置语义：全部流式桶一并清（切空间路径不动桶，彻底重置清）
+    streams.value = new Map();
     draftText.value = "";
   }
 
   /** 清除当前选中会话（切项目空间时调用）：保留 conversations 列表与草稿，
    *  只重置激活会话相关状态，让右侧回到「欢迎/新建会话」态，不携带上个空间的会话。
-   *  2026-10-22：在途回合先写后台快照（与 selectConversation 切走同款）——此前
-   *  无差别清 bgStreams，生成中切项目 = 快照/60s 锚/侧栏标识三连丢；既有其他
-   *  会话的后台快照也一并保留（切空间不丢跨会话状态）。*/
+   *  2026-10-26 分桶：桶常驻 = 在途跟踪天然保留，快照写入逻辑退役。*/
   function clearActiveConversation() {
-    const oldId = activeConvId.value;
-    if (oldId && sending.value) {
-      // 原地 set（勿整替 Map）：整替触发 streamingConvIds 的 keys 迭代依赖
-      bgStreams.value.set(oldId, {
-        text: streamingText.value,
-        thinking: streamingThinking.value,
-      });
-    }
     resetSessionRuntimeState();
     lastFinishReason.value = null;
     clearBudget();
   }
 
 
-  /** 当前正在生成的会话 ID 集合（激活的流式会话 + 后台流式会话 bgStreams）。
-   *  侧栏据此给会话卡片显示「生成中」状态 + 动画——现在每个会话独立监控，可精确到单卡。*/
+  /** 当前正在生成的会话 ID 集合（所有桶中 sending=true 的会话）。
+   *  侧栏据此给会话卡片显示「生成中」状态 + 动画——每个会话独立监控，可精确到单卡。
+   *  性能：依赖 streams Map 的 keys 迭代——事件层原地 mutate 桶字段不触发
+   *  迭代失效（Sidebar/TaskPanel 40ms tick 重算约束，承 bgStreams 纪律）。*/
   const streamingConvIds = computed(() => {
-    const ids = new Set<string>(bgStreams.value.keys());
-    if (sending.value && activeConvId.value) ids.add(activeConvId.value);
+    const ids = new Set<string>();
+    for (const [cid, s] of streams.value) {
+      if (s.sending) ids.add(cid);
+    }
     return ids;
   });
 
@@ -1214,11 +1235,13 @@ export const useChatStore = defineStore("chat", () => {
     roundsNotice, updateRoundsRenewed, lastTurnRounds, turnRoundRenewals,
     streamingToolCalls, streamingThinking, summarizing, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
-    // sendingConvId 暴露为只读：事件层 chat:start 据此区分「用户发起的回合」与
-    // 「外部回合」（MA-3 消费 / 委派子会话——前者在 invoke 前已设本值）。
+    // sendingConvId 暴露为只读（激活桶投影）：事件层 chat:start 据此区分「用户发起
+    // 的回合」与「外部回合」（MA-3 消费 / 委派子会话——前者在 invoke 前已设本值）。
     sendingConvId,
-    // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
-    bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
+    // 2026-10-26 分桶：streams Map 为流式真相源（事件层按 conversation_id 写桶，
+    // 全局字段全是激活桶投影）；ensureStream/streamOf 是桶写入口（测试与事件层用）
+    streams, ensureStream, streamOf,
+    pendingAuthRequests, pendingProposals, lastErrors,
     lastFailedSend, clearConvError, setConvError,
     activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError, lastErrorKind,
     pendingAskRequests, activeConvAskRequest, backgroundAskRequests,

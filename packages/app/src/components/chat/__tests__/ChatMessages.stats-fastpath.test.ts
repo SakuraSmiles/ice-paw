@@ -100,12 +100,12 @@ function resultsRow(key: string, specs: { id: string; error?: boolean }[]): Mess
 async function mountWith(messages: Message[]) {
   const chat = useChatStore();
   chat.activeConvId = "c1";
-  chat.sending = false;
-  chat.turnFirstIdx = null;
+  chat.ensureStream("c1").sending = false;
+  chat.ensureStream("c1").turnFirstIdx = null;
   chat.messages = messages;
-  chat.streamingText = "";
-  chat.streamingThinking = "";
-  chat.streamingToolCalls = new Map();
+  chat.ensureStream("c1").streamingText = "";
+  chat.ensureStream("c1").streamingThinking = "";
+  chat.ensureStream("c1").streamingToolCalls = new Map();
   const w = mount(ChatMessages);
   await flushPromises();
   return w;

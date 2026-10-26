@@ -50,9 +50,10 @@ describe("ChatInput Steer 衔接态", () => {
 
   it("回合 B 起跑（sending=true）→ 让位生成中形态，衔接文案不劫持（角标未摘也不显）", () => {
     const chat = useChatStore();
+    chat.activeConvId = "c1"; // 分桶投影 = 激活桶（ensureStream 前置）
     chat.messages = [msg("m1", "user", "插话内容")];
     chat.queuedSteerIds = new Set(["m1"]); // prune 由消息事件驱动，起跑瞬间可能仍在
-    chat.sending = true;
+    chat.ensureStream("c1").sending = true;
     const w = mount(ChatInput);
     expect(w.find(".input-hint").text()).not.toContain("插话排队中");
     expect(w.find(".input-wrapper").classes()).toContain("is-sending"); // 生成中本体

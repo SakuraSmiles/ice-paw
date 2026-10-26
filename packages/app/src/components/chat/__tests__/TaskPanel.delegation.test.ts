@@ -118,6 +118,7 @@ describe("TaskPanel 委派时序（手测 bug 复现）", () => {
     expect(wrapper.find(".task-panel").exists()).toBe(true);
 
     // 子会话开始流式：后台 chunk → bgStreams → streamingConvIds 含子会话
+    chat.ensureStream(CHILD).sending = true; // 模拟 chat:start 已置桶（分桶后 running 判据 = 桶.sending）
     handlers.get("chat:chunk")!({
       payload: { conversation_id: CHILD, delta: "x" },
     });
@@ -146,6 +147,7 @@ describe("TaskPanel 委派时序（手测 bug 复现）", () => {
       await flushAsync();
       // 进入 running（false→true 翻转本身会闪一次，且触发自动展开）——
       // 先走完闪动窗口
+      chat.ensureStream(CHILD).sending = true;
       handlers.get("chat:chunk")!({ payload: { conversation_id: CHILD, delta: "x" } });
       await flushAsync();
       vi.advanceTimersByTime(1200);
@@ -159,8 +161,8 @@ describe("TaskPanel 委派时序（手测 bug 复现）", () => {
       }
       expect(wrapper.find(".task-row").classes()).not.toContain("just-changed");
 
-      // running→结束翻转：bgStreams 整替清空 → 行背景轻闪
-      chat.bgStreams = new Map();
+      // running→结束翻转：streams 整替清空 → 行背景轻闪
+      chat.streams = new Map();
       await flushAsync();
       expect(wrapper.find(".task-row").classes()).toContain("just-changed");
 

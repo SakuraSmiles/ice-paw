@@ -93,12 +93,12 @@ function textMsg(id: string, content: string): Message {
 async function mountWith(messages: Message[], streaming = false, turnFirstIdx: number | null = null) {
   const chat = useChatStore();
   chat.activeConvId = "c1";
-  chat.sending = streaming;
-  chat.turnFirstIdx = turnFirstIdx;
+  chat.ensureStream("c1").sending = streaming;
+  chat.ensureStream("c1").turnFirstIdx = turnFirstIdx;
   chat.messages = messages;
-  chat.streamingText = "";
-  chat.streamingThinking = "";
-  chat.streamingToolCalls = new Map();
+  chat.ensureStream("c1").streamingText = "";
+  chat.ensureStream("c1").streamingThinking = "";
+  chat.ensureStream("c1").streamingToolCalls = new Map();
   const w = mount(ChatMessages);
   await flushPromises();
   return w;
@@ -165,8 +165,8 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".md").length).toBe(3);
 
     const chat = useChatStore();
-    chat.sending = false; // chat:done 收尾（clearTurnAnchors 清锚点）
-    chat.turnFirstIdx = null;
+    chat.ensureStream("c1").sending = false; // chat:done 收尾（clearTurnAnchors 清锚点）
+    chat.ensureStream("c1").turnFirstIdx = null;
     await flushPromises();
 
     expect(w.findAll(".process-group-summary").length).toBe(1);

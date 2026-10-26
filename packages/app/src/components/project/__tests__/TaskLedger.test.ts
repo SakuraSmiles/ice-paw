@@ -58,7 +58,7 @@ describe("TaskLedger 台账", () => {
     // bgStreams 有 r1 → r1 视为 running（store 无直接暴露 setter，用 streaming 计算依赖：
     // sending+activeConvId 组合）
     chat.selectConversation("r1");
-    chat.sending = true;
+    chat.ensureStream("r1").sending = true;
 
     const w = mount(TaskLedger, {
       props: {

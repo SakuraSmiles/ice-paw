@@ -85,12 +85,12 @@ function thinkMsg(id: string, thinking: string, durationMs: number | null, conte
 async function mountWith(messages: Message[], streaming = false, turnFirstIdx: number | null = null) {
   const chat = useChatStore();
   chat.activeConvId = "c1";
-  chat.sending = streaming;
-  chat.turnFirstIdx = turnFirstIdx;
+  chat.ensureStream("c1").sending = streaming;
+  chat.ensureStream("c1").turnFirstIdx = turnFirstIdx;
   chat.messages = messages;
-  chat.streamingText = "";
-  chat.streamingThinking = "";
-  chat.streamingToolCalls = new Map();
+  chat.ensureStream("c1").streamingText = "";
+  chat.ensureStream("c1").streamingThinking = "";
+  chat.ensureStream("c1").streamingToolCalls = new Map();
   const w = mount(ChatMessages);
   await flushPromises();
   return w;

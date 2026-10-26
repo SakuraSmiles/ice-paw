@@ -322,9 +322,9 @@ describe("chatStore", () => {
 
       // 模拟 sendMessage 开始（sendingConvId 是用户回合的判据锚——sendMessage
       // 在 invoke 前必设，缺省会被 chat:start 误判为外部回合走权威刷新）
-      store.sending = true;
-      store.sendingConvId = "c1";
-      store.streamingText = "";
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").sendingConvId = "c1";
+      store.ensureStream("c1").streamingText = "";
 
       // chat:start — 追加空 assistant 占位
       const startH = handlers.get("chat:start")!;
@@ -350,7 +350,7 @@ describe("chatStore", () => {
 
     it("tool call lifecycle: start → delta → end → result", async () => {
       const { store, handlers } = await setupStream();
-      store.sending = true;
+      store.ensureStream("c1").sending = true;
 
       // tool-call-start
       const startH = handlers.get("chat:tool-call-start")!;
@@ -396,9 +396,9 @@ describe("chatStore", () => {
 
     it("multi-round: chat:assistant-start triggers freeze + reset + new placeholder", async () => {
       const { store, handlers } = await setupStream();
-      store.sending = true;
-      store.streamingText = "round 1 text";
-      store.streamingThinking = "round 1 thinking";
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").streamingText = "round 1 text";
+      store.ensureStream("c1").streamingThinking = "round 1 thinking";
 
       // 先有一个 assistant 消息在列表里（模拟第一轮）
       store.messages = [{
@@ -431,8 +431,8 @@ describe("chatStore", () => {
 
     it("chat:error resets sending and sets lastError", async () => {
       const { store, handlers } = await setupStream();
-      store.sending = true;
-      store.streamingText = "partial...";
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").streamingText = "partial...";
 
       const errorH = handlers.get("chat:error")!;
       errorH({ payload: { conversation_id: "c1", message_id: "asst-1", kind: "api", message: "Rate limit exceeded" } });
@@ -443,7 +443,7 @@ describe("chatStore", () => {
 
     it("chat:done(abort) filters empty assistant message", async () => {
       const { store, handlers } = await setupStream();
-      store.sending = true;
+      store.ensureStream("c1").sending = true;
 
       // 追加一个空 assistant 占位
       store.messages = [{
@@ -470,7 +470,7 @@ describe("chatStore", () => {
     it("stopGeneration calls backend cancel and sets sending=false", async () => {
       mockInvoke.mockResolvedValue(undefined);
       const { store } = await setupStream();
-      store.sending = true;
+      store.ensureStream("c1").sending = true;
       store.steerAbortExpected = "c1"; // Steer 插话预告在场
 
       await store.stopGeneration();
@@ -482,8 +482,8 @@ describe("chatStore", () => {
 
     it("bgStreams: events for non-active conversation do NOT affect active streaming", async () => {
       const { store, handlers } = await setupStream();
-      store.sending = true;
-      store.streamingText = "active conv text";
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").streamingText = "active conv text";
 
       // chunk for different conv — should NOT touch active streamingText
       const chunkH = handlers.get("chat:chunk")!;
@@ -503,7 +503,7 @@ describe("chatStore", () => {
       // 父会话的委派调用渲染进子会话 live 气泡底部（DelegationCard 泄漏）。
       const { store, handlers } = await setupStream();
       // 父会话 c1 激活且正在流式：主 agent 发出 delegate_to_agent 调用
-      store.sending = true;
+      store.ensureStream("c1").sending = true;
       const tcs = handlers.get("chat:tool-call-start")!;
       tcs({ payload: { conversation_id: "c1", id: "tc-delg", name: "delegate_to_agent" } });
       const tcd = handlers.get("chat:tool-call-delta")!;
@@ -522,34 +522,34 @@ describe("chatStore", () => {
       expect(store.streamingToolCalls.size).toBe(0); // ← 修复点：父会话调用不泄漏
       expect(store.streamingText).toBe("子会话输出"); // 后台快照恢复
       expect(store.streamingThinking).toBe("");
-      expect(store.bgStreams.get("c1")).toBeDefined(); // 父会话文本被快照，切回可恢复
+      expect(store.streamOf("c1")?.sending ?? false).toBe(true); // 分桶：c1 在途状态常驻桶
     });
 
     it("U1-2：后台会话 chat:done 清掉陈旧 sendingConvId（防 60s 超时误判杀活回合）", async () => {
       const { store, handlers } = await setupStream();
       store.conversations = [fakeConv("c1"), fakeConv("c2")];
       store.activeConvId = "c1";
-      store.sending = true;
-      store.sendingConvId = "c1"; // c1 回合发起锚
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").sendingConvId = "c1"; // c1 回合发起锚
 
-      // 切到 c2：c1 的流式态快照进 bgStreams、sending 复位（sendingConvId 保持 c1）
+      // 切到 c2：c1 在途状态常驻桶（投影随激活桶切换复位；锚在 c1 桶保留）
       store.selectConversation("c2");
       await flushPromises();
       expect(store.sending).toBe(false);
-      expect(store.sendingConvId).toBe("c1"); // 陈旧锚仍在
+      expect(store.streamOf("c1")?.sendingConvId).toBe("c1"); // 锚在 c1 桶（60s 遍历桶探测）
 
       // c1 后台回合完成 → chat:done(c1) 走后台早退分支 → 锚随之失效
       const doneH = handlers.get("chat:done")!;
       doneH({ payload: { conversation_id: "c1", message_id: "x", finish_reason: "stop", usage: null } });
       expect(store.sendingConvId).toBeNull(); // ← 修复点：不再把死会话的 id 留给超时探测
-      expect(store.bgStreams.has("c1")).toBe(false);
+      expect(store.streamOf("c1")?.sending ?? false).toBe(false);
     });
 
     it("U1-2：切回后台流式会话恢复时同步 sendingConvId（60s 超时确认问对会话）", async () => {
       const { store, handlers } = await setupStream();
       store.conversations = [fakeConv("c1"), fakeConv("c2")];
       store.activeConvId = "c1";
-      store.sending = false;
+      store.ensureStream("c1").sending = false;
 
       // 外部回合（MA-3 消费）：sending 置位但不设 sendingConvId（判据锚为 null）
       const startH = handlers.get("chat:start")!;
@@ -560,14 +560,14 @@ describe("chatStore", () => {
       // 切到 c2：c1 流式态进 bgStreams、sending 复位
       store.selectConversation("c2");
       await flushPromises();
-      expect(store.bgStreams.has("c1")).toBe(true);
+      expect(store.streamOf("c1")?.sending ?? false).toBe(true);
 
       // 切回 c1：bg 恢复流式态，sendingConvId 同步指向 c1（修复点——缺失则恢复后
       // sending=true 而锚为 null，超时确认无从问起）
       store.selectConversation("c1");
       await flushPromises();
       expect(store.sending).toBe(true);
-      expect(store.sendingConvId).toBe("c1");
+      expect(store.streamOf("c1")?.sendingConvId).toBeNull(); // 外部回合不设锚（sendMessage 用户路径独占）
     });
 
     it("外部回合（A2）：ucb 缺省且非用户发起 → sending 即刻置位 + 权威刷新 + 不本地 push 占位", async () => {
@@ -575,7 +575,7 @@ describe("chatStore", () => {
       //（不是本前端发起的回合）。incoming user 行后端已落库（带来源标注双块），
       // 不刷新的话来件卡要等切走再切回才出现、回复看起来凭空流出。
       const { store, handlers } = await setupStream();
-      store.sending = false;
+      store.ensureStream("c1").sending = false;
       const invokeCalls = mockInvoke.mock.calls.length;
 
       const startH = handlers.get("chat:start")!;
@@ -596,8 +596,8 @@ describe("chatStore", () => {
       // 靠 sendingConvId（sendMessage 在 invoke 前已设）。误进外部分支会把乐观
       // 气泡整页刷掉、占位与 DB 行重复。
       const { store, handlers } = await setupStream();
-      store.sending = true;
-      store.sendingConvId = "c1";
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").sendingConvId = "c1";
       const invokeCalls = mockInvoke.mock.calls.length;
 
       const startH = handlers.get("chat:start")!;
@@ -617,8 +617,8 @@ describe("chatStore", () => {
       const store = useChatStore();
       store.conversations = [fakeConv("c1")];
       store.activeConvId = "c1";
-      store.streamingText = "old text";
-      store.streamingThinking = "old thinking";
+      store.ensureStream("c1").streamingText = "old text";
+      store.ensureStream("c1").streamingThinking = "old thinking";
 
       await store.sendMessage("hello");
 
@@ -639,7 +639,7 @@ describe("chatStore", () => {
       const store = useChatStore();
       store.conversations = [fakeConv("c1")];
       store.activeConvId = "c1";
-      store.sending = true;
+      store.ensureStream("c1").sending = true;
       store.pendingImages = [{ data: "x", mediaType: "image/png", name: "a.png" }];
 
       await store.sendMessage("第二条");
@@ -849,7 +849,7 @@ describe("chatStore", () => {
       store.selectConversation("c2");
       await flushPromises();
       expect(store.activeConvId).toBe("c2");
-      expect(store.bgStreams.has("c1")).toBe(true);
+      expect(store.streamOf("c1")?.sending ?? false).toBe(true);
 
       // c1 的 send 此刻被后端拒绝
       rejectSend(new Error("boom"));
@@ -861,7 +861,7 @@ describe("chatStore", () => {
       expect(store.lastErrors.has("c2")).toBe(false);
       expect(store.lastErrors.has("c1")).toBe(true);
       // bgStreams 快照已清：切回 c1 不会恢复出幽灵「生成中」
-      expect(store.bgStreams.has("c1")).toBe(false);
+      expect(store.streamOf("c1")?.sending ?? false).toBe(false);
 
       store.selectConversation("c1");
       await flushPromises();
@@ -984,18 +984,18 @@ describe("chatStore", () => {
   describe("U3-5 ① 流式复位清单单一真相源", () => {
     /** 灌满流式核心/思考结论态/工具调用/回合锚点，供复位断言「全清、零漂移」。 */
     function seedStreamingState(store: ReturnType<typeof useChatStore>) {
-      store.sending = true;
-      store.streamingText = "partial text";
-      store.streamingThinking = "thinking…";
-      store.thinkingStartTime = 1_700_000_000_000;
+      store.ensureStream("c1").sending = true;
+      store.ensureStream("c1").streamingText = "partial text";
+      store.ensureStream("c1").streamingThinking = "thinking…";
+      store.ensureStream("c1").thinkingStartTime = 1_700_000_000_000;
       store.thinkingDuration = "30s";
       store.lastThinkingContent = "some thinking";
-      store.sendingConvId = "c1";
-      store.turnFirstIdx = 0;
-      store.streamingToolCalls = new Map([
+      store.ensureStream("c1").sendingConvId = "c1";
+      store.ensureStream("c1").turnFirstIdx = 0;
+      store.ensureStream("c1").streamingToolCalls = new Map([
         ["tc-1", { id: "tc-1", name: "read_file", arguments: "{}", ended: true, result: null }],
       ]);
-      store.bgStreams = new Map([["c2", { text: "bg", thinking: "" }]]);
+      store.ensureStream("c2").streamingText = "bg";
     }
 
     it("reset()：流式核心 + 思考结论态 + 工具调用 + 回合锚点全清（此前漏清 streamingToolCalls）", () => {
@@ -1015,7 +1015,7 @@ describe("chatStore", () => {
       expect(store.sending).toBe(false);
       expect(store.sendingConvId).toBeNull();
       expect(store.turnFirstIdx).toBeNull();
-      expect(store.bgStreams.size).toBe(0);
+      expect(store.streams.size).toBe(0);
     });
 
     it("clearActiveConversation()：思考结论态清 + 在途快照/归属锚保留（2026-10-22 语义翻转）", () => {
@@ -1031,12 +1031,12 @@ describe("chatStore", () => {
       expect(store.streamingToolCalls.size).toBe(0);
       expect(store.thinkingDuration).toBeNull();
       expect(store.lastThinkingContent).toBeNull();
-      // 归属锚保留：在途回合的 done 归属判断 + 60s 超时锚（此前强清 = 症状 2
-      // 「切项目后回合失去全部跟踪」）
-      expect(store.sendingConvId).toBe("c1");
+      // 归属锚保留在 c1 桶（桶常驻=跨视图跟踪；投影随激活会话消失是预期）
+      expect(store.streamOf("c1")?.sendingConvId).toBe("c1");
       expect(store.turnFirstIdx).toBeNull();
-      // 在途快照写入（与 selectConversation 切走同款）——切回可恢复流式文本
-      expect(store.bgStreams.get("c1")).toEqual({ text: "partial text", thinking: "thinking…" });
+      // 分桶（2026-10-26）：数据常驻桶——切项目空间零快照零丢失，切回直接恢复
+      expect(store.streamOf("c1")?.streamingText).toBe("partial text");
+      expect(store.streamOf("c1")?.streamingThinking).toBe("thinking…");
       expect(store.sending).toBe(false);
     });
 
@@ -1044,13 +1044,11 @@ describe("chatStore", () => {
       const store = useChatStore();
       store.conversations = [fakeConv("c1"), fakeConv("c2")];
       store.activeConvId = "c2";
-      const existing = new Map([["c1", { text: "A 会话在途", thinking: "" }]]);
-      store.bgStreams = existing;
-      store.sending = false; // 当前会话空闲，无新快照写入
+      store.ensureStream("c1").streamingText = "A 会话在途"; // 其他会话的在途桶
 
       store.clearActiveConversation();
 
-      expect(store.bgStreams.get("c1")).toEqual({ text: "A 会话在途", thinking: "" });
+      expect(store.streamOf("c1")?.streamingText).toBe("A 会话在途");
     });
 
     it("clearActiveConversation()：保留 conversations 列表与草稿（切空间语义——只清激活会话运行时）", () => {

@@ -100,11 +100,11 @@ function frozenRoundMessages(turn2Content = ""): Message[] {
 async function mountStreaming(turn2Content = "") {
   const chat = useChatStore();
   chat.activeConvId = "c1";
-  chat.sending = true;
+  chat.ensureStream("c1").sending = true;
   chat.messages = frozenRoundMessages(turn2Content);
-  chat.streamingText = turn2Content;
-  chat.streamingThinking = "";
-  chat.streamingToolCalls = new Map();
+  chat.ensureStream("c1").streamingText = turn2Content;
+  chat.ensureStream("c1").streamingThinking = "";
+  chat.ensureStream("c1").streamingToolCalls = new Map();
   const w = mount(ChatMessages);
   await flushPromises();
   return w;
@@ -140,7 +140,7 @@ describe("多轮工具回合：已冻结轮不被骨架门控隐藏", () => {
   it("回合结束后（sending=false）工具卡照常可见——原有兜底行为", async () => {
     const w = await mountStreaming();
     const chat = useChatStore();
-    chat.sending = false;
+    chat.ensureStream("c1").sending = false;
     await flushPromises();
     expect(w.findAll(".tool-toggle").length).toBe(1);
   });

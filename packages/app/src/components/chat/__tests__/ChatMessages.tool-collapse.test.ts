@@ -119,12 +119,12 @@ function plainToolRows(w: ReturnType<typeof mount>) {
 async function mountWith(messages: Message[], streaming = false, turnFirstIdx: number | null = null) {
   const chat = useChatStore();
   chat.activeConvId = "c1";
-  chat.sending = streaming;
-  chat.turnFirstIdx = turnFirstIdx;
+  chat.ensureStream("c1").sending = streaming;
+  chat.ensureStream("c1").turnFirstIdx = turnFirstIdx;
   chat.messages = messages;
-  chat.streamingText = "";
-  chat.streamingThinking = "";
-  chat.streamingToolCalls = new Map();
+  chat.ensureStream("c1").streamingText = "";
+  chat.ensureStream("c1").streamingThinking = "";
+  chat.ensureStream("c1").streamingToolCalls = new Map();
   const w = mount(ChatMessages);
   await flushPromises();
   return w;
@@ -231,8 +231,8 @@ describe("③ 组级工具折叠", () => {
     expect(plainToolRows(w).length).toBe(10); // 生成中先全可见
 
     const chat = useChatStore();
-    chat.sending = false; // chat:done 收尾（clearTurnAnchors 同步清锚点）
-    chat.turnFirstIdx = null;
+    chat.ensureStream("c1").sending = false; // chat:done 收尾（clearTurnAnchors 同步清锚点）
+    chat.ensureStream("c1").turnFirstIdx = null;
     await flushPromises();
 
     expect(plainToolRows(w).length).toBe(0); // 回合结束沉淀为折叠

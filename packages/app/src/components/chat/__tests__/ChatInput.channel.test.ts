@@ -171,7 +171,7 @@ describe("ChatInput 生成中双按钮（Steer/C8 插话入口）", () => {
     const chat = useChatStore();
     chat.conversations = [{ id: "c1", agent_id: "ag1", title: "普通会话", pinned: false, created_at: "", updated_at: "", project_id: null, kind: "chat" }];
     chat.activeConvId = "c1";
-    chat.sending = true; // 在途回合（Steer 触发前提）
+    chat.ensureStream("c1").sending = true; // 在途回合（Steer 触发前提）
 
     const wrapper = mount(ChatInput);
     // 生成中双按钮并存：发送按钮仍在（不再被 v-else 替换成停止）+ 停止按钮出现
