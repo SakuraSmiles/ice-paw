@@ -181,6 +181,178 @@
         gap: 12px;
       }
 
+      /* ==== 环场 1:1 复刻 DSH reticle（startup-visuals.js:140-180 参数照抄，仅换色）====
+         尺寸：DSH unit=min边/1000；R=425u、容器=刻度外缘 463u → 92vmin，层半径全部按 463u 归一。
+         线宽：DSH 绝对 unit → vmin 千分比（随屏等比，与 canvas DPR 行为一致）。
+         角度：conic = canvas+90°；缺口（inGap canvas 43.2~136.8°）= conic 133.2~226.8°（下方让位）。
+         速度：spin=ambient*.46+time*1.35≈1.81rad/s（3.47s/圈）；层倍率照抄：
+         #3 ×1.35=2.6s 正 / #4#5 ×1.85=1.9s 反（快！参考图的活力来源）/ #6 ×0.23=15s 反 /
+         点环 ×0.25=14s 反 / 刻度 ×0.12=29s 正。生长/逐点渐入是进度参数（静态取终态，
+         待信号系统接入后驱动）。 */
+      .boot-rings {
+        position: absolute; left: 50%; top: 50%;
+        width: 92vmin; height: 92vmin;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      }
+      .boot-rings .ring { position: absolute; inset: 0; border-radius: 50%; }
+      @keyframes ring-spin { to { transform: rotate(360deg); } }
+      @keyframes ring-spin-r { to { transform: rotate(-360deg); } }
+
+      /* #6 外弧：r=R+17=442u/463=95.6% | from conic90° 长225° | soft 0.7u=0.07vmin | 0.31 | ×0.23 反 15.1s */
+      .boot-rings .arc-out6 {
+        inset: 2.2%;
+        background: conic-gradient(from 90deg, var(--sp-soft) 0deg 225deg, transparent 225deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.07vmin), black calc(100% - 0.06vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.07vmin), black calc(100% - 0.06vmin));
+        opacity: 0.31;
+        animation: ring-spin-r 15.1s linear infinite;
+      }
+      /* 刻度 minor：84 个/4.286° 间距，线宽 0.65u≈0.1° 段，长 4u=0.4vmin，alpha .38 | ×0.12 正 28.9s */
+      .boot-rings .tick-minor {
+        inset: 0.6%;
+        background: repeating-conic-gradient(var(--sp-soft) 0deg 0.1deg, transparent 0.1deg 4.286deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.42vmin), black calc(100% - 0.4vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.42vmin), black calc(100% - 0.4vmin));
+        opacity: 0.38;
+        animation: ring-spin 28.9s linear infinite;
+      }
+      /* 刻度 major：每 30°（i%7），线宽 0.9u≈0.15° 段，长 13u=1.3vmin，alpha .62 | 随 minor 同转 */
+      .boot-rings .tick-major {
+        inset: 0.6%;
+        background: repeating-conic-gradient(var(--sp-ink) 0deg 0.15deg, transparent 0.15deg 30deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 1.32vmin), black calc(100% - 1.3vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 1.32vmin), black calc(100% - 1.3vmin));
+        opacity: 0.62;
+        animation: ring-spin 28.9s linear infinite;
+      }
+      /* #1 主环：r=425/463=91.8% | from conic226.8°（缺口右端）长266.4° | ink 4.7u=0.47vmin | 0.76 | 静止 */
+      .boot-rings .arc-outer {
+        inset: 4.1%;
+        background: conic-gradient(from 226.8deg, var(--sp-ink) 0deg 266.4deg, transparent 266.4deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.48vmin), black calc(100% - 0.47vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.48vmin), black calc(100% - 0.47vmin));
+        opacity: 0.76;
+      }
+      /* #2 细缺口圆：r=R-14=88.9% | 同缺口角度 | soft 0.8u=0.08vmin | 0.35 | 静止 */
+      .boot-rings .ring-fine {
+        inset: 5.55%;
+        background: conic-gradient(from 226.8deg, var(--sp-soft) 0deg 266.4deg, transparent 266.4deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.09vmin), black calc(100% - 0.08vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.09vmin), black calc(100% - 0.08vmin));
+        opacity: 0.35;
+      }
+      /* #3 旋转长弧：r=R-29=85.5% | from conic90.4° 长252° | ink 2.4u=0.24vmin | 0.8 | ×1.35 正 2.6s */
+      .boot-rings .arc-orbit {
+        inset: 7.25%;
+        background: conic-gradient(from 90.4deg, var(--sp-ink) 0deg 252deg, transparent 252deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.25vmin), black calc(100% - 0.24vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.25vmin), black calc(100% - 0.24vmin));
+        opacity: 0.8;
+        animation: ring-spin 2.6s linear infinite;
+      }
+      /* 12 点环：r=R-30=85.3%（与 #3 交错半径）| major(i%3) accent 4.1u≈0.5°段/0.88 + minor ink 1.8u≈0.2°段/0.48 | ×0.25 反 13.9s */
+      .boot-rings .pips-minor {
+        inset: 7.35%;
+        background: repeating-conic-gradient(var(--sp-ink) 0deg 0.2deg, transparent 0.2deg 30deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.05vmin), black calc(100% - 0.04vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.05vmin), black calc(100% - 0.04vmin));
+        opacity: 0.48;
+        animation: ring-spin-r 13.9s linear infinite;
+      }
+      .boot-rings .pips-major {
+        inset: 7.35%;
+        background: repeating-conic-gradient(var(--sp-accent) 0deg 0.55deg, transparent 0.55deg 90deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.11vmin), black calc(100% - 0.1vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.11vmin), black calc(100% - 0.1vmin));
+        opacity: 0.88;
+        animation: ring-spin-r 13.9s linear infinite;
+      }
+      /* #4 accent 主弧：r=R-49=81.2% | from conic88.8° 长(engraving 终态)186° | accent 5.5u=0.55vmin | 0.9 | ×1.85 反 1.9s */
+      .boot-rings .arc-hero {
+        inset: 9.4%;
+        background: conic-gradient(from 88.8deg, var(--sp-accent) 0deg 186deg, transparent 186deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.56vmin), black calc(100% - 0.55vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.56vmin), black calc(100% - 0.55vmin));
+        opacity: 0.9;
+        animation: ring-spin-r 1.9s linear infinite;
+      }
+      /* #5 超粗微透明弧：r=R-62=78.4% | from conic105.9°（与#4 相位差17°）长86.4° | accent 12u=1.2vmin | 0.22 | 与 #4 同步 ×1.85 反 */
+      .boot-rings .arc-heavy {
+        inset: 10.8%;
+        background: conic-gradient(from 105.9deg, var(--sp-accent) 0deg 86.4deg, transparent 86.4deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 1.22vmin), black calc(100% - 1.2vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 1.22vmin), black calc(100% - 1.2vmin));
+        opacity: 0.22;
+        animation: ring-spin-r 1.9s linear infinite;
+      }
+      /* 卡尺（两侧 R-83=73.9%）：三段短横线 soft 0.7u | 0.35 | 静止 */
+      .boot-rings .caliper-l, .boot-rings .caliper-r {
+        position: absolute; top: 50%; width: 2.4vmin; height: 4.2vmin;
+        background: repeating-linear-gradient(to bottom,
+          var(--sp-soft) 0 0.07vmin, transparent 0.07vmin 1.4vmin);
+        opacity: 0.35;
+      }
+      .boot-rings .caliper-l { left: 26.1%; transform: translateY(-50%); }
+      .boot-rings .caliper-r { right: 26.1%; transform: translateY(-50%); }
+      /* 浅色透明度补偿 */
+      html[data-theme="light"] .boot-rings .arc-heavy { opacity: 0.3; }
+      html[data-theme="light"] .boot-rings .ring-fine { opacity: 0.5; }
+      html[data-theme="light"] .boot-rings .arc-out6 { opacity: 0.45; }
+      html[data-theme="light"] .boot-rings .tick-minor { opacity: 0.5; }
+
+      .boot-center {
+        transition:
+          opacity 400ms cubic-bezier(0.4, 0, 1, 1) 0ms,
+          transform 400ms cubic-bezier(0.4, 0, 1, 1) 0ms;
+      }
+      .boot-letting .boot-center {
+        opacity: 0;
+        transform: translateY(-14px) scale(0.95);
+      }
+      /* 氛围层：先去脉冲动画（keyframes 恒写 opacity 会压住过渡），再统一淡出 */
+      .boot-letting .bc {
+        animation: none;
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
+      .boot-letting .boot-meta {
+        animation: none; /* 入场 forwards 会恒写 opacity 压住过渡——先摘 */
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
+      /* 环场随氛围层同拍退场（内部各环的 spin 动画不写 opacity，可安全过渡） */
+      .boot-letting .boot-rings {
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
+
+      /* ---- 四角 L 角标（registration marks，DSH 同源）：2.4s 周期错峰脉冲 ---- */
+      .bc {
+        position: absolute;
+        width: 22px;
+        height: 22px;
+        opacity: 0;
+        animation: bc-in 400ms ease-out forwards, bc-pulse 2.4s ease-in-out infinite;
+      }
+      .bc.tl { top: 26px; left: 30px; /* 相对 splash 容器（已让位 36px）= 窗口 62px */ border-top: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); }
+      .bc.tr { top: 26px; right: 30px; border-top: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 60ms, 300ms; }
+      .bc.bl { bottom: 26px; left: 30px; border-bottom: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); animation-delay: 120ms, 600ms; }
+      .bc.br { bottom: 26px; right: 30px; border-bottom: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 180ms, 900ms; }
+      @keyframes bc-in { from { opacity: 0; } to { opacity: 0.55; } }
+      @keyframes bc-pulse {
+        0%, 100% { opacity: 0.55; }
+        22% { opacity: 0.95; }
+      }
+
+      /* ---- 中央编队：标 → 字标 → 副题 → 进度 → 状态双行 ---- */
+      .boot-center {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+
       /* ==== 装饰环场 v11（DSH reticle 语言：弧段 + 明度分层 + 粗细对比）====
          整圆退役，每层是弧：r92 ink 粗弧(200 度下方留口) / r84 accent 主弧
          (120 度头部亮，生长语义待接信号系统) / r76 旋转长弧 + 超粗微透明弧
@@ -193,8 +365,7 @@
         transform: translate(-50%, -50%);
         pointer-events: none;
       }
-      .boot-rings .ring { position: absolute; inset: 0; border-radius: 50%; }
-      @keyframes ring-spin { to { transform: rotate(360deg); } }
+@keyframes ring-spin { to { transform: rotate(360deg); } }
       @keyframes ring-spin-r { to { transform: rotate(-360deg); } }
       .boot-rings .ring-ticks {
         background: repeating-conic-gradient(var(--sp-soft) 0deg 0.8deg, transparent 0.8deg 5.2deg);
@@ -538,15 +709,18 @@
       <i class="bc bl" aria-hidden="true"></i>
       <i class="bc br" aria-hidden="true"></i>
       <div class="boot-rings" aria-hidden="true">
-        <div class="ring ring-ticks"></div>
+        <div class="ring arc-out6"></div>
+        <div class="ring tick-minor"></div>
+        <div class="ring tick-major"></div>
         <div class="ring arc-outer"></div>
+        <div class="ring ring-fine"></div>
+        <div class="ring arc-orbit"></div>
+        <div class="ring pips-minor"></div>
+        <div class="ring pips-major"></div>
         <div class="ring arc-hero"></div>
-        <div class="ring arc-mid"></div>
         <div class="ring arc-heavy"></div>
-        <div class="ring ring-faint"></div>
-        <div class="ring ring-pips"></div>
-        <div class="ring ring-inner"></div>
-        <div class="ring ring-c5"></div>
+        <div class="caliper-l"></div>
+        <div class="caliper-r"></div>
       </div>
       <div class="boot-center">
         <div class="boot-mark" aria-hidden="true">
