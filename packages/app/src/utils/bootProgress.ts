@@ -21,6 +21,56 @@ export function bootReady(): boolean {
   return readyDispatched;
 }
 
+// ---- 工业制图语言（2026-10-27 DSH 同源升格，档 B）----
+// 阶段英文小字映射（boot-sub 行）：按上报节点百分比推导，与中文 label 同源
+// （15 加载应用 / 50 初始化界面 / 60 加载会话数据 / 100 就绪）。
+const STAGE_EN: ReadonlyArray<readonly [number, string]> = [
+  [100, "READY"],
+  [60, "LOADING SESSION DATA"],
+  [50, "INITIALIZING INTERFACE"],
+  [15, "LOADING APPLICATION"],
+];
+function stageEnOf(pct: number): string {
+  for (const [p, s] of STAGE_EN) if (pct >= p) return s;
+  return "BOOT SEQUENCE";
+}
+
+// 乱码→落定（roll）：DSH identity-glyphs decode 同款视觉——左→右逐位锁定，
+// 未锁定位显示随机工业字符。只写视觉层（.boot-status-visual，aria-hidden），
+// 权威层 .boot-status 恒同步直写（测试契约 + 屏幕阅读器）。
+const SCRAMBLE_GLYPHS = "!<>-_\\/[]{}=+*^?#";
+let rollTimer = 0;
+let lastVisualLabel = "";
+function rollVisualLabel(el: HTMLElement, text: string): void {
+  window.clearInterval(rollTimer);
+  lastVisualLabel = text;
+  const reduced =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced || !text) {
+    el.textContent = text;
+    return;
+  }
+  const chars = [...text];
+  const start = performance.now();
+  const dur = Math.min(380, 140 + chars.length * 22);
+  rollTimer = window.setInterval(() => {
+    const t = (performance.now() - start) / dur;
+    const locked = Math.floor(Math.max(0, Math.min(1, t)) * chars.length);
+    el.textContent = chars
+      .map((c, i) =>
+        i < locked || c === " "
+          ? c
+          : SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)],
+      )
+      .join("");
+    if (locked >= chars.length) {
+      window.clearInterval(rollTimer);
+      el.textContent = text; // 终态精确落定（随机流不留残影）
+    }
+  }, 30);
+}
+
 /**
  * 上报启动进度（0-100，钳制单调递增）。label 同时写入 splash 状态行文案。
  */
@@ -35,9 +85,16 @@ export function reportBootProgress(pct: number, label?: string): void {
     fill.style.width = `${next}%`;
   }
   if (label) {
+    // 权威层：同步直写（既有测试契约锁定此行为，勿改成异步）
     const status = splash.querySelector<HTMLElement>(".boot-status");
     if (status) status.textContent = label;
+    // 视觉层：乱码落定（阶段推进的动效读数）；label 未变不重播
+    const visual = splash.querySelector<HTMLElement>(".boot-status-visual");
+    if (visual && label !== lastVisualLabel) rollVisualLabel(visual, label);
   }
+  // 英文阶段小字（boot-sub 行）
+  const sub = splash.querySelector<HTMLElement>(".boot-sub");
+  if (sub) sub.textContent = stageEnOf(next);
   if (current >= 100 && !readyDispatched) {
     readyDispatched = true;
     window.dispatchEvent(new CustomEvent("icepaw:boot-ready"));
