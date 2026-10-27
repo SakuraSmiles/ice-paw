@@ -301,6 +301,134 @@
       html[data-theme="light"] .boot-rings .arc-out6 { opacity: 0.45; }
       html[data-theme="light"] .boot-rings .tick-minor { opacity: 0.5; }
 
+      /* ==== sealMechanism 1:1 复刻（源码 235-263 行，与 reticle 同屏叠加）====
+         三层三扇区弧组（repeating-conic 每 120° 重复）+ 外圈三组卡尺 + 下半裁剪。
+         参数照抄：层半径 154/171/188u；层1 accent 4.5px @0.43；层0/2 soft 1px @0.23；
+         扇区半开角 etch 终态 .34/.49/.64rad（弧长 38.8/56.2/73.4°）；
+         相位 layer*.13rad、奇偶反向 turn（终态静止——「timed assemblies」非永动）；
+         下半裁剪 y>110s（源码 clip 同款 inset 0 0 42% 0）。 */
+      .boot-rings .seal {
+        position: absolute; left: 50%; top: 50%;
+        width: 46vmin; height: 46vmin;
+        transform: translate(-50%, -50%);
+        clip-path: inset(0 0 42% 0);
+        pointer-events: none;
+      }
+      .boot-rings .seal .ring { position: absolute; inset: 0; border-radius: 50%; }
+      /* 层0：r154/463=33.3%容器（seal 容器=224u*2=448u→92vmin 的 48.7%…… 直接按 seal 容器内百分比：
+         seal 容器直径=448u+卡尺余量≈488u → 层0 r=154/244=63.1% → inset 18.45% */
+      .boot-rings .seal .seal-l0 {
+        inset: 18.4%;
+        background: repeating-conic-gradient(from calc(90deg - 90deg + 7.45deg),
+          var(--sp-soft) 0deg 38.8deg, transparent 38.8deg 120deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+        opacity: 0.23;
+      }
+      /* 层1：r=171/244=70.1% → inset 14.95% | accent 4.5px=0.45vmin | 0.70*(1-.38)=0.43 */
+      .boot-rings .seal .seal-l1 {
+        inset: 14.9%;
+        background: repeating-conic-gradient(from calc(90deg - 90deg + 14.9deg),
+          var(--sp-accent) 0deg 56.2deg, transparent 56.2deg 120deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.46vmin), black calc(100% - 0.45vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.46vmin), black calc(100% - 0.45vmin));
+        opacity: 0.43;
+      }
+      /* 层2：r=188/244=77.0% → inset 11.5% | soft 1px | span 73.4° */
+      .boot-rings .seal .seal-l2 {
+        inset: 11.5%;
+        background: repeating-conic-gradient(from calc(90deg - 90deg - 90deg + 22.35deg),
+          var(--sp-soft) 0deg 73.4deg, transparent 73.4deg 120deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+        opacity: 0.23;
+      }
+      /* 外圈三组卡尺：r=224/244=91.8% | 27u 横线×2 + 9×14u accent 块 | 每 120° */
+      .boot-rings .seal .cal {
+        position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+      }
+      .boot-rings .seal .cal i {
+        position: absolute;
+        left: calc(0.27vmin * -13.5);
+        top: calc(0vmin - 22.9vmin);
+        width: 2.7vmin; height: 1.4vmin;
+        background:
+          linear-gradient(var(--sp-ink), var(--sp-ink)) 0 0 / 100% 0.07vmin no-repeat,
+          linear-gradient(var(--sp-ink), var(--sp-ink)) 0 100% / 100% 0.07vmin no-repeat,
+          linear-gradient(var(--sp-accent), var(--sp-accent)) calc(50% - 0.45vmin) 50% / 0.9vmin 1.4vmin no-repeat;
+        opacity: 0.62;
+      }
+      .boot-rings .seal .cal.c1 { transform: rotate(0deg); }
+      .boot-rings .seal .cal.c2 { transform: rotate(120deg); }
+      .boot-rings .seal .cal.c3 { transform: rotate(240deg); }
+      html[data-theme="light"] .boot-rings .seal .seal-l1 { opacity: 0.55; }
+      html[data-theme="light"] .boot-rings .seal .seal-l0,
+      html[data-theme="light"] .boot-rings .seal .seal-l2 { opacity: 0.4; }
+
+      /* ==== sealMechanism 1:1 复刻（源码 235-263 行，与 reticle 同屏叠加）====
+         三层三扇区弧组（repeating-conic 每 120° 重复）+ 外圈三组卡尺 + 下半裁剪。
+         参数照抄：层半径 154/171/188u；层1 accent 4.5px @0.43；层0/2 soft 1px @0.23；
+         扇区半开角 etch 终态 .34/.49/.64rad（弧长 38.8/56.2/73.4°）；
+         相位 layer*.13rad、奇偶反向 turn（终态静止——「timed assemblies」非永动）；
+         下半裁剪 y>110s（源码 clip 同款 inset 0 0 42% 0）。 */
+      .boot-rings .seal {
+        position: absolute; left: 50%; top: 50%;
+        width: 46vmin; height: 46vmin;
+        transform: translate(-50%, -50%);
+        clip-path: inset(0 0 42% 0);
+        pointer-events: none;
+      }
+      .boot-rings .seal .ring { position: absolute; inset: 0; border-radius: 50%; }
+      /* 层0：r154/463=33.3%容器（seal 容器=224u*2=448u→92vmin 的 48.7%…… 直接按 seal 容器内百分比：
+         seal 容器直径=448u+卡尺余量≈488u → 层0 r=154/244=63.1% → inset 18.45% */
+      .boot-rings .seal .seal-l0 {
+        inset: 18.4%;
+        background: repeating-conic-gradient(from calc(90deg - 90deg + 7.45deg),
+          var(--sp-soft) 0deg 38.8deg, transparent 38.8deg 120deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+        opacity: 0.23;
+      }
+      /* 层1：r=171/244=70.1% → inset 14.95% | accent 4.5px=0.45vmin | 0.70*(1-.38)=0.43 */
+      .boot-rings .seal .seal-l1 {
+        inset: 14.9%;
+        background: repeating-conic-gradient(from calc(90deg - 90deg + 14.9deg),
+          var(--sp-accent) 0deg 56.2deg, transparent 56.2deg 120deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.46vmin), black calc(100% - 0.45vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.46vmin), black calc(100% - 0.45vmin));
+        opacity: 0.43;
+      }
+      /* 层2：r=188/244=77.0% → inset 11.5% | soft 1px | span 73.4° */
+      .boot-rings .seal .seal-l2 {
+        inset: 11.5%;
+        background: repeating-conic-gradient(from calc(90deg - 90deg - 90deg + 22.35deg),
+          var(--sp-soft) 0deg 73.4deg, transparent 73.4deg 120deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+                mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
+        opacity: 0.23;
+      }
+      /* 外圈三组卡尺：r=224/244=91.8% | 27u 横线×2 + 9×14u accent 块 | 每 120° */
+      .boot-rings .seal .cal {
+        position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+      }
+      .boot-rings .seal .cal i {
+        position: absolute;
+        left: calc(0.27vmin * -13.5);
+        top: calc(0vmin - 22.9vmin);
+        width: 2.7vmin; height: 1.4vmin;
+        background:
+          linear-gradient(var(--sp-ink), var(--sp-ink)) 0 0 / 100% 0.07vmin no-repeat,
+          linear-gradient(var(--sp-ink), var(--sp-ink)) 0 100% / 100% 0.07vmin no-repeat,
+          linear-gradient(var(--sp-accent), var(--sp-accent)) calc(50% - 0.45vmin) 50% / 0.9vmin 1.4vmin no-repeat;
+        opacity: 0.62;
+      }
+      .boot-rings .seal .cal.c1 { transform: rotate(0deg); }
+      .boot-rings .seal .cal.c2 { transform: rotate(120deg); }
+      .boot-rings .seal .cal.c3 { transform: rotate(240deg); }
+      html[data-theme="light"] .boot-rings .seal .seal-l1 { opacity: 0.55; }
+      html[data-theme="light"] .boot-rings .seal .seal-l0,
+      html[data-theme="light"] .boot-rings .seal .seal-l2 { opacity: 0.4; }
+
       .boot-center {
         transition:
           opacity 400ms cubic-bezier(0.4, 0, 1, 1) 0ms,
@@ -721,6 +849,22 @@
         <div class="ring arc-heavy"></div>
         <div class="caliper-l"></div>
         <div class="caliper-r"></div>
+            <div class="seal" aria-hidden="true">
+          <div class="ring seal-l0"></div>
+          <div class="ring seal-l1"></div>
+          <div class="ring seal-l2"></div>
+          <div class="cal c1"><i></i></div>
+          <div class="cal c2"><i></i></div>
+          <div class="cal c3"><i></i></div>
+        </div>
+            <div class="seal" aria-hidden="true">
+          <div class="ring seal-l0"></div>
+          <div class="ring seal-l1"></div>
+          <div class="ring seal-l2"></div>
+          <div class="cal c1"><i></i></div>
+          <div class="cal c2"><i></i></div>
+          <div class="cal c3"><i></i></div>
+        </div>
       </div>
       <div class="boot-center">
         <div class="boot-mark" aria-hidden="true">
