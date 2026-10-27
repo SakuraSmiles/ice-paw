@@ -61,9 +61,22 @@ pub fn run() {
     // 几百 MB 且淘汰懒散；WebView2 初始化加载巨型 profile = 冷启动白屏「未响应」
     // 的真凶，且发生在 index.html 骨架之前、骨架结构上覆盖不到）。必须跑在
     // WebView2 启动**之前**——启动后 Cache 文件被 msedgewebview2 进程持有锁死。
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
     #[cfg(windows)]
     prune_webview_cache_on_version_change(&context);
+
+    // 主题底色秒窗（2026-10-27 感官升级）：窗口纯色底色按用户主题标记定色——
+    // run 前改 config（此刻尚无 AppHandle，app_data_dir 按 Tauri 同规则手动拼：
+    // data_dir()/identifier）。标记缺失（首启/旧版本升级）= 浅色（首启默认浅
+    // 拍板；升级用户的首次会有一次浅窗→深 splash 跳变，useTheme 挂载自愈补写
+    // 标记后不再复现）。色值 = 对应主题 splash 底色（136-400ms 纯色窗与 splash
+    // 落位零跳变；来源见 index.html 例外位注释）。
+    {
+        let bg = theme_window_bg(context.config().identifier.as_str());
+        if let Some(win) = context.config_mut().app.windows.iter_mut().next() {
+            win.background_color = Some(bg);
+        }
+    }
 
     let mut builder = tauri::Builder::default();
     // 单实例：点审批 toast / 双击 exe 拉起第二进程时拦截并前置主实例（防双开）。
@@ -186,6 +199,7 @@ pub fn run() {
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
             commands::preferences_cmd::test_vision_config,
+            commands::preferences_cmd::set_theme_marker,
             commands::model_profile_cmd::list_model_profiles,
             commands::model_profile_cmd::create_model_profile,
             commands::model_profile_cmd::update_model_profile,
@@ -726,6 +740,26 @@ fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
         s.clone()
     } else {
         "unknown panic payload".to_string()
+    }
+}
+
+/// 主题底色秒窗：读主题标记 → 返回窗口纯色底色（十六进制 RGB）。
+///
+/// 标记缺失（首启 / 旧版本升级首启）= 浅色（首启默认浅拍板）。数据目录拼接
+/// 与 Tauri app_data_dir 同规则（data_dir()/identifier——此刻无 AppHandle，
+/// 用 dirs crate 手动拼；Windows=%APPDATA%，mac=~/Library/Application Support，
+/// linux=~/.local/share，与 Tauri/ dirs 完全一致）。色值 = 对应主题 splash
+/// 底色（index.html 例外位注释同源：浅 #FAFBFC / 深 #0B1116）。
+fn theme_window_bg(identifier: &str) -> tauri::utils::config::Color {
+    let marker = dirs::data_dir()
+        .map(|d| d.join(identifier).join(commands::preferences_cmd::THEME_MARKER_FILE))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_ascii_lowercase());
+    let dark = marker.as_deref() == Some("dark");
+    if dark {
+        tauri::utils::config::Color(0x0B, 0x11, 0x16, 0xFF)
+    } else {
+        tauri::utils::config::Color(0xFA, 0xFB, 0xFC, 0xFF)
     }
 }
 

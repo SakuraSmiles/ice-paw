@@ -39,8 +39,13 @@
       双行状态字（中文阶段名 + 英文等宽小字）+ 阶段切换乱码落定（roll）。
       搬语言不搬时长：真实进度语义（width 由 bootProgress 真实节点驱动）、
       最少 2.5s、退场双条件、~10s 兜底全部不翻案；六幕演出式开场不进高频
-      启动路径。**splash 恒深底**（黑场开场语义，仪式感与视觉稳定优先；浅色
-      偏好用户在 splash→app 交接有一次深→浅跳变，与首帧主题切换同类可接受）。
+      启动路径。**splash 跟随用户主题**（主题底色秒窗批，2026-10-27）：默认
+      浅色 = 首启默认浅拍板；html[data-theme="dark"] 覆写深色组。主题从第一
+      帧即正确 = head 内 anti-FOUC 内联脚本（读 localStorage，缺失=浅），
+      不等 Vue/useTheme（那是 Sidebar 挂载后的事）。首启四处对齐：本脚本 /
+      useTheme 首启浅 / Rust theme_window_bg marker 缺失浅 / conf 默认浅。
+      窗口纯色底色（136-400ms 空窗段）由 Rust 按主题标记文件定同源色值
+      （浅 #FAFBFC / 深 #0B1116）——纯色窗→splash 零跳变。
 
       状态行双层（DSH identity-target/glyphs 同款）：.boot-status = 权威层
       （同步写入，bootProgress 测试契约 + 屏幕阅读器）；.boot-status-visual =
@@ -56,6 +61,15 @@
     -->
     <style>
       .boot-splash {
+        /* 双主题变量：默认=浅色组；html[data-theme=dark] 覆写深色组（值同源
+           Rust theme_window_bg / 预览台浅色版——改色三处同步） */
+        --sp-bg: #fafbfc;
+        --sp-ink: #173d66;
+        --sp-soft: #6b7a8f;
+        --sp-accent: #2e7a96;
+        --sp-track: #e6eaef;
+        --sp-vignette: rgba(23, 61, 102, 0.12);
+        --sp-noise: 0.03;
         position: fixed;
         inset: 0;
         z-index: 9999;
@@ -63,17 +77,26 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #0b1116;
-        color: #e6edf0;
+        background: var(--sp-bg);
+        color: var(--sp-ink);
         /* 径向暗角（DSH 同参数量级）：氛围靠 vignette + 噪点，不靠渐变 */
-        box-shadow: inset 0 0 110px rgba(3, 8, 17, 0.35);
+        box-shadow: inset 0 0 110px var(--sp-vignette);
+      }
+      html[data-theme="dark"] .boot-splash {
+        --sp-bg: #0b1116;
+        --sp-ink: #e6edf0;
+        --sp-soft: #8497a1;
+        --sp-accent: #82bfd2;
+        --sp-track: #1c2a33;
+        --sp-vignette: rgba(3, 8, 17, 0.35);
+        --sp-noise: 0.045;
       }
       /* 静态噪点：SVG feTurbulence data URI 一层，低透明度、零网络零 JS */
       .boot-splash::after {
         content: "";
         position: absolute;
         inset: 0;
-        opacity: 0.045;
+        opacity: var(--sp-noise);
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
       }
       /* 退场（main.ts 淡出后移除）：app 已就绪在骨架下方，交叉淡入无缝衔接
@@ -91,10 +114,10 @@
         opacity: 0;
         animation: bc-in 400ms ease-out forwards, bc-pulse 2.4s ease-in-out infinite;
       }
-      .bc.tl { top: 26px; left: 30px; border-top: 2px solid #82bfd2; border-left: 2px solid #82bfd2; }
-      .bc.tr { top: 26px; right: 30px; border-top: 2px solid #82bfd2; border-right: 2px solid #82bfd2; animation-delay: 60ms, 300ms; }
-      .bc.bl { bottom: 26px; left: 30px; border-bottom: 2px solid #82bfd2; border-left: 2px solid #82bfd2; animation-delay: 120ms, 600ms; }
-      .bc.br { bottom: 26px; right: 30px; border-bottom: 2px solid #82bfd2; border-right: 2px solid #82bfd2; animation-delay: 180ms, 900ms; }
+      .bc.tl { top: 26px; left: 30px; border-top: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); }
+      .bc.tr { top: 26px; right: 30px; border-top: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 60ms, 300ms; }
+      .bc.bl { bottom: 26px; left: 30px; border-bottom: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); animation-delay: 120ms, 600ms; }
+      .bc.br { bottom: 26px; right: 30px; border-bottom: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 180ms, 900ms; }
       @keyframes bc-in { from { opacity: 0; } to { opacity: 0.55; } }
       @keyframes bc-pulse {
         0%, 100% { opacity: 0.55; }
@@ -111,7 +134,7 @@
       .boot-mark {
         width: 44px;
         height: 44px;
-        color: #82bfd2;
+        color: var(--sp-accent);
         opacity: 0;
         animation: boot-rise 480ms cubic-bezier(0.22, 1, 0.36, 1) 0ms forwards;
       }
@@ -126,7 +149,7 @@
         font-weight: 600;
         letter-spacing: 0.22em;
         text-indent: 0.22em;
-        color: #e6edf0;
+        color: var(--sp-ink);
         opacity: 0;
         animation: boot-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) 80ms forwards;
       }
@@ -134,7 +157,7 @@
         font-family: Consolas, "Cascadia Code", Menlo, monospace;
         font-size: 9px;
         letter-spacing: 0.34em;
-        color: #8497a1;
+        color: var(--sp-soft);
         opacity: 0;
         animation: boot-fade 360ms ease-out 140ms forwards;
       }
@@ -146,7 +169,7 @@
         height: 3px;
         border-radius: 999px;
         overflow: hidden;
-        background: #1c2a33;
+        background: var(--sp-track);
         margin-top: 14px;
         opacity: 0;
         animation: boot-fade 360ms ease-out 180ms forwards;
@@ -156,7 +179,7 @@
         width: 40%;
         height: 100%;
         border-radius: 999px;
-        background: #82bfd2;
+        background: var(--sp-accent);
         animation: boot-slide 1.4s ease-in-out infinite;
       }
       /* 前缘亮线：比填充亮一档，随 width 走（确定性形态下的推进读数） */
@@ -168,7 +191,7 @@
         bottom: 0;
         width: 1.5px;
         background: #eaf6fa;
-        box-shadow: 0 0 6px rgba(130, 191, 210, 0.9);
+        box-shadow: 0 0 6px var(--sp-accent);
       }
       /* 光泽扫过：白色渐变带 1.5s 循环掠过填充体（装饰不是进度——DSH
          「moving cuts are decoration, not progress」同款诚实注释） */
@@ -212,7 +235,7 @@
         font-weight: 500;
         letter-spacing: 0.3em;
         text-indent: 0.3em;
-        color: #e6edf0;
+        color: var(--sp-ink);
         margin-top: 6px;
         opacity: 0;
         animation: boot-fade 360ms ease-out 200ms forwards;
@@ -221,7 +244,7 @@
         font-family: Consolas, "Cascadia Code", Menlo, monospace;
         font-size: 9px;
         letter-spacing: 0.3em;
-        color: #8497a1;
+        color: var(--sp-soft);
         opacity: 0;
         animation: boot-fade 360ms ease-out 220ms forwards;
       }
@@ -233,7 +256,7 @@
         font-family: Consolas, "Cascadia Code", Menlo, monospace;
         font-size: 9px;
         letter-spacing: 0.26em;
-        color: #8497a1;
+        color: var(--sp-soft);
         opacity: 0;
         animation: boot-fade 500ms ease-out 260ms forwards;
       }
@@ -262,6 +285,19 @@
         }
       }
     </style>
+  <!-- splash 主题 anti-FOUC（主题底色秒窗批）：读 localStorage（缺失=浅=首启
+       默认）同步设 data-theme——splash 双主题从第一帧正确，不等 Vue/useTheme。
+       与 useTheme 首启浅 / Rust theme_window_bg / conf 默认浅四处对齐。 -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("icepaw-theme");
+        document.documentElement.setAttribute("data-theme", t === "dark" ? "dark" : "light");
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
   </head>
 
   <body>

@@ -423,6 +423,12 @@ const preferences = {
     }
     catch (err) { throw wrapInvokeError("preferences.testVisionConfig", err); }
   },
+  /** 主题标记文件写入（useTheme.applyTheme 双写之一——窗口创建前 Rust 读它定
+   *  纯色窗底色；见 commands/preferences_cmd.rs THEME_MARKER_FILE 注释） */
+  async setThemeMarker(dark: boolean): Promise<void> {
+    try { await invoke<void>("set_theme_marker", { dark }); }
+    catch (err) { throw wrapInvokeError("preferences.setThemeMarker", err); }
+  },
 };
 
 const mcp = {

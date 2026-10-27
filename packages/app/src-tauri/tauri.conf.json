@@ -22,7 +22,7 @@
         "visible": true,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=52428800",
         "decorations": false,
-        "backgroundColor": "#0B1116"
+        "backgroundColor": "#FAFBFC"
       }
     ],
     "security": {

@@ -3,9 +3,10 @@
 //! - `get_preferences`     读取全部偏好
 //! - `set_preference`      更新单个偏好（key-value）
 //! - `test_vision_config`  视觉读取条目健康检查（设置页逐条「测试」按钮）
+//! - `set_theme_marker`    主题标记文件写入（窗口创建前 Rust 早期读取用）
 
 use sqlx::SqlitePool;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::db::models::{UserPreferences, VisionConfigEntry};
 use crate::db::repo;
@@ -27,6 +28,27 @@ pub async fn set_preference(
     value: String,
 ) -> AppResult<()> {
     repo::preferences::set(pool.inner(), &key, &value).await
+}
+
+/// 主题标记文件名（app_data_dir 下；内容 "dark" / "light"）。
+/// 用途：**窗口创建前** Rust 读它定窗口纯色底色（主题底色秒窗，2026-10-27）。
+/// 为什么不用 preferences 表——DB 打开晚于窗口创建；为什么不用 localStorage——
+/// webview 存在前 Rust 不可读。文件是唯一能在 run(context) 前拿到的真相源。
+pub const THEME_MARKER_FILE: &str = "theme.marker";
+
+/// 写主题标记（useTheme.applyTheme 双写之一；每次写幂等小文件，开销可忽略）。
+#[tauri::command]
+pub fn set_theme_marker(app: AppHandle, dark: bool) -> AppResult<()> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| crate::error::AppError::Tauri(format!("解析 app_data_dir 失败: {e}")))?;
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(
+        dir.join(THEME_MARKER_FILE),
+        if dark { "dark" } else { "light" },
+    )?;
+    Ok(())
 }
 
 /// 1×1 PNG（测试探针图）——视觉链路里最小合法图片字节。

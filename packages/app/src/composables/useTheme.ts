@@ -7,6 +7,7 @@
 
 import { ref, onMounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { bridge } from "../api/bridge";
 
 export function useTheme() {
   const isDark = ref(false);
@@ -15,6 +16,9 @@ export function useTheme() {
     isDark.value = dark;
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     localStorage.setItem("icepaw-theme", dark ? "dark" : "light");
+    // 主题标记双写（主题底色秒窗，2026-10-27）：文件是 Rust 在窗口创建前唯一
+    // 可读的真相源（localStorage 那时不可达）；失败静默——下次切换重写自愈。
+    bridge.preferences.setThemeMarker(dark).catch(() => {});
     // 同步原生窗口主题：让 Windows 标题栏（含最小化/最大化/关闭按钮）跟随应用主题，
     // 走 Tauri 的 ImmersiveDarkMode（setTheme），与上面 DOM 的 data-theme 保持一致。
     // 非 Tauri 环境（纯 web 预览）会 reject，静默忽略。
@@ -50,9 +54,11 @@ export function useTheme() {
 
   onMounted(() => {
     const saved = localStorage.getItem("icepaw-theme");
-    // 默认识别系统偏好
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    applyTheme(saved ? saved === "dark" : prefersDark);
+    // 首启默认浅色（2026-10-27 拍板，四处对齐：此处 / splash anti-FOUC 脚本 /
+    // Rust theme_window_bg marker 缺失分支 / tauri.conf backgroundColor 默认值）。
+    // saved 存在即 applyTheme——挂载自愈顺带补写主题标记文件（旧版本升级用户
+    // localStorage 有值但 marker 缺失，首启纯色窗曾错色一次，此后对齐）。
+    applyTheme(saved ? saved === "dark" : false);
   });
 
   return { isDark, toggleTheme };
