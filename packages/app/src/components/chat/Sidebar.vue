@@ -23,7 +23,7 @@ import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
 import { PanelLeftClose, PanelLeftOpen, MessagesSquare, Settings, Hash, Star, Sparkle } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
-import { reportBootProgress } from "../../utils/bootProgress";
+import { reportBootProgress, rosterAppend } from "../../utils/bootProgress";
 
 const router = useRouter();
 const project = useProjectStore();
@@ -339,7 +339,10 @@ const scopeCoordinator = computed(() => {
 const channelCoordinatorName = computed(() => scopeCoordinator.value?.name ?? "待选举");
 
 onMounted(async () => {
-  agent.load();
+  await agent.load();
+  // AGENTS 就绪名册（启动演出：遮罩划出逐行揭示，agent 数据到达即注入；
+  // splash 退场后 no-op 零成本）
+  rosterAppend(agent.list.map((a) => ({ name: a.name, id: a.id })));
   await project.load();
   await chat.loadConversations();
   // 启动数据链完成（agent 列表 + 项目 + 会话列表）→ 加载页 100%（null-safe：

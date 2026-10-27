@@ -72,6 +72,27 @@ function rollVisualLabel(el: HTMLElement, text: string): void {
 }
 
 /**
+ * AGENTS 就绪名册注入（DSH dsh-lettering 遮罩划出揭示）：
+ * agent.load() 完成后调用——行按到达序 append，CSS --i 递增驱动
+ * 90ms 行间隔揭示（数据一次性到齐，演出上呈现先后关系）。
+ * splash 已退场/行容器不存在时静默 no-op。
+ */
+export function rosterAppend(items: ReadonlyArray<{ name: string; id: string }>): void {
+  const splash = document.getElementById("boot-splash");
+  const host = splash?.querySelector<HTMLElement>(".boot-roster");
+  if (!splash || !host) return;
+  for (const [i, it] of items.entries()) {
+    const row = document.createElement("div");
+    row.className = "roster-row";
+    row.style.setProperty("--i", String(i));
+    const span = document.createElement("span");
+    span.textContent = `${it.name}（${it.id}）`;
+    row.appendChild(span);
+    host.appendChild(row);
+  }
+}
+
+/**
  * 上报启动进度（0-100，钳制单调递增）。label 同时写入 splash 状态行文案。
  */
 export function reportBootProgress(pct: number, label?: string): void {

@@ -826,6 +826,61 @@
       .boot-meta-l { left: 62px; }
       .boot-meta-r { right: 62px; }
 
+      /* ==== AGENTS 就绪名册（DSH dsh-lettering 同款遮罩划出揭示）====
+         遮罩条与文字同色（--sp-soft），origin right、scaleX 1→0 右缘固定向右收缩，
+         文字从左往右浮现。行间隔 90ms（DSH identity 行 .13/.23 递增同量级），
+         每行揭示 360ms。位置右侧偏上（DSH dataFall wx(.86)/wy(.27) 象限）。
+         数据注入：bootProgress.rosterAppend（agent.load() 完成时调用，生产）；
+         预览台由 render 时间轴驱动。bg-word 竖排大字 z 降至底图层。 */
+      .boot-roster {
+        position: absolute;
+        right: 8%;
+        top: 20%;
+        max-width: 34%;
+        text-align: left;
+        font-family: Consolas, "Cascadia Code", Menlo, monospace;
+        z-index: 2;
+      }
+      .roster-title {
+        font-size: 9px;
+        letter-spacing: 0.25em;
+        color: var(--sp-soft);
+        margin-bottom: 6px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid var(--sp-accent);
+        display: inline-block;
+        opacity: 0;
+        animation: boot-fade 360ms ease-out 200ms forwards;
+      }
+      .roster-row {
+        position: relative;
+        overflow: hidden;
+        font-size: 11px;
+        line-height: 1.9;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .roster-row span {
+        color: var(--sp-soft);
+      }
+      .roster-row::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--sp-soft);
+        transform: scaleX(1);
+        transform-origin: right center;
+        animation: roster-reveal 360ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        animation-delay: calc(400ms + var(--i) * 90ms);
+      }
+      @keyframes roster-reveal { to { transform: scaleX(0); } }
+      .boot-letting .boot-roster {
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
+      .bg-word { z-index: 0; }
+
       /* 入场编排：主体件 fade+上浮落定（克制幅度——庄重感来自留白与节奏） */
       @keyframes boot-rise {
         from { opacity: 0; transform: translateY(8px) scale(0.92); }
@@ -929,6 +984,9 @@
       </div>
       <div class="boot-meta boot-meta-l" aria-hidden="true">ICEPAW / BOOT SEQUENCE</div>
       <div class="boot-meta boot-meta-r" aria-hidden="true">LOCAL / OFFLINE-READY</div>
+      <div class="boot-roster" aria-hidden="true">
+        <div class="roster-title">AGENTS</div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
