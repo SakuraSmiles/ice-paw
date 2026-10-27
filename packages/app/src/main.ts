@@ -21,9 +21,9 @@ app.use(router);
 app.mount("#app");
 reportBootProgress(50, "初始化界面");
 
-// 主窗 visible:false（tauri.conf，消灭冷启动「白屏窗口悬着未响应」——窗口迟到
-// 但出现即完整界面）。前端挂载完成 = 首帧可渲染，此处主动 show。后端另有 10s
-// 兜底 show（前端 JS 挂死时窗口仍会出现，问题可见而非「打不开」）。
+// 主窗 visible:true + backgroundColor=splash 深底（2026-10-27 启动时序第一步）：
+// 窗口创建即刻出现（品牌底色），splash 由 webview 并行加载尽早落位。此处 show
+// 幂等保留；后端另有 10s 兜底 show（前端 JS 挂死时的保险）。
 //
 // 启动加载页退场（2026-09-16 Phase2）：boot-splash 是 body 级静态 HTML（index.html
 // 内联样式，先于一切 JS 可见、不被 mount 吞掉），亮窗后从这里接管——退场**双

@@ -19,9 +19,10 @@
         "minWidth": 900,
         "minHeight": 600,
         "dragDropEnabled": false,
-        "visible": false,
+        "visible": true,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=52428800",
-        "decorations": false
+        "decorations": false,
+        "backgroundColor": "#0B1116"
       }
     ],
     "security": {

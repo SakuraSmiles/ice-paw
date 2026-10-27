@@ -274,10 +274,15 @@ pub fn run() {
                 boot_start.elapsed().as_millis()
             );
 
-            // 窗口兜底显示：主窗 visible=false（消灭冷启动白屏窗口），常路径 =
-            // 前端 main.ts 挂载完成即 show。前端 JS 异常（死循环/白屏）时窗口会
-            // 永不可见 = 应用「打不开」——10s 后强制 show，恢复「有窗可见、问题
-            // 可见」的诚实状态（show 幂等，正常路径已可见时无感）。
+            // 窗口可见性策略（2026-10-27 感官升级·启动时序第一步重定）：
+            // 主窗 visible=true + backgroundColor=splash 深底——窗口在创建后
+            // ~0.2-0.4s 即刻出现（品牌底色空窗，tao WM_ERASEBKGND + WebView2
+            // DefaultBackgroundColor 双面同色零白闪），webview 并行加载，
+            // splash 内联 HTML 落位即演出。旧 visible=false「迟到但完整」策略
+            // 是白屏根治期的产物（窗口出现前无任何反馈）；前置代价 = setup 主线
+            // 程同步段（stronghold+DB ~1.5s）期间窗口不可拖动（<5s 无「未响应」
+            // 标签，splash 动画在 webview 独立进程照常播放）——异步化 boot 列为
+            // 后续候选。下方 10s 兜底 show 保留（幂等；前端 JS 挂死时保险）。
             {
                 let win_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
