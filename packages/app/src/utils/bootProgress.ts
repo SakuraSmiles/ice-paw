@@ -81,6 +81,7 @@ export function rosterAppend(items: ReadonlyArray<{ name: string; id: string }>)
   const splash = document.getElementById("boot-splash");
   const host = splash?.querySelector<HTMLElement>(".boot-roster");
   if (!splash || !host) return;
+  host.classList.add("title-on"); // 标题与行同步入场
   const rows: HTMLElement[] = [];
   for (const it of items) {
     const row = document.createElement("div");

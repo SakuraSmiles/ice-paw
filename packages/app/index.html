@@ -849,14 +849,15 @@
         border-bottom: 1px solid var(--sp-accent);
         display: inline-block;
         opacity: 0;
-        animation: roster-title-in 400ms ease-out 200ms forwards;
+        transition: opacity 400ms ease-out;
       }
-      @keyframes roster-title-in { to { opacity: 1; } }
+      .boot-roster.title-on .roster-title { opacity: 1; }
       .roster-row {
         position: relative;
         overflow: hidden;
         font-size: 12px;
         line-height: 1.8;
+        margin-bottom: 8px;
         white-space: nowrap;
         text-overflow: ellipsis;
         max-width: 100%;
