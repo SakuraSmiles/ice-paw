@@ -61,6 +61,11 @@
     -->
     <style>
       .boot-splash {
+        /* 顶部让位 36px（TitleBar 条带，2026-10-27 三键立刻可用确定项）：
+           t<mount 条带=窗口纯色（与底色连续）→ TitleBar 渲染即显示可点
+           （主线程解冻 ≈ mount 时刻，拖拽/双击/三键时序正好接上）。
+           底部 inset 阴影在 36px 边界形成自然分隔线。 */
+        top: 36px; bottom: 0; left: 0; right: 0;
         /* 双主题变量：默认=浅色组；html[data-theme=dark] 覆写深色组（值同源
            Rust theme_window_bg / 预览台浅色版——改色三处同步） */
         --sp-bg: #fafbfc;
@@ -71,7 +76,6 @@
         --sp-vignette: rgba(23, 61, 102, 0.12);
         --sp-noise: 0.03;
         position: fixed;
-        inset: 0;
         z-index: 9999;
         pointer-events: none;
         display: flex;
@@ -154,7 +158,7 @@
         opacity: 0;
         animation: bc-in 400ms ease-out forwards, bc-pulse 2.4s ease-in-out infinite;
       }
-      .bc.tl { top: 26px; left: 30px; border-top: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); }
+      .bc.tl { top: 26px; left: 30px; /* 相对 splash 容器（已让位 36px）= 窗口 62px */ border-top: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); }
       .bc.tr { top: 26px; right: 30px; border-top: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 60ms, 300ms; }
       .bc.bl { bottom: 26px; left: 30px; border-bottom: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); animation-delay: 120ms, 600ms; }
       .bc.br { bottom: 26px; right: 30px; border-bottom: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 180ms, 900ms; }

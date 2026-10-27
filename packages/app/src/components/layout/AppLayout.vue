@@ -87,14 +87,18 @@ watch(
   overflow: hidden;
 }
 
-/* ---- 启动入场 · 三拍生长（形态 A 渐进建设模型）：与 splash 分层让位编舞
-   同帧起跑（icepaw:splash-out）。节拍（ms，与 index.html 编舞时间表三处对齐）：
-   标题栏 t=0（300ms）→ 侧栏 t=150（350ms，自左滑入=「列表长出来」）→
-   消息区 t=300（350ms，自下浮现）。Sidebar/AppMain 的选择器：Sidebar 是
-   子组件根（.sidebar 继承父 scope id 可选中）；.app-main 是本组件元素。 ---- */
-.app-shell:not(.is-entered) > .titlebar {
-  opacity: 0;
-  transform: translateY(-8px);
+/* ---- 启动入场 · 渐进建设（形态 A）：TitleBar 与内容区解耦——
+   TitleBar **不等退场编舞**（三键立刻可见可用确定项，2026-10-27）：mount 即
+   渲染即显示，自带 300ms 入场淡入；splash 已让出顶部 36px 条带，主线程解冻
+   （~0.65s）≈ mount（~1.4s）时刻起可拖可点。内容区两拍仍在分层让位编舞中
+   （icepaw:splash-out 同帧起跑）：侧栏 t=150（自左滑入）→ 消息区 t=300
+   （自下浮现）。Sidebar 是子组件根（.sidebar 继承父 scope id 可选中）。 ---- */
+.titlebar {
+  animation: titlebar-in 300ms var(--ip-ease-out, ease) both;
+}
+@keyframes titlebar-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .app-shell:not(.is-entered) .sidebar {
   opacity: 0;
@@ -104,22 +108,16 @@ watch(
   opacity: 0;
   transform: translateY(6px);
 }
-.titlebar,
 .sidebar,
 .app-main {
   transition:
-    opacity var(--ip-duration-message, 200ms) var(--ip-ease-out, ease),
-    transform var(--ip-duration-message, 200ms) var(--ip-ease-out, ease);
-}
-.titlebar {
-  transition-duration: 300ms;
+    opacity 350ms var(--ip-ease-out, ease),
+    transform 350ms var(--ip-ease-out, ease);
 }
 .sidebar {
-  transition-duration: 350ms;
   transition-delay: 150ms;
 }
 .app-main {
-  transition-duration: 350ms;
   transition-delay: 300ms;
 }
 .app-layout {
