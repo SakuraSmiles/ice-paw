@@ -826,12 +826,11 @@
       .boot-meta-l { left: 62px; }
       .boot-meta-r { right: 62px; }
 
-      /* ==== AGENTS 就绪名册（DSH dsh-lettering 同款遮罩划出揭示）====
-         遮罩条与文字同色（--sp-soft），origin right、scaleX 1→0 右缘固定向右收缩，
-         文字从左往右浮现。行间隔 90ms（DSH identity 行 .13/.23 递增同量级），
-         每行揭示 360ms。位置右侧偏上（DSH dataFall wx(.86)/wy(.27) 象限）。
-         数据注入：bootProgress.rosterAppend（agent.load() 完成时调用，生产）；
-         预览台由 render 时间轴驱动。bg-word 竖排大字 z 降至底图层。 */
+      /* ==== AGENTS 就绪名册 v2（三阶段编排：入场条→揭示→退场覆盖）====
+         每行生命周期：条自左展开入场(180ms) → 条右缘收缩揭示(360ms) →
+         全部完成停 900ms → 逐行条自左覆盖退场(300ms) → 行移除。
+         行入场间隔 110ms；退场间隔 70ms。JS 编排驱动（类切换），
+         参数走 CSS 变量便于调速。标题独立入场（不依赖 boot-fade）。 */
       .boot-roster {
         position: absolute;
         right: 8%;
@@ -845,13 +844,14 @@
         font-size: 10px;
         letter-spacing: 0.25em;
         color: var(--sp-soft);
-        margin-bottom: 6px;
+        margin-bottom: 8px;
         padding-bottom: 4px;
         border-bottom: 1px solid var(--sp-accent);
         display: inline-block;
         opacity: 0;
-        animation: boot-fade 360ms ease-out 200ms forwards;
+        animation: roster-title-in 400ms ease-out 200ms forwards;
       }
+      @keyframes roster-title-in { to { opacity: 1; } }
       .roster-row {
         position: relative;
         overflow: hidden;
@@ -860,21 +860,36 @@
         white-space: nowrap;
         text-overflow: ellipsis;
         max-width: 100%;
+        opacity: 0;             /* 行整体随入场出现 */
       }
       .roster-row span {
         color: var(--sp-soft);
       }
-      .roster-row::after {
-        content: "";
+      /* 遮挡条：三阶段同一元素，origin 由类切换（left 入场/退场覆盖，right 揭示） */
+      .roster-row i {
         position: absolute;
         inset: 0;
         background: var(--sp-soft);
-        transform: scaleX(1);
-        transform-origin: right center;
-        animation: roster-reveal 360ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
-        animation-delay: calc(400ms + var(--i) * 90ms);
+        transform: scaleX(0);
+        transform-origin: left center;
       }
-      @keyframes roster-reveal { to { transform: scaleX(0); } }
+      .roster-row.in { opacity: 1; }
+      .roster-row.in i {
+        animation: roster-bar-in 180ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      @keyframes roster-bar-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+      .roster-row.reveal i {
+        transform-origin: right center;
+        animation: roster-bar-out 360ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      @keyframes roster-bar-out { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+      .roster-row.exit i {
+        transform-origin: left center;
+        animation: roster-bar-in 300ms cubic-bezier(0.4, 0, 1, 1) forwards;
+      }
+      /* 行退场后淡出（条覆盖完文字再整体透明） */
+      .roster-row.gone { opacity: 0; transition: opacity 60ms linear; }
+      /* 容器退场兜底：随氛围层同拍（生产 boot-letting） */
       .boot-letting .boot-roster {
         opacity: 0;
         transition: opacity 450ms ease 350ms;

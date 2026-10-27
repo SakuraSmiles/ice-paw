@@ -81,14 +81,37 @@ export function rosterAppend(items: ReadonlyArray<{ name: string; id: string }>)
   const splash = document.getElementById("boot-splash");
   const host = splash?.querySelector<HTMLElement>(".boot-roster");
   if (!splash || !host) return;
-  for (const [i, it] of items.entries()) {
+  const rows: HTMLElement[] = [];
+  for (const it of items) {
     const row = document.createElement("div");
     row.className = "roster-row";
-    row.style.setProperty("--i", String(i));
     const span = document.createElement("span");
     span.textContent = `${it.name}（${it.id}）`;
-    row.appendChild(span);
+    const bar = document.createElement("i");
+    row.append(span, bar);
     host.appendChild(row);
+    rows.push(row);
+  }
+  // 三阶段编排（与预览台同参数）：入场 110ms/行 → 揭示 +220ms → 停留 900ms → 退场覆盖 70ms/行 → 移除
+  const STEP = 110, IN_TO_REVEAL = 220, HOLD = 900, EXIT_STEP = 70;
+  const allDone = rows.length * STEP + 580;
+  rows.forEach((row, i) => {
+    setTimeout(() => row.classList.add("in"), i * STEP);
+    setTimeout(() => row.classList.add("reveal"), i * STEP + IN_TO_REVEAL);
+  });
+  rows.forEach((row, i) => {
+    const exitAt = allDone + HOLD + i * EXIT_STEP;
+    setTimeout(() => row.classList.add("exit"), exitAt);
+    setTimeout(() => row.classList.add("gone"), exitAt + 300);
+    setTimeout(() => row.remove(), exitAt + 380);
+  });
+  const title = host.querySelector<HTMLElement>(".roster-title");
+  if (title) {
+    setTimeout(() => {
+      title.style.transition = "opacity 300ms";
+      title.style.opacity = "0";
+    }, allDone + HOLD);
+    setTimeout(() => title.remove(), allDone + HOLD + 400);
   }
 }
 
