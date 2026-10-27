@@ -1,27 +1,3 @@
-      /* ==== 装饰环场（SVG 版：circle + stroke-dasharray，零 conic/mask 依赖）====
-         conic-gradient/mask 在部分 WebView2/浏览器环境不渲染（2026-10-27 生产实案：
-         headless 环境正常、用户环境全灭——同文件两种结果）。SVG stroke 方案
-         任何 Chromium 都画。7 层同心：刻度环→实圆→实圆+亮弧→虚线→实圆→
-         点线→实圆+墨弧→内容界圆。旋转 = CSS transform（transform-box 充填框）。 */
-      .boot-rings {
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 62vmin;
-        height: 62vmin;
-        transform: translate(-50%, -50%);
-        pointer-events: none;
-      }
-      .boot-rings svg { width: 100%; height: 100%; display: block; }
-      .spin-slow { animation: ring-spin 75s linear infinite; }
-      .spin-hero { animation: ring-spin 20s linear infinite; }
-      .spin-rev-40 { animation: ring-spin-r 40s linear infinite; }
-      .spin-rev-30 { animation: ring-spin-r 30s linear infinite; }
-      .spin-14 { animation: ring-spin 14s linear infinite; }
-      .boot-rings .rot { transform-box: fill-box; transform-origin: center; }
-      @keyframes ring-spin { to { transform: rotate(360deg); } }
-      @keyframes ring-spin-r { to { transform: rotate(-360deg); } }
-
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -418,10 +394,7 @@
           animation: none;
           opacity: 1;
         }
-        .boot-rings .spin-slow, .boot-rings .spin-hero,
-        .boot-rings .spin-rev-40, .boot-rings .spin-rev-30, .boot-rings .spin-14 {
-          animation: none;
-        }
+        .boot-rings .ring { animation: none; }
       }
     </style>
   <!-- splash 主题 anti-FOUC（主题底色秒窗批）：读 localStorage（缺失=浅=首启
@@ -447,36 +420,16 @@
       <i class="bc bl" aria-hidden="true"></i>
       <i class="bc br" aria-hidden="true"></i>
       <div class="boot-rings" aria-hidden="true">
-        <svg viewBox="0 0 200 200">
-          <!-- r96 密刻度环（dasharray 0.7/4.4 ≈ 刻度带），75s 正转 -->
-          <g class="rot spin-slow">
-            <circle cx="100" cy="100" r="96" fill="none" stroke="var(--sp-soft)" stroke-width="1.6" opacity="0.8" stroke-dasharray="0.7 4.4" />
-          </g>
-          <!-- r88 实圆 1（静止） -->
-          <circle cx="100" cy="100" r="88" fill="none" stroke="var(--sp-soft)" stroke-width="2" opacity="0.85" />
-          <!-- r80 实圆 2（静止）+ accent 亮弧贴环（弧长 28，20s 正转） -->
-          <circle cx="100" cy="100" r="80" fill="none" stroke="var(--sp-soft)" stroke-width="2" opacity="0.7" />
-          <g class="rot spin-hero">
-            <circle cx="100" cy="100" r="80" fill="none" stroke="var(--sp-accent)" stroke-width="3.5" stroke-dasharray="28 473.4" stroke-linecap="round" />
-          </g>
-          <!-- r72 虚线圆（40s 反转） -->
-          <g class="rot spin-rev-40">
-            <circle cx="100" cy="100" r="72" fill="none" stroke="var(--sp-soft)" stroke-width="1.6" opacity="0.85" stroke-dasharray="5 4" />
-          </g>
-          <!-- r64 实圆 3（静止） -->
-          <circle cx="100" cy="100" r="64" fill="none" stroke="var(--sp-soft)" stroke-width="2" opacity="0.75" />
-          <!-- r56 点线圆（30s 反转） -->
-          <g class="rot spin-rev-30">
-            <circle cx="100" cy="100" r="56" fill="none" stroke="var(--sp-soft)" stroke-width="2.2" opacity="0.9" stroke-dasharray="0.1 8" stroke-linecap="round" />
-          </g>
-          <!-- r48 实圆 4（静止）+ 墨弧贴环（两段各 24，14s 正转） -->
-          <circle cx="100" cy="100" r="48" fill="none" stroke="var(--sp-soft)" stroke-width="2" opacity="0.7" />
-          <g class="rot spin-14">
-            <circle cx="100" cy="100" r="48" fill="none" stroke="var(--sp-ink)" stroke-width="2.6" opacity="0.85" stroke-dasharray="24 51.6 24 202.4" />
-          </g>
-          <!-- r40 内容界圆（静止） -->
-          <circle cx="100" cy="100" r="40" fill="none" stroke="var(--sp-track)" stroke-width="1.6" />
-        </svg>
+        <div class="ring ring-ticks"></div>
+        <div class="ring ring-c1"></div>
+        <div class="ring ring-c2"></div>
+        <div class="ring ring-hero"></div>
+        <div class="ring ring-dash"></div>
+        <div class="ring ring-c3"></div>
+        <div class="ring ring-dots"></div>
+        <div class="ring ring-c4"></div>
+        <div class="ring ring-inner"></div>
+        <div class="ring ring-c5"></div>
       </div>
       <div class="boot-center">
         <div class="boot-mark" aria-hidden="true">
