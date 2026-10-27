@@ -66,7 +66,7 @@ onUnmounted(() => {
     data-tauri-drag-region
     aria-label="窗口栏"
   >
-    <span class="tb-brand">IcePaw</span>
+    <!-- 左侧无内容（2026-10-27 用户拍板去字标）：整条栏体空白区皆拖拽区 -->
     <div class="tb-actions" role="group" aria-label="窗口控制">
       <button class="tb-btn" type="button" aria-label="最小化" @click="onMinimize">
         <Minus :size="14" :stroke-width="1.75" />
@@ -89,31 +89,21 @@ onUnmounted(() => {
 
 <style scoped>
 /* 栏体 = 侧栏顶缘的视觉延续（同底色），全宽压在 Sidebar + 内容区之上，
-   呈「框」而非「横带」——一体感的关键。高度 36px 贴 Discord/Slack 惯例。 */
+   呈「框」而非「横带」——一体感的关键。高度 36px 贴 Discord/Slack 惯例。
+   左侧恒空（去字标拍板）：按钮区右贴，其余整条为拖拽区。 */
 .titlebar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   height: 36px;
   flex-shrink: 0;
-  padding-left: var(--ip-spacing-4);
   background: var(--ip-color-bg-primary);
   border-bottom: 1px solid var(--ip-color-border-default);
   user-select: none;
 }
 
 /* 失焦降对比（不消失——窗口控制恒可见是平台惯例） */
-.titlebar:not(.focused) .tb-brand { opacity: 0.5; }
 .titlebar:not(.focused) .tb-btn { color: var(--ip-color-text-tertiary); }
-
-.tb-brand {
-  font-family: var(--ip-font-display);
-  font-size: var(--ip-text-caption);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--ip-color-text-secondary);
-  pointer-events: none; /* 品牌字不吞拖拽区事件——拖拽由父级 drag-region 承接 */
-}
 
 .tb-actions {
   display: flex;
