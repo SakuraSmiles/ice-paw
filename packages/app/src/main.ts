@@ -29,7 +29,7 @@ reportBootProgress(50, "初始化界面");
 // 内联样式，先于一切 JS 可见、不被 mount 吞掉），亮窗后从这里接管——退场**双
 // 条件**：真实就绪（Sidebar 初始数据完成 → bootProgress 上报 100 → dispatch
 // 'icepaw:boot-ready'）且从亮窗起**最少展示 2.5s**（用户拍板 1s 太短），随后挂
-// .boot-splash-out 交叉淡出 320ms 并移除节点；~10s 超时无条件退场兜底（上报链
+// .boot-letting 分层让位编舞（~950ms，时间表见 index.html）并移除节点；~10s 超时无条件退场兜底（上报链
 // 断裂/极端慢机不让骨架滞留）。JS 挂死时此回调不执行、骨架留存 = 诚实的
 // 「启动中」而非空白窗。
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -47,11 +47,12 @@ requestAnimationFrame(() => {
     finished = true;
     const splash = document.getElementById("boot-splash");
     if (!splash) return;
-    splash.classList.add("boot-splash-out");
-    // 入场编排信号（感官升级批 2）：AppLayout 的两区 stagger 与本淡出**同帧**
-    // 开始——挂 boot-ready 会在不透明骨架背后提前播完，淡出时 stagger 已结束。
+    // 分层让位编舞（形态 A）：单一状态类驱动 splash 各层错峰退场（时间表见
+    // index.html 样式区注释），与 AppLayout 三拍入场（标题栏/侧栏/消息区）
+    // 同帧起跑——布局逐块生长，不再整体切屏。
+    splash.classList.add("boot-letting");
     window.dispatchEvent(new CustomEvent("icepaw:splash-out"));
-    window.setTimeout(() => splash.remove(), 360);
+    window.setTimeout(() => splash.remove(), 950); // 编舞全长 + 余量（三处对齐）
   };
   // 就绪事件先到 → 等满最少展示时长再退场；先到的是时限 → 直接退（就绪事件
   // 迟到时 finished 已置位，天然幂等）
