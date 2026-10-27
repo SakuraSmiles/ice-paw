@@ -362,7 +362,46 @@
       .boot-rings .seal .cal.c2 { transform: rotate(120deg); }
       .boot-rings .seal .cal.c3 { transform: rotate(240deg); }
       html[data-theme="light"] .boot-rings .seal .seal-l1 { opacity: 0.55; }
-      html[data-theme="light"] .boot-rings .seal .seal-l0,
+
+      /* ==== 生长动画（DSH engraving/locking 语言：环的构建 = 真实加载进度）====
+         --boot-prog（0~1）由 bootProgress 驱动（index.html 内联脚本 + main.ts 接线）。
+         青主弧弧长 14°→186°；刻度/12点「暗全量 + 亮层扇形揭示」双层。 */
+      .boot-splash { --boot-prog: 0; }
+      .boot-rings .arc-hero {
+        background: conic-gradient(from 88.8deg,
+          var(--sp-accent) 0deg calc(14deg + var(--boot-prog) * 172deg),
+          transparent calc(14deg + var(--boot-prog) * 172deg) 360deg);
+      }
+      /* 刻度/点 全量层降为暗淡底 */
+      .boot-rings .tick-minor, .boot-rings .tick-major,
+      .boot-rings .pips-minor, .boot-rings .pips-major { opacity: 0.16; animation: none; }
+      /* 亮层：同几何，conic 扇形 mask 按进度揭示（自 conic 0°=上 顺时针） */
+      .boot-rings .tick-minor.lit, .boot-rings .tick-major.lit,
+      .boot-rings .pips-minor.lit, .boot-rings .pips-major.lit {
+        opacity: 1;
+        -webkit-mask:
+          radial-gradient(closest-side, var(--tick-mask, transparent calc(100% - 1.32vmin), black calc(100% - 1.3vmin))),
+          conic-gradient(from 0deg, black 0deg calc(var(--boot-prog) * 360deg), transparent calc(var(--boot-prog) * 360deg) 360deg);
+                mask:
+          radial-gradient(closest-side, var(--tick-mask, transparent calc(100% - 1.32vmin), black calc(100% - 1.3vmin))),
+          conic-gradient(from 0deg, black 0deg calc(var(--boot-prog) * 360deg), transparent calc(var(--boot-prog) * 360deg) 360deg);
+        -webkit-mask-composite: source-in;
+                mask-composite: intersect;
+      }
+      /* 亮层各自的径向环带宽与原层一致（用局部变量传递） */
+      .boot-rings .tick-minor.lit { --tick-mask: transparent calc(100% - 0.42vmin), black calc(100% - 0.4vmin); }
+      .boot-rings .tick-major.lit { --tick-mask: transparent calc(100% - 1.32vmin), black calc(100% - 1.3vmin); }
+      .boot-rings .pips-minor.lit { --tick-mask: transparent calc(100% - 0.05vmin), black calc(100% - 0.04vmin); }
+      .boot-rings .pips-major.lit { --tick-mask: transparent calc(100% - 0.11vmin), black calc(100% - 0.1vmin); }
+      /* 就绪脉冲：--boot-prog 到 1 时 JS 加 .ready，全环一次呼吸 */
+      .boot-rings.ready .arc-outer,
+      .boot-rings.ready .seal-l1 { animation: ring-pulse 600ms ease-out 1; }
+      @keyframes ring-pulse {
+        0% { filter: brightness(1); }
+        35% { filter: brightness(1.6); }
+        100% { filter: brightness(1); }
+      }
+      html[data-theme="light"] .boot-rings .arc-heavy { opacity: 0.3; }      html[data-theme="light"] .boot-rings .seal .seal-l0,
       html[data-theme="light"] .boot-rings .seal .seal-l2 { opacity: 0.4; }
 
       /* ==== sealMechanism 1:1 复刻（源码 235-263 行，与 reticle 同屏叠加）====
@@ -839,12 +878,16 @@
       <div class="boot-rings" aria-hidden="true">
         <div class="ring arc-out6"></div>
         <div class="ring tick-minor"></div>
+        <div class="ring tick-minor lit"></div>
         <div class="ring tick-major"></div>
+        <div class="ring tick-major lit"></div>
         <div class="ring arc-outer"></div>
         <div class="ring ring-fine"></div>
         <div class="ring arc-orbit"></div>
         <div class="ring pips-minor"></div>
+        <div class="ring pips-minor lit"></div>
         <div class="ring pips-major"></div>
+        <div class="ring pips-major lit"></div>
         <div class="ring arc-hero"></div>
         <div class="ring arc-heavy"></div>
         <div class="caliper-l"></div>

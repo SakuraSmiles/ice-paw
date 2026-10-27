@@ -95,6 +95,14 @@ export function reportBootProgress(pct: number, label?: string): void {
   // 英文阶段小字（boot-sub 行）
   const sub = splash.querySelector<HTMLElement>(".boot-sub");
   if (sub) sub.textContent = stageEnOf(next);
+  // 生长动画驱动（DSH engraving/locking）：--boot-prog 0~1 → 环场弧长/刻度揭示
+  if (splash) {
+    splash.style.setProperty("--boot-prog", String(next / 100));
+    const rings = splash.querySelector(".boot-rings");
+    if (rings && next >= 100 && !rings.classList.contains("ready")) {
+      rings.classList.add("ready"); // 就绪脉冲一次
+    }
+  }
   if (current >= 100 && !readyDispatched) {
     readyDispatched = true;
     window.dispatchEvent(new CustomEvent("icepaw:boot-ready"));
