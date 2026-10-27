@@ -83,7 +83,23 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // 窗口状态记忆（尺寸/位置/最大化跨启动保持）：restore 发生在插件加载阶段，
         // 早于 setup —— setup 里的「首启动态默认尺寸」只在无保存状态时生效。
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // 感官升级批 3（2026-10-27 双标题栏生产实案）：**装饰态不进
+                // 「窗口状态记忆」**——窗口装饰由 tauri.conf 的 decorations:false
+                // 唯一决定（自绘 TitleBar 承接）。插件默认 StateFlags::all() 含
+                // DECORATIONS，历史装饰窗时代状态文件里存的 decorated=true 会在
+                // 启动恢复时 set_decorations(true) 盖掉配置 → 系统栏+自绘栏双开。
+                // 其余位（SIZE/POSITION/MAXIMIZED/VISIBLE/FULLSCREEN）维持默认。
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::VISIBLE
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                )
+                .build(),
+        )
         // 聊天全局状态（CancellationToken 注册表）。屏幕通道写令牌的活性回收
         //（§4.3）共用本注册表：同柄 Clone 注入，is_streaming 只读查询。
         .manage({
