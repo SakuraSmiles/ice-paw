@@ -888,8 +888,9 @@
         transform-origin: left center;
         animation: roster-bar-in 300ms cubic-bezier(0.4, 0, 1, 1) forwards;
       }
-      /* 行退场后淡出（条覆盖完文字再整体透明） */
-      .roster-row.gone { opacity: 0; transition: opacity 60ms linear; }
+      /* 行退场：覆盖完后隐藏但保留占位（下面行不往上顶）——
+         整个名册随 splash 分层让位统一退场 */
+      .roster-row.gone { opacity: 0; transition: opacity 200ms ease; }
       /* 容器退场兜底：随氛围层同拍（生产 boot-letting） */
       .boot-letting .boot-roster {
         opacity: 0;

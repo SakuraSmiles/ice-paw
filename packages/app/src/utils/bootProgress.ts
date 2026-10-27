@@ -104,7 +104,6 @@ export function rosterAppend(items: ReadonlyArray<{ name: string; id: string }>)
     const exitAt = allDone + HOLD + i * EXIT_STEP;
     setTimeout(() => row.classList.add("exit"), exitAt);
     setTimeout(() => row.classList.add("gone"), exitAt + 300);
-    setTimeout(() => row.remove(), exitAt + 380);
   });
   const title = host.querySelector<HTMLElement>(".roster-title");
   if (title) {
@@ -112,7 +111,7 @@ export function rosterAppend(items: ReadonlyArray<{ name: string; id: string }>)
       title.style.transition = "opacity 300ms";
       title.style.opacity = "0";
     }, allDone + HOLD);
-    setTimeout(() => title.remove(), allDone + HOLD + 400);
+    
   }
 }
 
