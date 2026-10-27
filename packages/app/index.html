@@ -149,6 +149,11 @@
         opacity: 0;
         transition: opacity 450ms ease 350ms;
       }
+      /* 环场随氛围层同拍退场（内部各环的 spin 动画不写 opacity，可安全过渡） */
+      .boot-letting .boot-rings {
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
 
       /* ---- 四角 L 角标（registration marks，DSH 同源）：2.4s 周期错峰脉冲 ---- */
       .bc {
@@ -175,6 +180,64 @@
         align-items: center;
         gap: 12px;
       }
+
+      /* ==== 装饰环场（2026-10-27 v7 定形：多圆环 = 连续整圆为主体）====
+         62vmin 场内 7 层半径梯度：外刻度环 → 实圆×2（accent 亮弧贴环游走）
+         → 虚线圆 → 实圆 → 点线圆 → 实圆（墨弧贴环）→ 内容界圆。
+         弧段是贴环点缀非层次主体；reduced-motion 下旋转停（环线仍在）。 */
+      .boot-rings {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 62vmin;
+        height: 62vmin;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      }
+      .boot-rings .ring { position: absolute; inset: 0; border-radius: 50%; }
+      .ring-ticks {
+        background: repeating-conic-gradient(var(--sp-soft) 0deg 0.8deg, transparent 0.8deg 5.2deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
+                mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
+        opacity: 0.8;
+        animation: ring-spin 75s linear infinite;
+      }
+      .ring-c1 { inset: 8%; border: 2px solid var(--sp-soft); opacity: 0.85; }
+      .ring-c2 { inset: 16%; border: 2px solid var(--sp-soft); opacity: 0.7; }
+      .ring-hero {
+        inset: 15.4%;
+        background: conic-gradient(from 300deg, var(--sp-accent) 0deg 16deg, transparent 16deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3.5px), black calc(100% - 3px));
+                mask: radial-gradient(closest-side, transparent calc(100% - 3.5px), black calc(100% - 3px));
+        animation: ring-spin 20s linear infinite;
+      }
+      .ring-dash {
+        inset: 24%;
+        border: 1.5px dashed var(--sp-soft);
+        opacity: 0.85;
+        animation: ring-spin-r 40s linear infinite;
+      }
+      .ring-c3 { inset: 32%; border: 2px solid var(--sp-soft); opacity: 0.75; }
+      .ring-dots {
+        inset: 40%;
+        border: 2px dotted var(--sp-soft);
+        opacity: 0.9;
+        animation: ring-spin-r 30s linear infinite;
+      }
+      .ring-c4 { inset: 48%; border: 2px solid var(--sp-soft); opacity: 0.7; }
+      .ring-inner {
+        inset: 47.4%;
+        background: conic-gradient(from 40deg,
+          var(--sp-ink) 0deg 50deg, transparent 50deg 180deg,
+          var(--sp-ink) 180deg 230deg, transparent 230deg 360deg);
+        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 2.5px), black calc(100% - 2px));
+                mask: radial-gradient(closest-side, transparent calc(100% - 2.5px), black calc(100% - 2px));
+        opacity: 0.85;
+        animation: ring-spin 14s linear infinite;
+      }
+      .ring-c5 { inset: 56%; border: 1.5px solid var(--sp-track); }
+      @keyframes ring-spin { to { transform: rotate(360deg); } }
+      @keyframes ring-spin-r { to { transform: rotate(-360deg); } }
       .boot-mark {
         width: 44px;
         height: 44px;
@@ -331,6 +394,7 @@
           animation: none;
           opacity: 1;
         }
+        .boot-rings .ring { animation: none; }
       }
     </style>
   <!-- splash 主题 anti-FOUC（主题底色秒窗批）：读 localStorage（缺失=浅=首启
@@ -355,6 +419,18 @@
       <i class="bc tr" aria-hidden="true"></i>
       <i class="bc bl" aria-hidden="true"></i>
       <i class="bc br" aria-hidden="true"></i>
+      <div class="boot-rings" aria-hidden="true">
+        <div class="ring ring-ticks"></div>
+        <div class="ring ring-c1"></div>
+        <div class="ring ring-c2"></div>
+        <div class="ring ring-hero"></div>
+        <div class="ring ring-dash"></div>
+        <div class="ring ring-c3"></div>
+        <div class="ring ring-dots"></div>
+        <div class="ring ring-c4"></div>
+        <div class="ring ring-inner"></div>
+        <div class="ring ring-c5"></div>
+      </div>
       <div class="boot-center">
         <div class="boot-mark" aria-hidden="true">
           <!-- Lucide paw-print（ISC）同源 path：与 UI 图标语言同一体系 -->
