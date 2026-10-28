@@ -72,47 +72,142 @@ function rollVisualLabel(el: HTMLElement, text: string): void {
 }
 
 /**
- * AGENTS 就绪名册注入（DSH dsh-lettering 遮罩划出揭示）：
- * agent.load() 完成后调用——行按到达序 append，CSS --i 递增驱动
- * 90ms 行间隔揭示（数据一次性到齐，演出上呈现先后关系）。
- * splash 已退场/行容器不存在时静默 no-op。
+ * 就绪名册注入（DSH dsh-lettering 遮罩划出揭示）：按组把已到达的数据逐行
+ * append（行按到达序呈现，数据一次性到齐）。三组（agents/projects/sessions）
+ * 各自独立状态行 + 列表：加载态九宫格 → 结果态环形 check，文字遮罩划出换结果。
+ * **顺序编排**：一组完整演完（含换字遮罩解除）下一组才登场，非三组重叠；组演
+ * 完移除行占位（标题保留为常驻标签），下一组紧跟不留空白。
+ * splash 已退场/组容器不存在时静默 no-op。
  */
-export function rosterAppend(items: ReadonlyArray<{ name: string; id: string }>): void {
+const ROSTER_DONE_TEXT: Readonly<Record<string, (n: number) => string>> = {
+  agents: (n) => `${n} 名智能体已上线`,
+  projects: (n) => `${n} 项目解析完成`,
+  sessions: () => "会话数据恢复完成",
+};
+
+// 组间顺序编排（2026-10-27）：三组（agents→projects→sessions）演出时间轴**串行
+// 全完成**——下一组在上一组「状态行换结果 + 换字遮罩解除（演出彻底完成）」之后
+// 才起跑，实现「一组完整演完，下一组才登场」而非重叠。节奏已压缩（停留 900→250、
+// 退场余量收紧、组间停顿 150→120），每组内容上限 8 行，整场约 4~7s。演完 → 停顿
+// ROSTER_BEAT_MS → 中心「欢迎使用」同槽换字（打字机 ~0.5s）→ 欢迎后停留 1.2s 再退场
+// （rosterRemainingMs 全计入）。组演完统一移除行占位，下一
+// 组紧跟（标题 AGENT/PROJECTS/SESSIONS 保留为常驻标签）。agents 恒为序列头（Sidebar
+// 固定调用序），在此重置舞台时钟，保证每次启动/每个测试都从 0 起跑、时序确定。
+const GROUP_GAP = 120; // 上一组演完后到下一组入场的停顿（一 beat）
+const ROSTER_BEAT_MS = 500; // 名册演完到「欢迎使用」起演的停顿（名册先、欢迎后的清晰分隔）
+const CENTER_SETTLE_MS = 500; // 「欢迎使用/WELCOME」同槽换字打字机演出预算（淡入 200 + 打字 320ms，2026-10-28 提速与其他入场同速带）
+const WELCOME_HOLD_MS = 1200; // 欢迎展示完后到退场的停留（用户拍板 1.2s，随后随整体淡出）
+let rosterClock = 0;
+let rosterEndAt = 0;    // 名册最后一组演出彻底结束的绝对时刻（performance.now() 域）
+let settleTimer = 0;    // 中心收尾定时器（clear+reschedule，最终落在最后一组真正演完时刻）
+let rosterDoneCb: (() => void) | null = null; // 名册演完回调（Sidebar 借此推迟「就绪」100% 上报）
+let rosterDoneTimer = 0; // 名册演完回调定时器（clear+reschedule，与 settleTimer 同落在最后一组演完时刻）
+
+/** 注册「名册全部演完」回调——Sidebar 用它把「就绪」100% 上报推迟到名册最后一组
+ *  真正演完（而非三组数据刚注入时），避免中心「就绪/欢迎」在名册仍演出时提前出现
+ *  （总/子先后关系颠倒）。单槽赋值（重复注册只保留最后一次，Sidebar 挂载即一次）。 */
+export function onRosterDone(cb: () => void): void {
+  rosterDoneCb = cb;
+}
+
+export function rosterAppend(groupId: string, labels: readonly string[]): void {
   const splash = document.getElementById("boot-splash");
-  const host = splash?.querySelector<HTMLElement>(".boot-roster");
+  const host = splash?.querySelector<HTMLElement>(`#roster-${groupId}`);
   if (!splash || !host) return;
-  host.classList.add("title-on"); // 标题与行同步入场
+  if (groupId === "agents") {
+    rosterClock = 0; // 序列头重置
+    rosterEndAt = 0;
+  }
+
+  const start = rosterClock; // 本组起点 = 前面所有组累计偏移
   const rows: HTMLElement[] = [];
-  for (const it of items) {
+  for (const label of labels) {
     const row = document.createElement("div");
     row.className = "roster-row";
     const span = document.createElement("span");
-    span.textContent = `${it.name}（${it.id}）`;
+    span.textContent = label;
     const bar = document.createElement("i");
     row.append(span, bar);
     host.appendChild(row);
     rows.push(row);
   }
-  // 三阶段编排（与预览台同参数）：入场 110ms/行 → 揭示 +220ms → 停留 900ms → 退场覆盖 70ms/行 → 移除
-  const STEP = 110, IN_TO_REVEAL = 220, HOLD = 900, EXIT_STEP = 70;
-  const allDone = rows.length * STEP + 580;
+  // 三阶段编排（与预览台同参数）：入场 80ms/行 → 揭示 +200ms → 停留 250ms →
+  // 退场覆盖 60ms/行 → 隐藏后组演完统一移除占位（下一组紧跟、不留空白）。
+  const STEP = 80, IN_TO_REVEAL = 200, HOLD = 250, EXIT_STEP = 60;
+  const allDone = rows.length * STEP + 250;
+  const statusAt = start + allDone + HOLD + rows.length * EXIT_STEP + 300;
+  // 本组演出彻底结束 = 换字遮罩解除（statusAt + 320）；下一组从此起跑（+ 停顿）。
+  // 记录绝对结束时刻供启动页「等名册演完再退场」使用。
+  // ⚠️ 用「本次调用的 performance.now() + 相对 groupEnd」而非「序列头基准 + 累计
+  // groupEnd」：三组 rosterAppend 之间夹着 Sidebar 的 await（project.load /
+  // chat.loadConversations 真实耗时），序列头基准会把这些真实等待漏算，导致名册
+  // 演完时刻被低估 → 中心收尾提前、总/子先后关系颠倒（production 实案）。
+  const groupEnd = statusAt + 320;
+  rosterClock = groupEnd + GROUP_GAP;
+  rosterEndAt = Math.max(rosterEndAt, performance.now() + groupEnd);
+
+  // 中心收尾：名册最后一组演完 + 停顿（ROSTER_BEAT_MS）后触发「欢迎使用」同槽换字（打字机 + 副题 WELCOME）
+  // （clear+reschedule 用单调递增的 rosterEndAt 重排，最终定时器落在最后一组真正演完的
+  // 绝对时刻，而非每组各响一次）。
+  window.clearTimeout(settleTimer);
+  const center = splash.querySelector<HTMLElement>(".boot-center");
+  if (center) {
+    settleTimer = window.setTimeout(
+      () => center.classList.add("welcoming"),
+      Math.max(0, rosterEndAt + ROSTER_BEAT_MS - performance.now()),
+    );
+  }
+  // 名册演完回调：与 settleTimer 同源重排，落在最后一组真正演完时刻（无停顿——「就绪」
+  // 是名册演完的第一反应，欢迎语再隔一拍登场）。
+  window.clearTimeout(rosterDoneTimer);
+  if (rosterDoneCb) {
+    rosterDoneTimer = window.setTimeout(
+      () => rosterDoneCb?.(),
+      Math.max(0, rosterEndAt - performance.now()),
+    );
+  }
+
+  // 组标题 + 状态行也按组起点顺序点亮（不是三组同时点亮）
+  setTimeout(() => host.classList.add("title-on"), start);
+  const statusEl = host.querySelector<HTMLElement>(".roster-status");
+  if (statusEl) {
+    setTimeout(() => statusEl.classList.add("on"), start);
+    setTimeout(() => {
+      statusEl.classList.add("done"); // 持久：九宫格→done 图标（切换后不退）
+      statusEl.classList.add("swapping"); // 临时：文字遮罩动画（cover 200ms 盖旧文字）
+      const textEl = statusEl.querySelector<HTMLElement>(".status-text");
+      // 遮罩 cover 200ms 盖满旧文字后才换新文字（与 CSS roster-status-cover 时长对齐），
+      // 之后 reveal 揭开露出结果文案——避免新文字在遮罩覆盖前闪现。
+      setTimeout(() => {
+        if (textEl) textEl.textContent = ROSTER_DONE_TEXT[groupId](labels.length);
+      }, 200);
+      setTimeout(() => statusEl.classList.remove("swapping"), 320);
+    }, statusAt);
+  }
+
   rows.forEach((row, i) => {
-    setTimeout(() => row.classList.add("in"), i * STEP);
-    setTimeout(() => row.classList.add("reveal"), i * STEP + IN_TO_REVEAL);
+    setTimeout(() => row.classList.add("in"), start + i * STEP);
+    setTimeout(() => row.classList.add("reveal"), start + i * STEP + IN_TO_REVEAL);
   });
   rows.forEach((row, i) => {
-    const exitAt = allDone + HOLD + i * EXIT_STEP;
+    const exitAt = start + allDone + HOLD + i * EXIT_STEP;
     setTimeout(() => row.classList.add("exit"), exitAt);
     setTimeout(() => row.classList.add("gone"), exitAt + 300);
   });
-  const title = host.querySelector<HTMLElement>(".roster-title");
-  if (title) {
-    setTimeout(() => {
-      title.style.transition = "opacity 300ms";
-      title.style.opacity = "0";
-    }, allDone + HOLD);
-    
-  }
+
+  // 组演完：一次性移除行占位（display:none）——下一组紧跟、不留第一组全量空白。
+  // 全完成顺序下下一组此刻尚未点亮（opacity 0），移除占位不可见、不顶行。
+  setTimeout(() => host.classList.add("collapsed"), statusAt);
+}
+
+/** 名册演完 + 停顿 +「欢迎使用」揭示 + 欢迎后停留，离可退场还剩多少毫秒（启动页据此
+ *  等全部子动画演绎完成再退场——含 ~1.5s 欢迎收尾 + ~1.5s 欢迎后停留，保证用户看清欢迎语
+ *  并有余裕观看名册信息再进入首屏）。 */
+export function rosterRemainingMs(): number {
+  return Math.max(
+    0,
+    rosterEndAt + ROSTER_BEAT_MS + CENTER_SETTLE_MS + WELCOME_HOLD_MS - performance.now(),
+  );
 }
 
 /**

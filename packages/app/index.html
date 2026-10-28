@@ -45,7 +45,7 @@
       不等 Vue/useTheme（那是 Sidebar 挂载后的事）。首启四处对齐：本脚本 /
       useTheme 首启浅 / Rust theme_window_bg marker 缺失浅 / conf 默认浅。
       窗口纯色底色（136-400ms 空窗段）由 Rust 按主题标记文件定同源色值
-      （浅 #FAFBFC / 深 #0B1116）——纯色窗→splash 零跳变。
+      （浅 #FAFBFC / 深 #14181F，2026-10-28 归一）——纯色窗→splash→app 基底零跳变。
 
       状态行双层（DSH identity-target/glyphs 同款）：.boot-status = 权威层
       （同步写入，bootProgress 测试契约 + 屏幕阅读器）；.boot-status-visual =
@@ -53,7 +53,7 @@
 
       ⚠️ 全应用唯一硬编码颜色/系统字体栈/z-index 例外位：令牌体系（tokens.css /
       --ip-* / --ip-z-* / @fontsource 字体）全部打进 JS bundle，首帧必然不可用。
-      色值同源 dsh-prologue 设计常量：bg #0B1116 / ink #E6EDF0 / soft #8497A1 /
+      色值同源 dsh-prologue 设计常量：bg 原 #0B1116→2026-10-28 对齐 app 基底 #14181F / ink #E6EDF0 / soft #8497A1 /
       accent 冷青 #82BFD2 / line #2B424E。英文等宽小字用系统等宽栈（Consolas /
       Cascadia，零体积——本地字体纪律，不引入新字体资产）。z-index 取高值压过
       app 内一切 --ip-z-* 浮层（启动期一瞬，不进令牌体系）；reduced-motion
@@ -87,7 +87,7 @@
         box-shadow: inset 0 0 110px var(--sp-vignette);
       }
       html[data-theme="dark"] .boot-splash {
-        --sp-bg: #0b1116;
+        --sp-bg: #14181f; /* 2026-10-28 基底归一：对齐 app 暗色基底 gray-900（DSH 黑场原值 #0B1116 退役——冷青氛围在其余 sp-* 令牌保留；回滚=revert 本行） */
         --sp-ink: #e6edf0;
         --sp-soft: #8497a1;
         --sp-accent: #82bfd2;
@@ -173,6 +173,64 @@
         22% { opacity: 0.95; }
       }
 
+      /* ---- 氛围件三族（2026-10-28 自预览台移植，用户实机反馈补齐）----
+         背景大字（边缘巨型裁切字，DSH 同源）/ 扫描线（水平线+余辉巡游）/
+         轨道巡游块（draftingRails 同源，仅左侧——右侧让位名册）。全装饰
+         aria-hidden；DOM 序先于环场/中心 → 同层按树序垫底。 */
+      .bg-word {
+        position: absolute;
+        top: 50%;
+        font-size: 74px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        color: var(--sp-ink);
+        opacity: 0.055;
+        white-space: nowrap;
+        pointer-events: none;
+        user-select: none;
+        z-index: 0;
+      }
+      .bg-word.l { left: 26px; transform: translateY(-50%) rotate(180deg); writing-mode: vertical-rl; }
+      .bg-word.r { right: 26px; transform: translateY(-50%); writing-mode: vertical-rl; }
+      .scanline {
+        position: absolute;
+        left: 8%;
+        right: 8%;
+        height: 12px;
+        pointer-events: none;
+        background: linear-gradient(to bottom, transparent, rgba(130, 191, 210, 0.045));
+        border-bottom: 1.5px solid var(--sp-accent);
+        opacity: 0.45;
+        animation: scan-travel 7s ease-in-out infinite alternate;
+      }
+      @keyframes scan-travel { from { top: 16%; } to { top: 74%; } }
+      .rail {
+        position: absolute;
+        top: 30%;
+        bottom: 30%;
+        left: 15%;
+        width: 2px;
+        background: var(--sp-track);
+        pointer-events: none;
+      }
+      .rail::after {
+        content: "";
+        position: absolute;
+        left: -3px;
+        width: 8px;
+        height: 22px;
+        background: var(--sp-accent);
+        opacity: 0.75;
+        animation: rail-run 5s ease-in-out infinite alternate;
+      }
+      @keyframes rail-run { from { top: 0; } to { top: calc(100% - 22px); } }
+      .boot-letting .bg-word,
+      .boot-letting .scanline,
+      .boot-letting .rail {
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
+
       /* ---- 中央编队：标 → 字标 → 副题 → 进度 → 状态双行 ---- */
       .boot-center {
         display: flex;
@@ -183,17 +241,52 @@
 
       /* ==== 环场 1:1 复刻 DSH reticle（startup-visuals.js:140-180 参数照抄，仅换色）====
          尺寸：DSH unit=min边/1000；R=425u、容器=刻度外缘 463u → 92vmin，层半径全部按 463u 归一。
+         （2026-10-28 试用 76vmin；⚠️ 本块是环组唯一样式源——旧 v7/v11 两代残留块已清，
+         勿再向本 style 追加新一代环组定义，改参数直接改本块。）
          线宽：DSH 绝对 unit → vmin 千分比（随屏等比，与 canvas DPR 行为一致）。
          角度：conic = canvas+90°；缺口（inGap canvas 43.2~136.8°）= conic 133.2~226.8°（下方让位）。
          速度：spin=ambient*.46+time*1.35≈1.81rad/s（3.47s/圈）；层倍率照抄：
-         #3 ×1.35=2.6s 正 / #4#5 ×1.85=1.9s 反（快！参考图的活力来源）/ #6 ×0.23=15s 反 /
+         降频拍板 2026-10-28：快环三件收敛到氛围层频带——#4#5 5s（轨道巡游同频）/ #3 7s（扫描线同频），
+         弃 DSH 原始快频（1.9s/2.6s，演出用非驻留用）；慢层 #6 15s /
          点环 ×0.25=14s 反 / 刻度 ×0.12=29s 正。生长/逐点渐入是进度参数（静态取终态，
          待信号系统接入后驱动）。 */
       .boot-rings {
         position: absolute; left: 50%; top: 50%;
-        width: 92vmin; height: 92vmin;
+        width: 76vmin; height: 76vmin; /* 92→76（2026-10-28 试用） */
         transform: translate(-50%, -50%);
+        /* 下方让位 = DSH inGap 同款「角度扇形缺口」（startup-visuals.js:134）：
+           缺口边缘沿半径径向、固定不随各环自转（源码注释："Lower opening
+           remains fixed, while independently rotating bands and markers pass
+           behind it"）。弧线提笔/刻度与点跳过三层同判据——CSS 侧一个 conic
+           mask 等价实现（2026-10-28 取代 inset 30% 直切：直边是粗糙的根源，
+           径向缺口才是原语言）。开口半角 60°（用户拍板 2026-10-28 加宽：两端
+           落在计时行水平线 y=+19vmin 上——最外缘 r=38vmin，cos θ=19/38→60°；
+           DSH 原值 ±46.8°）。#1/#2 弧自带的窄缺口完全落在宽 mask 缺口内，
+           被 mask 收编无双断口。seal 不沾（源码 sealMechanism 自带 evenodd
+           裁剪，DOM 上已是 rings 兄弟）。 */
+        -webkit-mask: conic-gradient(from 240deg, #000 0deg 240deg, transparent 240deg 360deg);
+                mask: conic-gradient(from 240deg, #000 0deg 240deg, transparent 240deg 360deg);
         pointer-events: none;
+      }
+      /* 环底让位开口的计时行：预览台右下时间轴读数同款格式（X.XX s，两位小数、
+         小写 s 前带空格）。样式优化（用户拍板 2026-10-28）：tabular-nums 等宽数
+         字防百毫秒跳动 + ink 主色提亮 + 10px。入场用 backwards 填充（延迟期藏、
+         结束回落基态）——避开 forwards 恒写 opacity 压住退场过渡的坑。 */
+      .boot-band {
+        position: absolute; left: 50%; top: calc(50% + 19vmin);
+        transform: translateX(-50%);
+        font-family: Consolas, "Cascadia Code", Menlo, monospace;
+        font-size: 10px; letter-spacing: 0.22em;
+        font-variant-numeric: tabular-nums;
+        color: var(--sp-ink);
+        pointer-events: none; white-space: nowrap;
+        opacity: 0.9;
+        animation: boot-band-in 360ms ease-out 1.2s backwards;
+      }
+      @keyframes boot-band-in { from { opacity: 0; } }
+      .boot-letting .boot-band {
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
       }
       .boot-rings .ring { position: absolute; inset: 0; border-radius: 50%; }
       @keyframes ring-spin { to { transform: rotate(360deg); } }
@@ -242,14 +335,14 @@
                 mask: radial-gradient(closest-side, transparent calc(100% - 0.09vmin), black calc(100% - 0.08vmin));
         opacity: 0.35;
       }
-      /* #3 旋转长弧：r=R-29=85.5% | from conic90.4° 长252° | ink 2.4u=0.24vmin | 0.8 | ×1.35 正 2.6s */
+      /* #3 旋转长弧：r=R-29=85.5% | from conic90.4° 长252° | ink 2.4u=0.24vmin | 0.8 | 正 7s（扫描线同频，2026-10-28 降频） */
       .boot-rings .arc-orbit {
         inset: 7.25%;
         background: conic-gradient(from 90.4deg, var(--sp-ink) 0deg 252deg, transparent 252deg 360deg);
         -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.25vmin), black calc(100% - 0.24vmin));
                 mask: radial-gradient(closest-side, transparent calc(100% - 0.25vmin), black calc(100% - 0.24vmin));
         opacity: 0.8;
-        animation: ring-spin 2.6s linear infinite;
+        animation: ring-spin 7s linear infinite;
       }
       /* 12 点环：r=R-30=85.3%（与 #3 交错半径）| major(i%3) accent 4.1u≈0.5°段/0.88 + minor ink 1.8u≈0.2°段/0.48 | ×0.25 反 13.9s */
       .boot-rings .pips-minor {
@@ -268,23 +361,23 @@
         opacity: 0.88;
         animation: ring-spin-r 13.9s linear infinite;
       }
-      /* #4 accent 主弧：r=R-49=81.2% | from conic88.8° 长(engraving 终态)186° | accent 5.5u=0.55vmin | 0.9 | ×1.85 反 1.9s */
+      /* #4 accent 主弧：r=R-49=81.2% | from conic88.8° 长(engraving 终态)186° | accent 5.5u=0.55vmin | 0.9 | 反 5s（轨道同频，2026-10-28 降频） */
       .boot-rings .arc-hero {
         inset: 9.4%;
         background: conic-gradient(from 88.8deg, var(--sp-accent) 0deg 186deg, transparent 186deg 360deg);
         -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.56vmin), black calc(100% - 0.55vmin));
                 mask: radial-gradient(closest-side, transparent calc(100% - 0.56vmin), black calc(100% - 0.55vmin));
         opacity: 0.9;
-        animation: ring-spin-r 1.9s linear infinite;
+        animation: ring-spin-r 5s linear infinite;
       }
-      /* #5 超粗微透明弧：r=R-62=78.4% | from conic105.9°（与#4 相位差17°）长86.4° | accent 12u=1.2vmin | 0.22 | 与 #4 同步 ×1.85 反 */
+      /* #5 超粗微透明弧：r=R-62=78.4% | from conic105.9°（与#4 相位差17°）长86.4° | accent 12u=1.2vmin | 0.22 | 与 #4 同步反 5s（降频） */
       .boot-rings .arc-heavy {
         inset: 10.8%;
         background: conic-gradient(from 105.9deg, var(--sp-accent) 0deg 86.4deg, transparent 86.4deg 360deg);
         -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 1.22vmin), black calc(100% - 1.2vmin));
                 mask: radial-gradient(closest-side, transparent calc(100% - 1.22vmin), black calc(100% - 1.2vmin));
         opacity: 0.22;
-        animation: ring-spin-r 1.9s linear infinite;
+        animation: ring-spin-r 5s linear infinite;
       }
       /* 卡尺（两侧 R-83=73.9%）：三段短横线 soft 0.7u | 0.35 | 静止 */
       .boot-rings .caliper-l, .boot-rings .caliper-r {
@@ -307,17 +400,17 @@
          扇区半开角 etch 终态 .34/.49/.64rad（弧长 38.8/56.2/73.4°）；
          相位 layer*.13rad、奇偶反向 turn（终态静止——「timed assemblies」非永动）；
          下半裁剪 y>110s（源码 clip 同款 inset 0 0 42% 0）。 */
-      .boot-rings .seal {
+      .boot-splash .seal {
         position: absolute; left: 50%; top: 50%;
-        width: 46vmin; height: 46vmin;
+        width: 38vmin; height: 38vmin; /* 46→38：随环组 92→76 等比（seal 不跟随父容器，需单独同步） */
         transform: translate(-50%, -50%);
         clip-path: inset(0 0 42% 0);
         pointer-events: none;
       }
-      .boot-rings .seal .ring { position: absolute; inset: 0; border-radius: 50%; }
+      .boot-splash .seal .ring { position: absolute; inset: 0; border-radius: 50%; }
       /* 层0：r154/463=33.3%容器（seal 容器=224u*2=448u→92vmin 的 48.7%…… 直接按 seal 容器内百分比：
          seal 容器直径=448u+卡尺余量≈488u → 层0 r=154/244=63.1% → inset 18.45% */
-      .boot-rings .seal .seal-l0 {
+      .boot-splash .seal .seal-l0 {
         inset: 18.4%;
         background: repeating-conic-gradient(from calc(90deg - 90deg + 7.45deg),
           var(--sp-soft) 0deg 38.8deg, transparent 38.8deg 120deg);
@@ -326,7 +419,7 @@
         opacity: 0.23;
       }
       /* 层1：r=171/244=70.1% → inset 14.95% | accent 4.5px=0.45vmin | 0.70*(1-.38)=0.43 */
-      .boot-rings .seal .seal-l1 {
+      .boot-splash .seal .seal-l1 {
         inset: 14.9%;
         background: repeating-conic-gradient(from calc(90deg - 90deg + 14.9deg),
           var(--sp-accent) 0deg 56.2deg, transparent 56.2deg 120deg);
@@ -335,7 +428,7 @@
         opacity: 0.43;
       }
       /* 层2：r=188/244=77.0% → inset 11.5% | soft 1px | span 73.4° */
-      .boot-rings .seal .seal-l2 {
+      .boot-splash .seal .seal-l2 {
         inset: 11.5%;
         background: repeating-conic-gradient(from calc(90deg - 90deg - 90deg + 22.35deg),
           var(--sp-soft) 0deg 73.4deg, transparent 73.4deg 120deg);
@@ -344,10 +437,10 @@
         opacity: 0.23;
       }
       /* 外圈三组卡尺：r=224/244=91.8% | 27u 横线×2 + 9×14u accent 块 | 每 120° */
-      .boot-rings .seal .cal {
+      .boot-splash .seal .cal {
         position: absolute; left: 50%; top: 50%; width: 0; height: 0;
       }
-      .boot-rings .seal .cal i {
+      .boot-splash .seal .cal i {
         position: absolute;
         left: calc(0.27vmin * -13.5);
         top: calc(0vmin - 22.9vmin);
@@ -358,10 +451,10 @@
           linear-gradient(var(--sp-accent), var(--sp-accent)) calc(50% - 0.45vmin) 50% / 0.9vmin 1.4vmin no-repeat;
         opacity: 0.62;
       }
-      .boot-rings .seal .cal.c1 { transform: rotate(0deg); }
-      .boot-rings .seal .cal.c2 { transform: rotate(120deg); }
-      .boot-rings .seal .cal.c3 { transform: rotate(240deg); }
-      html[data-theme="light"] .boot-rings .seal .seal-l1 { opacity: 0.55; }
+      .boot-splash .seal .cal.c1 { transform: rotate(0deg); }
+      .boot-splash .seal .cal.c2 { transform: rotate(120deg); }
+      .boot-splash .seal .cal.c3 { transform: rotate(240deg); }
+      html[data-theme="light"] .boot-splash .seal .seal-l1 { opacity: 0.55; }
 
       /* ==== 生长动画（DSH engraving/locking 语言：环的构建 = 真实加载进度）====
          --boot-prog（0~1）由 bootProgress 驱动（index.html 内联脚本 + main.ts 接线）。
@@ -393,80 +486,60 @@
       .boot-rings .tick-major.lit { --tick-mask: transparent calc(100% - 1.32vmin), black calc(100% - 1.3vmin); }
       .boot-rings .pips-minor.lit { --tick-mask: transparent calc(100% - 0.05vmin), black calc(100% - 0.04vmin); }
       .boot-rings .pips-major.lit { --tick-mask: transparent calc(100% - 0.11vmin), black calc(100% - 0.1vmin); }
-      /* 就绪脉冲：--boot-prog 到 1 时 JS 加 .ready，全环一次呼吸 */
+      /* 就绪脉冲：--boot-prog 到 1 时 JS 加 .ready，全环一次呼吸（seal 已迁出
+         rings 容器，走兄弟选择器） */
       .boot-rings.ready .arc-outer,
-      .boot-rings.ready .seal-l1 { animation: ring-pulse 600ms ease-out 1; }
+      .boot-rings.ready ~ .seal .seal-l1 { animation: ring-pulse 600ms ease-out 1; }
       @keyframes ring-pulse {
         0% { filter: brightness(1); }
         35% { filter: brightness(1.6); }
         100% { filter: brightness(1); }
       }
-      html[data-theme="light"] .boot-rings .arc-heavy { opacity: 0.3; }      html[data-theme="light"] .boot-rings .seal .seal-l0,
-      html[data-theme="light"] .boot-rings .seal .seal-l2 { opacity: 0.4; }
 
-      /* ==== sealMechanism 1:1 复刻（源码 235-263 行，与 reticle 同屏叠加）====
-         三层三扇区弧组（repeating-conic 每 120° 重复）+ 外圈三组卡尺 + 下半裁剪。
-         参数照抄：层半径 154/171/188u；层1 accent 4.5px @0.43；层0/2 soft 1px @0.23；
-         扇区半开角 etch 终态 .34/.49/.64rad（弧长 38.8/56.2/73.4°）；
-         相位 layer*.13rad、奇偶反向 turn（终态静止——「timed assemblies」非永动）；
-         下半裁剪 y>110s（源码 clip 同款 inset 0 0 42% 0）。 */
-      .boot-rings .seal {
-        position: absolute; left: 50%; top: 50%;
-        width: 46vmin; height: 46vmin;
-        transform: translate(-50%, -50%);
-        clip-path: inset(0 0 42% 0);
-        pointer-events: none;
+      /* ---- 环场「经缺口流出」退场（用户拍板 2026-10-28 二轮修正）：环组动画
+         全程照常循环（跟现在一模一样的动画），变化只有一个——下方让位缺口的
+         擦除区沿环单向扩张（自缺口一缘起、绕一圈收至另一缘）：转动中的弧线
+         转到缺口即被「放行出去」，擦除区只增不减 = 出去的不再回来；旋转方向
+         不同的环（正/反）统一被同一扩张吃掉（先到先出，各自节奏）。静止小环
+         （#1 主环/#2 细环/seal 层）退场时补起旋转一起动。实现：@property 注册
+         --ring-keep 角度变量在 conic mask 里过渡（Chromium 85+；不支持时
+         mask 直接跳终态=瞬时隐去，可接受的降级）。240deg→0deg 线性 900ms
+         +60ms 起步 ≤1s 契约，赶在编舞退场前排空。:has 由 bootProgress 挂
+         .boot-center.welcoming 触发（WebView2 Chromium 105+）。 */
+      @property --ring-keep {
+        syntax: "<angle>";
+        inherits: false;
+        initial-value: 240deg;
       }
-      .boot-rings .seal .ring { position: absolute; inset: 0; border-radius: 50%; }
-      /* 层0：r154/463=33.3%容器（seal 容器=224u*2=448u→92vmin 的 48.7%…… 直接按 seal 容器内百分比：
-         seal 容器直径=448u+卡尺余量≈488u → 层0 r=154/244=63.1% → inset 18.45% */
-      .boot-rings .seal .seal-l0 {
-        inset: 18.4%;
-        background: repeating-conic-gradient(from calc(90deg - 90deg + 7.45deg),
-          var(--sp-soft) 0deg 38.8deg, transparent 38.8deg 120deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
-                mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
-        opacity: 0.23;
+      .boot-splash:has(.boot-center.welcoming) .boot-rings {
+        --ring-keep: 0deg;
+        transition: --ring-keep 900ms linear 60ms;
+        -webkit-mask: conic-gradient(from 240deg, #000 0deg var(--ring-keep), transparent var(--ring-keep) 360deg);
+                mask: conic-gradient(from 240deg, #000 0deg var(--ring-keep), transparent var(--ring-keep) 360deg);
       }
-      /* 层1：r=171/244=70.1% → inset 14.95% | accent 4.5px=0.45vmin | 0.70*(1-.38)=0.43 */
-      .boot-rings .seal .seal-l1 {
-        inset: 14.9%;
-        background: repeating-conic-gradient(from calc(90deg - 90deg + 14.9deg),
-          var(--sp-accent) 0deg 56.2deg, transparent 56.2deg 120deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.46vmin), black calc(100% - 0.45vmin));
-                mask: radial-gradient(closest-side, transparent calc(100% - 0.46vmin), black calc(100% - 0.45vmin));
-        opacity: 0.43;
+      /* seal 无既有楔形缺口（只有自身 inset 裁剪）——独立变量从 360° 全可见起擦，
+         防止触发瞬间被突然盖上底部扇区产生跳变；同向同速扩张 */
+      @property --seal-keep {
+        syntax: "<angle>";
+        inherits: false;
+        initial-value: 360deg;
       }
-      /* 层2：r=188/244=77.0% → inset 11.5% | soft 1px | span 73.4° */
-      .boot-rings .seal .seal-l2 {
-        inset: 11.5%;
-        background: repeating-conic-gradient(from calc(90deg - 90deg - 90deg + 22.35deg),
-          var(--sp-soft) 0deg 73.4deg, transparent 73.4deg 120deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
-                mask: radial-gradient(closest-side, transparent calc(100% - 0.1vmin), black calc(100% - 0.1vmin));
-        opacity: 0.23;
+      .boot-splash:has(.boot-center.welcoming) .seal {
+        --seal-keep: 0deg;
+        transition: --seal-keep 900ms linear 60ms;
+        -webkit-mask: conic-gradient(from 240deg, #000 0deg var(--seal-keep), transparent var(--seal-keep) 360deg);
+                mask: conic-gradient(from 240deg, #000 0deg var(--seal-keep), transparent var(--seal-keep) 360deg);
       }
-      /* 外圈三组卡尺：r=224/244=91.8% | 27u 横线×2 + 9×14u accent 块 | 每 120° */
-      .boot-rings .seal .cal {
-        position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+      /* 静止小环补旋转（退场期一并动起来；与擦除扩张叠加 = 边转边被放行） */
+      .boot-splash:has(.boot-center.welcoming) .boot-rings .arc-outer,
+      .boot-splash:has(.boot-center.welcoming) .boot-rings .ring-fine {
+        animation: ring-spin 2.4s linear infinite;
       }
-      .boot-rings .seal .cal i {
-        position: absolute;
-        left: calc(0.27vmin * -13.5);
-        top: calc(0vmin - 22.9vmin);
-        width: 2.7vmin; height: 1.4vmin;
-        background:
-          linear-gradient(var(--sp-ink), var(--sp-ink)) 0 0 / 100% 0.07vmin no-repeat,
-          linear-gradient(var(--sp-ink), var(--sp-ink)) 0 100% / 100% 0.07vmin no-repeat,
-          linear-gradient(var(--sp-accent), var(--sp-accent)) calc(50% - 0.45vmin) 50% / 0.9vmin 1.4vmin no-repeat;
-        opacity: 0.62;
+      .boot-splash:has(.boot-center.welcoming) .seal .ring {
+        animation: ring-spin-r 3s linear infinite;
       }
-      .boot-rings .seal .cal.c1 { transform: rotate(0deg); }
-      .boot-rings .seal .cal.c2 { transform: rotate(120deg); }
-      .boot-rings .seal .cal.c3 { transform: rotate(240deg); }
-      html[data-theme="light"] .boot-rings .seal .seal-l1 { opacity: 0.55; }
-      html[data-theme="light"] .boot-rings .seal .seal-l0,
-      html[data-theme="light"] .boot-rings .seal .seal-l2 { opacity: 0.4; }
+      /* （seal 第二代重复块已删——sealMechanism 样式唯一源在上方 DSH 块；
+         散落的浅色补偿重复行一并清理） */
 
       .boot-center {
         transition:
@@ -520,81 +593,7 @@
         gap: 12px;
       }
 
-      /* ==== 装饰环场 v11（DSH reticle 语言：弧段 + 明度分层 + 粗细对比）====
-         整圆退役，每层是弧：r92 ink 粗弧(200 度下方留口) / r84 accent 主弧
-         (120 度头部亮，生长语义待接信号系统) / r76 旋转长弧 + 超粗微透明弧
-         (12px) / r68 细全圈(唯一整圆背景) / r60 十二分点环 / r52 墨双弧 /
-         r44 界圆。明度六档 0.9/0.8/0.75/0.35/0.31/0.22 靠 opacity（单色系
-         透明度分层 = DSH 工业风本色，色相走 --sp-* 双主题五色）。 */
-      .boot-rings {
-        position: absolute; left: 50%; top: 50%;
-        width: 62vmin; height: 62vmin;
-        transform: translate(-50%, -50%);
-        pointer-events: none;
-      }
-@keyframes ring-spin { to { transform: rotate(360deg); } }
-      @keyframes ring-spin-r { to { transform: rotate(-360deg); } }
-      .boot-rings .ring-ticks {
-        background: repeating-conic-gradient(var(--sp-soft) 0deg 0.8deg, transparent 0.8deg 5.2deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 6px), black calc(100% - 5px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 6px), black calc(100% - 5px));
-        opacity: 0.55;
-        animation: ring-spin 75s linear infinite;
-      }
-      .boot-rings .arc-outer {
-        inset: 4%;
-        background: conic-gradient(from 130deg, var(--sp-ink) 0deg 200deg, transparent 200deg 360deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
-        opacity: 0.75;
-      }
-      .boot-rings .arc-hero {
-        inset: 8.6%;
-        background: conic-gradient(from 300deg, var(--sp-accent) 0deg 120deg, transparent 120deg 360deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 6px), black calc(100% - 5px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 6px), black calc(100% - 5px));
-        opacity: 0.9;
-        animation: ring-spin 26s linear infinite;
-      }
-      .boot-rings .arc-mid {
-        inset: 12%;
-        background: conic-gradient(from 40deg, var(--sp-ink) 0deg 150deg, transparent 150deg 360deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3px), black calc(100% - 2.4px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 3px), black calc(100% - 2.4px));
-        opacity: 0.8;
-        animation: ring-spin-r 18s linear infinite;
-      }
-      .boot-rings .arc-heavy {
-        inset: 11%;
-        background: conic-gradient(from 210deg, var(--sp-accent) 0deg 80deg, transparent 80deg 360deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 13px), black calc(100% - 12px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 13px), black calc(100% - 12px));
-        opacity: 0.22;
-        animation: ring-spin-r 31s linear infinite;
-      }
-      .boot-rings .ring-faint { inset: 16%; border: 1px solid var(--sp-soft); opacity: 0.31; }
-      .boot-rings .ring-pips {
-        inset: 20%;
-        background: repeating-conic-gradient(var(--sp-accent) 0deg 1.6deg, transparent 1.6deg 30deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
-        opacity: 0.85;
-        animation: ring-spin-r 22s linear infinite;
-      }
-      .boot-rings .ring-inner {
-        inset: 24.6%;
-        background: conic-gradient(from 40deg,
-          var(--sp-ink) 0deg 50deg, transparent 50deg 180deg,
-          var(--sp-ink) 180deg 230deg, transparent 230deg 360deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3px), black calc(100% - 2.4px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 3px), black calc(100% - 2.4px));
-        opacity: 0.85;
-        animation: ring-spin 14s linear infinite;
-      }
-      .boot-rings .ring-c5 { inset: 28%; border: 1.5px solid var(--sp-track); }
-      html[data-theme="light"] .boot-rings .arc-heavy { opacity: 0.3; }
-      html[data-theme="light"] .boot-rings .ring-faint { opacity: 0.45; }
-      html[data-theme="light"] .boot-rings .ring-ticks { opacity: 0.7; }
+      /* （v11 旧代环组块已删——多代累积互相覆盖的病灶，DSH 1:1 块为唯一环组样式源） */
 
       .boot-center {
         transition:
@@ -648,70 +647,19 @@
         gap: 12px;
       }
 
-      /* ==== 装饰环场（2026-10-27 v7 定形：多圆环 = 连续整圆为主体）====
-         62vmin 场内 7 层半径梯度：外刻度环 → 实圆×2（accent 亮弧贴环游走）
-         → 虚线圆 → 实圆 → 点线圆 → 实圆（墨弧贴环）→ 内容界圆。
-         弧段是贴环点缀非层次主体；reduced-motion 下旋转停（环线仍在）。 */
-      .boot-rings {
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 62vmin;
-        height: 62vmin;
-        transform: translate(-50%, -50%);
-        pointer-events: none;
-      }
+      /* （v7 旧代环组块已删——同上） */
 
-      .boot-rings .ring-ticks {
-        background: repeating-conic-gradient(var(--sp-soft) 0deg 0.8deg, transparent 0.8deg 5.2deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 5px), black calc(100% - 4px));
-        opacity: 0.8;
-        animation: ring-spin 75s linear infinite;
-      }
-      .rings .ring-c1 { inset: 4%; border: 2px solid var(--sp-soft); opacity: 0.85; }
-      .rings .ring-c2 { inset: 8%; border: 2px solid var(--sp-soft); opacity: 0.7; }
-      .rings .ring-hero {
-        inset: 8.6%;
-        background: conic-gradient(from 300deg, var(--sp-accent) 0deg 16deg, transparent 16deg 360deg);
-        -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3.5px), black calc(100% - 3px));
-                mask: radial-gradient(closest-side, transparent calc(100% - 3.5px), black calc(100% - 3px));
-        animation: ring-spin 20s linear infinite;
-      }
-      .rings .ring-dash {
-        inset: 12%;
-        border: 1.5px dashed var(--sp-soft);
-        opacity: 0.85;
-        animation: ring-spin-r 40s linear infinite;
-      }
-      .rings .ring-c3 { inset: 16%; border: 2px solid var(--sp-soft); opacity: 0.75; }
-      .rings .ring-dots {
-        inset: 20%;
-        border: 2px dotted var(--sp-soft);
-        opacity: 0.9;
-        animation: ring-spin-r 30s linear infinite;
-      }
-      .rings .ring-c4 { inset: 24%; border: 2px solid var(--sp-soft); opacity: 0.7; }
-
-      @keyframes ring-spin-r { to { transform: rotate(-360deg); } }
-      .boot-mark {
-        width: 44px;
-        height: 44px;
-        color: var(--sp-accent);
-        opacity: 0;
-        animation: boot-rise 480ms cubic-bezier(0.22, 1, 0.36, 1) 0ms forwards;
-      }
-      .boot-mark svg {
-        width: 100%;
-        height: 100%;
-        display: block;
-      }
+      /* （爪印标已删 2026-10-28：用户拍板「没有的情况挺好」——预览台本就无此元素，
+         生产侧移除对齐；boot-rise 入场动画由字标继续承载） */
       .boot-logo {
-        font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        /* Orbitron（可变字重）——偏宽体几何科幻字（用户拍板 2026-10-28），与
+           DSH 制图语言同频；经 fonts.css 的 @fontsource 打进 bundle，splash 先
+           渲染后有 swap 一瞬（可接受，字标入场 80ms 后才起）。 */
+        font-family: 'Orbitron Variable', system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
         font-size: 22px;
-        font-weight: 600;
-        letter-spacing: 0.22em;
-        text-indent: 0.22em;
+        font-weight: 640;
+        letter-spacing: 0.16em; /* Orbitron 自身字面宽，字距从 0.22em 收窄防松散 */
+        text-indent: 0.16em;
         color: var(--sp-ink);
         opacity: 0;
         animation: boot-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) 80ms forwards;
@@ -725,10 +673,93 @@
         animation: boot-fade 360ms ease-out 140ms forwards;
       }
 
+      /* ---- 欢迎使用：同槽换字收尾（用户拍板 2026-10-28 二轮）----
+         标题槽 grid 叠放（boot-head）：IcePaw 淡出、「欢迎使用」打字机逐字
+         敲出（width steps(4) 逐字揭示——CJK 等宽 4 字恰好一步一字，末步收尾
+         在第 4 字起点）；副题槽同款交叉：LOCAL-FIRST / WORKSTATION → WELCOME。
+         竖列结构/进度条/状态行原地不动，加载态→欢迎态 = 两行文字换字而已。
+         时序：logo 淡出 300ms ∥ 欢迎语 200ms 淡入 + 300ms 后起打 1.2s（恰合
+         WELCOME_HOLD_MS=1500 的演出预算）+ 光标随打随闪、1.6s 后熄灭。 */
+      .boot-center { position: relative; }
+      .boot-head { display: grid; place-items: center; }
+      .boot-head .boot-logo, .boot-head .boot-welcome { grid-area: 1 / 1; }
+      .boot-welcome {
+        position: relative;
+        overflow: hidden;
+        white-space: nowrap;
+        font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.35em; /* 无 text-indent：4×1.35em=5.4em，steps(4) 边界恰落每字起点 */
+        color: var(--sp-ink);
+        width: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .boot-welcome::after {
+        content: "";
+        position: absolute;
+        top: 12%;
+        bottom: 12%;
+        right: 0;
+        width: 2px;
+        background: var(--sp-accent);
+        opacity: 0;
+      }
+      .boot-center.welcoming .boot-logo {
+        animation: none; /* boot-rise forwards 恒写 opacity 压住换挡——先摘（同 .boot-letting 模式） */
+        opacity: 0;
+        transition: opacity 300ms ease;
+      }
+      .boot-center.welcoming .boot-welcome {
+        opacity: 1;
+        transition: opacity 200ms ease 80ms;
+        animation: boot-welcome-type 320ms steps(4, end) 120ms both; /* 80ms/字——与其他入场同速带 */
+      }
+      .boot-center.welcoming .boot-welcome::after {
+        animation: boot-welcome-caret 0.4s steps(1, end) 2 both, boot-caret-out 300ms ease-in 900ms forwards;
+      }
+      @keyframes boot-welcome-type {
+        from { width: 0; }
+        to { width: 5.4em; }
+      }
+      @keyframes boot-welcome-caret {
+        0% { opacity: 1; }
+        50% { opacity: 0; }
+        100% { opacity: 1; } /* 结束态亮——打字收尾（1.5s）前光标常在，1.6s 再熄灭 */
+      }
+      @keyframes boot-caret-out {
+        to { opacity: 0; }
+      }
+      /* 副题槽同款 grid 叠放：交叉换字 + WELCOME 打字机（60ms/字，与标题同拍起）。
+         等宽 Consolas + 0.35em 字距下 steps(7) 边界恒不偷跑下一字：
+         步边界 k·(1ch+0.4em) ≤ 第 k+1 字起点 0.35em+k·(1ch+0.35em)，全 k 非负 */
+      .boot-tag { display: grid; place-items: center; }
+      .boot-tag > span { grid-area: 1 / 1; }
+      .boot-tag .boot-tag-line { transition: opacity 240ms ease 60ms; }
+      .boot-tag .boot-tag-welcome {
+        opacity: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        width: 0;
+        letter-spacing: 0.35em; text-indent: 0.35em;
+        transition: opacity 200ms ease 80ms;
+      }
+      .boot-center.welcoming .boot-tag-line { opacity: 0; }
+      .boot-center.welcoming .boot-tag-welcome {
+        opacity: 1;
+        animation: boot-tag-type 420ms steps(7, end) 120ms both;
+      }
+      @keyframes boot-tag-type {
+        from { width: 0; }
+        to { width: calc(7ch + 2.8em); }
+      }
+
       /* ---- 进度条：轨道 + 确定性填充 + 前缘亮线 + 光泽扫过 ---- */
       .boot-bar {
         position: relative;
-        width: 240px;
+        width: min(240px, 46vmin); /* 随环缩放（环系 vmin 系）：小窗下防越出环内
+           弧圈（内层弧族直径 ≈ 60vmin，46vmin 留余量）——实机反馈 2026-10-28 */
         height: 3px;
         border-radius: 999px;
         overflow: hidden;
@@ -825,6 +856,27 @@
       }
       .boot-meta-l { left: 62px; }
       .boot-meta-r { right: 62px; }
+      /* 右下角档案行两行制（用户拍板 2026-10-28）：版本号独占上行（样式同档案行、
+         字号 +4px）+ 下行仓库署名 github.com/SakuraSmiles（URL/用户名保持自然
+         大小写——大写是标签词排版，标识符原样誊写才是工业档案语言）。
+         main.ts 模块执行时 getVersion() 填充——bundle 可执行的第一刻即取，
+         全链路最早取得点。 */
+      .boot-ver {
+        position: absolute;
+        right: 62px; bottom: 48px;
+        font-family: Consolas, "Cascadia Code", Menlo, monospace;
+        font-size: 13px;
+        letter-spacing: 0.26em;
+        color: var(--sp-soft);
+        opacity: 0;
+        animation: boot-fade 500ms ease-out 260ms forwards;
+      }
+      .boot-ver:empty { display: none; } /* 版本未取得（浏览器 dev）不占位 */
+      .boot-letting .boot-ver {
+        animation: none; /* 入场 forwards 恒写 opacity 压住退场过渡——先摘（boot-meta 同款） */
+        opacity: 0;
+        transition: opacity 450ms ease 350ms;
+      }
 
       /* ==== AGENTS 就绪名册 v2（三阶段编排：入场条→揭示→退场覆盖）====
          每行生命周期：条自左展开入场(180ms) → 条右缘收缩揭示(360ms) →
@@ -839,6 +891,9 @@
         text-align: left;
         font-family: Consolas, "Cascadia Code", Menlo, monospace;
         z-index: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 30px;
       }
       .roster-title {
         font-size: 10px;
@@ -851,7 +906,7 @@
         opacity: 0;
         transition: opacity 400ms ease-out;
       }
-      .boot-roster.title-on .roster-title { opacity: 1; }
+      .roster-group.title-on .roster-title { opacity: 1; }
       .roster-row {
         position: relative;
         overflow: hidden;
@@ -888,9 +943,97 @@
         transform-origin: left center;
         animation: roster-bar-in 300ms cubic-bezier(0.4, 0, 1, 1) forwards;
       }
-      /* 行退场：覆盖完后隐藏但保留占位（下面行不往上顶）——
-         整个名册随 splash 分层让位统一退场 */
+      /* 行退场：覆盖完后隐藏（opacity 淡出）；组演完加 .collapsed 收起**高度**占位——
+         下一组紧跟、不留第一组全量空白。用 max-height:0 而非 display:none：保留行宽参与
+         容器 shrink-to-fit 宽度计算，标题不因行收拢而左移（容器右锚定，缩宽=左缘右移）。 */
       .roster-row.gone { opacity: 0; transition: opacity 200ms ease; }
+      .roster-group.collapsed .roster-row {
+        max-height: 0;
+        margin-bottom: 0;
+        opacity: 0;
+      }
+
+      /* 状态行：九宫格加载（app StatusGlyph running·pixel 同款）→ 完成环形+check；
+         文字遮罩划出换结果，切换后保留不退场（结果态是数据流区域的常驻锚点）。 */
+      .roster-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--sp-accent);
+        line-height: 1.8;
+        margin-bottom: 4px;
+        opacity: 0;
+      }
+      .roster-status.on { opacity: 1; transition: opacity 300ms ease-out; }
+      /* 图标位：加载态九宫格 3×3 顺时针点亮（颜色走 splash 冷青 accent，非 app 主色） */
+      .status-glyph {
+        position: relative;
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .status-glyph .glyph-grid {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: repeat(3, 1fr);
+        gap: 1px;
+        opacity: 1;
+        transition: opacity 180ms ease, transform 220ms ease;
+      }
+      .status-glyph .px-cell {
+        border-radius: 1px;
+        background: var(--sp-accent);
+        opacity: 0.35;
+        animation: sp-px-cell 1.2s ease-in-out infinite;
+      }
+      @keyframes sp-px-cell {
+        0% { opacity: 0.35; transform: scale(0.85); }
+        15% { opacity: 1; transform: scale(1); }
+        55% { opacity: 1; }
+        100% { opacity: 0.35; transform: scale(0.85); }
+      }
+      .status-glyph .glyph-done {
+        position: absolute;
+        inset: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1.5px solid var(--sp-accent);
+        border-radius: 50%;
+        color: var(--sp-accent);
+        opacity: 0;
+        transform: scale(0.4);
+        transition: opacity 200ms ease, transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .status-glyph .glyph-done svg { width: 9px; height: 9px; }
+      /* 文字位：遮罩划出换文字（与列表行同语言） */
+      .status-text {
+        position: relative;
+        display: inline-block;
+      }
+      .status-text::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--sp-bg);
+        transform: scaleX(0);
+        transform-origin: right center;
+      }
+      /* 完成态（持久）：九宫格淡出缩小、done 常显——由 .done 驱动，切换后保留不退 */
+      .roster-status.done .glyph-grid { opacity: 0; transform: scale(0.6); }
+      .roster-status.done .glyph-done { opacity: 1; transform: scale(1); }
+      /* 切换动画态（临时）：文字遮罩划出——.swapping 只驱动遮罩，600ms 后移除 */
+      .roster-status.swapping .status-text::after {
+        animation: roster-status-cover 200ms ease-in forwards, roster-status-reveal 300ms ease-out 250ms forwards;
+      }
+      @keyframes roster-status-cover { to { transform: scaleX(1); } }
+      @keyframes roster-status-reveal { to { transform: scaleX(0); } }
       /* 容器退场兜底：随氛围层同拍（生产 boot-letting） */
       .boot-letting .boot-roster {
         opacity: 0;
@@ -917,12 +1060,29 @@
         .boot-letting .boot-center,
         .boot-letting .bc,
         .boot-letting .boot-meta { transition: none; }
-        .boot-mark, .boot-logo, .boot-tag, .boot-bar,
-        .boot-status-visual, .boot-sub, .boot-meta {
+        .boot-letting .boot-band { transition: none; }
+        .boot-letting .boot-ver { transition: none; }
+        .boot-logo, .boot-tag, .boot-bar,
+        .boot-status-visual, .boot-sub, .boot-meta, .boot-band, .boot-ver {
           animation: none;
           opacity: 1;
         }
         .boot-rings .ring { animation: none; }
+        .scanline, .rail { animation: none; opacity: 0; } /* 巡游类运动装饰隐藏（bg-word 静态保留） */
+        .boot-splash:has(.boot-center.welcoming) .boot-rings,
+        .boot-splash:has(.boot-center.welcoming) .seal {
+          transition: none; /* 不播滑出——直接隐去随退场 */
+        }
+        .status-glyph .px-cell { animation: none; }
+        .boot-center.welcoming .boot-logo { transition: none; }
+        .boot-center.welcoming .boot-welcome {
+          animation: none; width: 5.4em; opacity: 1; transition: none; /* 直接整词呈现，不播打字 */
+        }
+        .boot-center.welcoming .boot-welcome::after { animation: none; opacity: 0; } /* 光标不闪 */
+        .boot-center.welcoming .boot-tag .boot-tag-line { transition: none; }
+        .boot-center.welcoming .boot-tag .boot-tag-welcome {
+          animation: none; width: calc(7ch + 2.8em); opacity: 1; transition: none; /* 整词直现 */
+        }
       }
     </style>
   <!-- splash 主题 anti-FOUC（主题底色秒窗批）：读 localStorage（缺失=浅=首启
@@ -947,6 +1107,10 @@
       <i class="bc tr" aria-hidden="true"></i>
       <i class="bc bl" aria-hidden="true"></i>
       <i class="bc br" aria-hidden="true"></i>
+      <div class="bg-word l" aria-hidden="true">ICE-PAW</div>
+      <div class="bg-word r" aria-hidden="true">WORKSTATION</div>
+      <div class="scanline" aria-hidden="true"></div>
+      <div class="rail" aria-hidden="true"></div>
       <div class="boot-rings" aria-hidden="true">
         <div class="ring arc-out6"></div>
         <div class="ring tick-minor"></div>
@@ -964,47 +1128,127 @@
         <div class="ring arc-heavy"></div>
         <div class="caliper-l"></div>
         <div class="caliper-r"></div>
-            <div class="seal" aria-hidden="true">
-          <div class="ring seal-l0"></div>
-          <div class="ring seal-l1"></div>
-          <div class="ring seal-l2"></div>
-          <div class="cal c1"><i></i></div>
-          <div class="cal c2"><i></i></div>
-          <div class="cal c3"><i></i></div>
-        </div>
-            <div class="seal" aria-hidden="true">
-          <div class="ring seal-l0"></div>
-          <div class="ring seal-l1"></div>
-          <div class="ring seal-l2"></div>
-          <div class="cal c1"><i></i></div>
-          <div class="cal c2"><i></i></div>
-          <div class="cal c3"><i></i></div>
-        </div>
+      </div>
+      <!-- seal 是 rings 的兄弟而非子元素：不沾环组下方的 inGap 扇形缺口
+           （DSH sealMechanism 独立绘制，自带 evenodd 下半裁剪） -->
+      <div class="seal" aria-hidden="true">
+        <div class="ring seal-l0"></div>
+        <div class="ring seal-l1"></div>
+        <div class="ring seal-l2"></div>
+        <div class="cal c1"><i></i></div>
+        <div class="cal c2"><i></i></div>
+        <div class="cal c3"><i></i></div>
       </div>
       <div class="boot-center">
-        <div class="boot-mark" aria-hidden="true">
-          <!-- Lucide paw-print（ISC）同源 path：与 UI 图标语言同一体系 -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-               stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="4" r="2" />
-            <circle cx="18" cy="8" r="2" />
-            <circle cx="20" cy="16" r="2" />
-            <path d="M9 10a5 5 0 0 1 5 5v3.5a3.5 3.5 0 0 1-6.84 1.045Q6.52 17.48 4.46 16.84A3.5 3.5 0 0 1 5.5 10Z" />
-          </svg>
+        <div class="boot-head">
+          <div class="boot-logo">IcePaw</div>
+          <div class="boot-welcome" aria-hidden="true">欢迎使用</div>
         </div>
-        <div class="boot-logo">IcePaw</div>
-        <div class="boot-tag">LOCAL-FIRST / WORKSTATION</div>
+        <div class="boot-tag"><span class="boot-tag-line">LOCAL-FIRST / WORKSTATION</span><span class="boot-tag-welcome" aria-hidden="true">WELCOME</span></div>
         <div class="boot-bar"><div class="boot-bar-fill"></div></div>
         <div class="boot-status">正在启动…</div>
         <div class="boot-status-visual" aria-hidden="true">正在启动…</div>
         <div class="boot-sub">BOOT SEQUENCE</div>
       </div>
+      <div class="boot-band" aria-hidden="true"><span id="boot-clock">0.00 s</span></div>
       <div class="boot-meta boot-meta-l" aria-hidden="true">ICEPAW / BOOT SEQUENCE</div>
-      <div class="boot-meta boot-meta-r" aria-hidden="true">LOCAL / OFFLINE-READY</div>
+      <div class="boot-ver" id="boot-ver" aria-hidden="true"></div>
+      <div class="boot-meta boot-meta-r" aria-hidden="true">github.com/SakuraSmiles</div>
       <div class="boot-roster" aria-hidden="true">
-        <div class="roster-title">AGENTS</div>
+        <div class="roster-group" id="roster-agents">
+          <div class="roster-status">
+            <span class="status-glyph" aria-hidden="true">
+              <span class="glyph-grid">
+                <span class="px-cell" style="animation-delay:0ms"></span>
+                <span class="px-cell" style="animation-delay:80ms"></span>
+                <span class="px-cell" style="animation-delay:160ms"></span>
+                <span class="px-cell" style="animation-delay:560ms"></span>
+                <span class="px-cell" style="animation-delay:640ms"></span>
+                <span class="px-cell" style="animation-delay:240ms"></span>
+                <span class="px-cell" style="animation-delay:480ms"></span>
+                <span class="px-cell" style="animation-delay:400ms"></span>
+                <span class="px-cell" style="animation-delay:320ms"></span>
+              </span>
+              <span class="glyph-done">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              </span>
+            </span>
+            <span class="status-text">正在唤醒智能体...</span>
+          </div>
+          <div class="roster-title">AGENT</div>
+        </div>
+        <div class="roster-group" id="roster-projects">
+          <div class="roster-status">
+            <span class="status-glyph" aria-hidden="true">
+              <span class="glyph-grid">
+                <span class="px-cell" style="animation-delay:0ms"></span>
+                <span class="px-cell" style="animation-delay:80ms"></span>
+                <span class="px-cell" style="animation-delay:160ms"></span>
+                <span class="px-cell" style="animation-delay:560ms"></span>
+                <span class="px-cell" style="animation-delay:640ms"></span>
+                <span class="px-cell" style="animation-delay:240ms"></span>
+                <span class="px-cell" style="animation-delay:480ms"></span>
+                <span class="px-cell" style="animation-delay:400ms"></span>
+                <span class="px-cell" style="animation-delay:320ms"></span>
+              </span>
+              <span class="glyph-done">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              </span>
+            </span>
+            <span class="status-text">正在加载项目空间...</span>
+          </div>
+          <div class="roster-title">PROJECTS</div>
+        </div>
+        <div class="roster-group" id="roster-sessions">
+          <div class="roster-status">
+            <span class="status-glyph" aria-hidden="true">
+              <span class="glyph-grid">
+                <span class="px-cell" style="animation-delay:0ms"></span>
+                <span class="px-cell" style="animation-delay:80ms"></span>
+                <span class="px-cell" style="animation-delay:160ms"></span>
+                <span class="px-cell" style="animation-delay:560ms"></span>
+                <span class="px-cell" style="animation-delay:640ms"></span>
+                <span class="px-cell" style="animation-delay:240ms"></span>
+                <span class="px-cell" style="animation-delay:480ms"></span>
+                <span class="px-cell" style="animation-delay:400ms"></span>
+                <span class="px-cell" style="animation-delay:320ms"></span>
+              </span>
+              <span class="glyph-done">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              </span>
+            </span>
+            <span class="status-text">正在恢复会话数据...</span>
+          </div>
+          <div class="roster-title">SESSIONS</div>
+        </div>
       </div>
     </div>
+    <script>
+      // 开机计时（X.XX s，预览台右下时间轴读数同款格式；页面加载起算）：
+      // splash 专属。SPA 不刷新——splash 节点移除后必须自清 interval（守卫见内），
+      // 否则空转到进程结束。100ms 节拍 → 两位小数有活字感（CSS 侧 tabular-nums 防抖）。
+      // 就绪冻结（用户拍板 2026-10-28）：icepaw:boot-ready（= 状态行翻「就绪」、
+      // 100% 上报时刻）即停表——开机时长有了终值，保持展示随整体淡出退场。
+      // 本脚本先于 bundle 执行，监听器不会错过事件。
+      (function () {
+        var clock = document.getElementById("boot-clock");
+        if (!clock) return;
+        var t0 = performance.now();
+        var frozen = false;
+        var iv = 0;
+        var stop = function () { frozen = true; window.clearInterval(iv); };
+        window.addEventListener("icepaw:boot-ready", stop, { once: true });
+        var tick = function () {
+          if (frozen) return;
+          clock.textContent = ((performance.now() - t0) / 1000).toFixed(2) + " s";
+        };
+        tick();
+        iv = window.setInterval(function () {
+          if (!document.getElementById("boot-splash")) { window.clearInterval(iv); return; }
+          tick();
+        }, 100);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

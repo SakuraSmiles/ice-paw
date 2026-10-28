@@ -10,10 +10,23 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import router from "./router";
 import pinia from "./stores";
-import { reportBootProgress, bootReady } from "./utils/bootProgress";
+import { reportBootProgress, bootReady, rosterRemainingMs } from "./utils/bootProgress";
+import { getVersion } from "@tauri-apps/api/app";
 
 // 模块执行 = bundle 加载完成的最早信号（此前 splash 只有循环动画占位）
 reportBootProgress(15, "加载应用");
+
+// 启动页版本号（右下角档案行上方）：bundle 可执行的第一刻即取——Tauri IPC 此刻已
+// 就绪，早于亮窗与一切数据加载，是全链路最早取得点（withGlobalTauri 未开，
+// splash 静态期的内联脚本拿不到）。core:default 已含 core:app:default 放行。
+void getVersion()
+  .then((v) => {
+    const verEl = document.getElementById("boot-ver");
+    if (verEl) verEl.textContent = `v${v}`;
+  })
+  .catch(() => {
+    /* 浏览器 dev 无 Tauri IPC——留空（.boot-ver:empty 收起占位） */
+  });
 
 const app = createApp(App);
 app.use(pinia);
@@ -39,7 +52,7 @@ requestAnimationFrame(() => {
   });
   reportBootProgress(60, "加载会话数据");
   const MIN_SPLASH_MS = 2500;
-  const BOOT_TIMEOUT_MS = 10000;
+  const BOOT_TIMEOUT_MS = 14000; // 名册全序列（三组完整演完）上限 8 行 ~7s + 停顿 0.5s + 欢迎 1.5s + 欢迎后停留 1.5s ≈ 10.5s，兜底须留出余量
   const shownAt = performance.now();
   let finished = false;
   const finish = () => {
@@ -48,18 +61,25 @@ requestAnimationFrame(() => {
     const splash = document.getElementById("boot-splash");
     if (!splash) return;
     // 分层让位编舞（形态 A）：单一状态类驱动 splash 各层错峰退场（时间表见
-    // index.html 样式区注释），与 AppLayout 三拍入场（标题栏/侧栏/消息区）
-    // 同帧起跑——布局逐块生长，不再整体切屏。
+    // index.html 样式区注释）。应用入场放行在编舞播完、节点移除**之后**
+    // （实机反馈 2026-10-28：同帧起跑会让首页与未退完的环组重叠 ~950ms；
+    // 本版接受短暂纯底色空窗，下一版演进「应用骨架分阶段渲染 + 加载元素
+    // 分阶段退场」的无感衔接——届时入场信号再前移）。
     splash.classList.add("boot-letting");
-    window.dispatchEvent(new CustomEvent("icepaw:splash-out"));
-    window.setTimeout(() => splash.remove(), 950); // 编舞全长 + 余量（三处对齐）
+    window.setTimeout(() => {
+      splash.remove();
+      window.dispatchEvent(new CustomEvent("icepaw:splash-out"));
+    }, 950); // 编舞全长 + 余量（三处对齐）
   };
-  // 就绪事件先到 → 等满最少展示时长再退场；先到的是时限 → 直接退（就绪事件
-  // 迟到时 finished 已置位，天然幂等）
+  // 就绪事件先到 → 等满「最少展示时长 + 名册演完」再退场；先到的是时限 → 直接
+  // 退（就绪事件迟到时 finished 已置位，天然幂等）。名册三组全序列（agents→
+  // projects→sessions 一组完整演完下一组才登场）约 9s，退场须等名册收尾，否则
+  // 演到一半就被切走。
   const finishWhenAged = () => {
-    const elapsed = performance.now() - shownAt;
-    if (elapsed >= MIN_SPLASH_MS) finish();
-    else window.setTimeout(finishWhenAged, MIN_SPLASH_MS - elapsed);
+    const minWait = MIN_SPLASH_MS - (performance.now() - shownAt);
+    const wait = Math.max(minWait, rosterRemainingMs());
+    if (wait <= 0) finish();
+    else window.setTimeout(finishWhenAged, wait);
   };
   window.addEventListener("icepaw:boot-ready", finishWhenAged, { once: true });
   // 竞态补查：Sidebar 初始数据若在监听器挂上前就已完成（bootReady 已置位），

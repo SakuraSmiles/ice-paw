@@ -22,6 +22,9 @@
 @import '@fontsource/instrument-serif/400.css';
 @import '@fontsource/instrument-serif/400-italic.css';
 
+/* ---- 拉丁：Orbitron（可变字重，启动页字标用——偏宽体几何科幻风，2026-10-28） ---- */
+@import '@fontsource-variable/orbitron/wght.css';
+
 /* ---- 中文：Noto Sans SC（正文，简中子集） ---- */
 @font-face {
   font-family: 'Noto Sans SC';
