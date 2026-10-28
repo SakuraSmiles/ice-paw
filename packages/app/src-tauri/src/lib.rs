@@ -73,7 +73,7 @@ pub fn run() {
     // 落位零跳变；来源见 index.html 例外位注释）。
     {
         let bg = theme_window_bg(context.config().identifier.as_str());
-        if let Some(win) = context.config_mut().app.windows.iter_mut().next() {
+        if let Some(win) = context.config_mut().app.windows.first_mut() {
             win.background_color = Some(bg);
         }
     }
