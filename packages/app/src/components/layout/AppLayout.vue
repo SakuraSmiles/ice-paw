@@ -6,10 +6,11 @@ import Sidebar from "../chat/Sidebar.vue";
 import AuthNoticeStack from "../chat/AuthNoticeStack.vue";
 import TitleBar from "./TitleBar.vue";
 
-/** 启动入场编排（感官升级批 2）：splash 淡出（main.ts 320ms）与两区入场
- * stagger（窗口栏 0ms / 主体 60ms）**同帧开始**——触发信号 = main.ts finish()
- * 派发的 icepaw:splash-out（⚠️ 挂 boot-ready 会在不透明骨架背后提前播完，
- * 淡出时 stagger 已结束）。兜底两道：splash 节点已不在（退场后再挂载，如
+/** 启动入场编排（感官升级批 2）：触发信号 = main.ts finish() 派发的
+ * icepaw:splash-out——2026-10-28 实机拍板后移：编舞播完 + splash 节点移除
+ * 之后才派发（同帧起跑会让首页与未退完的环组重叠 ~950ms；本版接受短暂
+ * 纯底色空窗，下一版再做骨架分阶段渲染的无感衔接）。（⚠️ 挂 boot-ready
+ * 会在不透明骨架背后提前播完，淡出时 stagger 已结束。）兜底两道：splash 节点已不在（退场后再挂载，如
  * HMR 重挂 → 直接入场）/ 11.5s 超时（main.ts 10s 强制退场 + 360ms 移除之后，
  * 上报链断裂时 app 不得永远隐身）。reduced-motion 下全局 transition 归零
  * （tokens §12），入场瞬时完成。 */
@@ -90,8 +91,8 @@ watch(
 /* ---- 启动入场 · 渐进建设（形态 A）：TitleBar 与内容区解耦——
    TitleBar **不等退场编舞**（三键立刻可见可用确定项，2026-10-27）：mount 即
    渲染即显示，自带 300ms 入场淡入；splash 已让出顶部 36px 条带，主线程解冻
-   （~0.65s）≈ mount（~1.4s）时刻起可拖可点。内容区两拍仍在分层让位编舞中
-   （icepaw:splash-out 同帧起跑）：侧栏 t=150（自左滑入）→ 消息区 t=300
+   （~0.65s）≈ mount（~1.4s）时刻起可拖可点。内容区两拍在 splash-out 信号
+   （= 退场完成）后起跑：侧栏 t=150（自左滑入）→ 消息区 t=300
    （自下浮现）。Sidebar 是子组件根（.sidebar 继承父 scope id 可选中）。 ---- */
 .titlebar {
   animation: titlebar-in 300ms var(--ip-ease-out, ease) both;
@@ -133,6 +134,10 @@ watch(
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background-color: var(--ip-color-bg-secondary);
+  /* 内容区随窗口基底（2026-10-28 基底归一）：原 bg-secondary「亮纸面」是旧分区
+     模式遗留——悬浮面板模型下内容平铺在基底上（L1 沉降层），白纸/灰亮纸与
+     基底的色差就是「割裂感」本体（实测浅 #FFFFFF vs 基底 #FAFBFC、暗
+     #1C222B vs #14181F 差 8 阶更明显）。回滚 = revert 本行 */
+  background-color: var(--ip-color-bg-base);
 }
 </style>

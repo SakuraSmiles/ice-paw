@@ -132,8 +132,7 @@ watch(() => chat.activeConvId, () => {
   align-items: center;
   gap: var(--ip-spacing-2_5);
   padding: 0 var(--ip-spacing-6);
-  background: var(--ip-color-bg-chat-header);
-  backdrop-filter: blur(8px);
+  background: var(--ip-color-bg-chat-header); /* blur 2026-10-28 随令牌实色化退役 */
   flex-shrink: 0;
 }
 

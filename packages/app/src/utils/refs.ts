@@ -16,6 +16,13 @@ export function shortCode(id: string): string {
   return String((h >>> 0) % 10000).padStart(4, "0");
 }
 
+/** 未命名会话显示名：空标题 → 「会话#短码」（@ 引用同款惯例；启动名册等多个
+ *  未命名会话同屏时可区分——短码稳定不漂移，纯装饰不参与查找）。 */
+export function convDisplayTitle(title: string | null | undefined, id: string): string {
+  const t = (title ?? "").trim();
+  return t || `会话#${shortCode(id)}`;
+}
+
 /** 消息 content_blocks 里的 Reference 块（ChatMessages 渲染引用卡片用）。 */
 export interface ParsedRef {
   refKind: "conversation" | "agent" | "message";

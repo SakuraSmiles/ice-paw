@@ -23,7 +23,8 @@ import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
 import { PanelLeftClose, PanelLeftOpen, MessagesSquare, Settings, Hash, Star, Sparkle } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
-import { reportBootProgress, rosterAppend } from "../../utils/bootProgress";
+import { reportBootProgress, rosterAppend, onRosterDone } from "../../utils/bootProgress";
+import { convDisplayTitle } from "../../utils/refs";
 
 const router = useRouter();
 const project = useProjectStore();
@@ -339,15 +340,21 @@ const scopeCoordinator = computed(() => {
 const channelCoordinatorName = computed(() => scopeCoordinator.value?.name ?? "待选举");
 
 onMounted(async () => {
+  // 「就绪」100% 上报推迟到名册最后一组真正演完（而非三组数据刚注入时）——中心
+  // 「就绪/欢迎」须在名册之后（名册先、欢迎后），onRosterDone 回调在名册演完时刻
+  // 触发。恢复决策是同步纯函数，就绪不等它。
+  onRosterDone(() => reportBootProgress(100, "就绪"));
   await agent.load();
-  // AGENTS 就绪名册（启动演出：遮罩划出逐行揭示，agent 数据到达即注入；
-  // splash 退场后 no-op 零成本）
-  rosterAppend(agent.list.map((a) => ({ name: a.name, id: a.id })));
+  // 就绪名册三组（启动演出：遮罩划出逐行揭示，各数据到达即注入；splash 退场
+  // 后 no-op 零成本）。行内容 = 到达数据的展示标签；三组统一上限 8 条——
+  // 名册是短暂演出，全量标题会成「数据雨」，只留最近几条。
+  rosterAppend("agents", agent.list.slice(0, 8).map((a) => `${a.name}（${a.id}）`));
   await project.load();
+  rosterAppend("projects", project.activeProjects.slice(0, 8).map((p) => p.name));
   await chat.loadConversations();
-  // 启动数据链完成（agent 列表 + 项目 + 会话列表）→ 加载页 100%（null-safe：
-  // jsdom 测试/splash 已退场时 no-op）。恢复决策是同步纯函数，就绪不等它。
-  reportBootProgress(100, "就绪");
+  // 未命名会话 → 「会话#短码」（@ 引用同款惯例，多个未命名同屏可区分；实机
+  // 反馈 2026-10-28：空标题直传名册会渲染出空行）
+  rosterAppend("sessions", chat.conversations.slice(0, 8).map((c) => convDisplayTitle(c.title, c.id)));
   // 启动恢复（planRestore 决策纯函数，记忆由 App.vue watch 落盘）：优先恢复
   // 「上次会话与所在页面」；持久化会话失效回退最近一条（原打开行为）；上次
   // 明确欢迎态则保持欢迎态。delegation 后台会话不作为恢复目标（用户上次
@@ -753,7 +760,7 @@ function timeAgoLabel(dateStr: string): string {
 
     <!-- 右缘调宽把手（隐形热区，hover 显形；双击重置 320px；收起态无宽度可调故隐藏，
          sidebarWidth 值不动——展开即还原用户上次拖的宽度） -->
-    <PanelResizeHandle v-if="!collapsed" @dragstart="startSidebarDrag" @reset="resetSidebarWidth" />
+    <PanelResizeHandle v-if="!collapsed" variant="tab" @dragstart="startSidebarDrag" @reset="resetSidebarWidth" />
 
     <!-- Agent 选择器弹窗 -->
     <AgentPicker v-if="showPicker" :agent-ids="pickerAgentIds" @select="onPickAgent" @close="showPicker = false" />
@@ -763,14 +770,22 @@ function timeAgoLabel(dateStr: string): string {
 <style scoped>
 .sidebar {
   /* 宽度改由 useResizablePanel 响应式绑定（内联 style）——把手 overlay 定位挂靠。
-     高度 100%（原 100vh——TitleBar 批 3 后侧栏住进 app-shell 列布局，100vh
-     会溢出栏高 36px 产生内部滚动） */
+     高度由 .app-layout 的 flex stretch 撑满（原 height:100%——悬浮化后 margin
+     缝隙会与百分比高度相加溢出，stretch 自动扣缝更稳）。 */
   position: relative;
-  height: 100%;
   display: flex;
   flex-direction: column;
   background-color: var(--ip-color-bg-primary);
-  border-right: 1px solid var(--ip-color-border-default);
+  /* 悬浮面板（2026-10-28 拍板：分割线分区 → 悬浮面板分区，先落侧栏）：右缘
+     竖线退役，四周 8px 缝隙 + 圆角 + 投影浮于窗口基底。⚠️ 不挂永久
+     overflow:hidden——rail 会话 flyout 是 absolute 伸出侧栏外的（休息态不得
+     裁剪，见收起/展开节注释）；圆角由本体 background 被 border-radius 裁切
+     成立（header/footer/列表子层均透明不涂角）。暗色下阴影弱 → 1px 描边
+     兜底轮廓（与全仓 popover 同惯例）。 */
+  margin: var(--ip-spacing-2); /* 四周等宽缝隙（右缝同在——面板与内容区脱开） */
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-lg);
+  box-shadow: var(--ip-shadow-sm);
   user-select: none;
 }
 

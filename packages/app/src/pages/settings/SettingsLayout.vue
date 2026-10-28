@@ -113,8 +113,7 @@ function navigate(key: string) {
   padding: 14px var(--ip-spacing-8);
   min-height: 68px;
   border-bottom: 1px solid var(--ip-color-border-default);
-  background-color: var(--ip-color-bg-chat-header);
-  backdrop-filter: blur(8px);
+  background-color: var(--ip-color-bg-chat-header); /* blur 2026-10-28 随令牌实色化退役 */
   flex-shrink: 0;
 }
 

@@ -400,6 +400,7 @@
   --ip-color-bg-primary:      var(--ip-gray-50);            /* 主背景 */
   --ip-color-bg-secondary:    var(--ip-white);              /* 卡片、面板 */
   --ip-color-bg-tertiary:     var(--ip-gray-100);           /* 嵌套容器、悬停态 */
+  --ip-color-bg-base:         var(--ip-color-bg-primary);     /* 窗口基底语义别名（2026-10-28）：TitleBar/窗口壳/splash 底专属——命名即契约，勿在基底位单独涂色 */
   --ip-color-bg-elevated:     var(--ip-white);              /* 浮层 */
   --ip-color-bg-overlay:      var(--ip-overlay-light);      /* 模态遮罩 */
   --ip-color-bg-user-bubble:        var(--ip-primary-600);   /* #2563EB  v1.0.3: 主题色蓝 */
@@ -430,7 +431,7 @@
   --ip-color-bg-input:         #FFFFFF;
   --ip-color-bg-sidebar-item-hover: #F0F2F5;
   --ip-color-bg-sidebar-item-active: var(--ip-color-primary-soft-bg);
-  --ip-color-bg-chat-header:   rgba(255, 255, 255, 0.85);
+  --ip-color-bg-chat-header:   var(--ip-color-bg-primary); /* 2026-10-28 实色化：半透明白+blur 退役（与窗口基底全等，防「亮带割裂」）；回滚=revert 本行 */
   --ip-color-text-message-ai:  #252C36;
   --ip-color-bg-message-ai:    #F4F6F8;
   --ip-color-border-error:    var(--ip-danger-base);
@@ -535,7 +536,7 @@
   --ip-color-bg-input:              #252C36;
   --ip-color-bg-sidebar-item-hover: #252C36;
   --ip-color-bg-sidebar-item-active: var(--ip-color-primary-soft-bg);
-  --ip-color-bg-chat-header:        rgba(20, 24, 31, 0.85);
+  --ip-color-bg-chat-header:        var(--ip-color-bg-primary); /* 2026-10-28 实色化（暗区合成本与基底全等，零视觉变化） */
   --ip-color-text-message-ai:       #E6EAEF;
   --ip-color-bg-message-ai:         #252C36;
 
@@ -591,7 +592,7 @@
     --ip-color-bg-input:              #252C36;
     --ip-color-bg-sidebar-item-hover: #252C36;
     --ip-color-bg-sidebar-item-active: var(--ip-color-primary-soft-bg);
-    --ip-color-bg-chat-header:        rgba(20, 24, 31, 0.85);
+    --ip-color-bg-chat-header:        var(--ip-color-bg-primary); /* 2026-10-28 实色化（暗区合成本与基底全等，零视觉变化） */
     --ip-color-text-message-ai:       #E6EAEF;
     --ip-color-bg-message-ai:         #252C36;
     --ip-color-bg-ai-bubble:          var(--ip-gray-850);      /* v1.0.3 */

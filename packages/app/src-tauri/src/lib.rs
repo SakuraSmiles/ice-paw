@@ -749,7 +749,7 @@ fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
 /// 与 Tauri app_data_dir 同规则（data_dir()/identifier——此刻无 AppHandle，
 /// 用 dirs crate 手动拼；Windows=%APPDATA%，mac=~/Library/Application Support，
 /// linux=~/.local/share，与 Tauri/ dirs 完全一致）。色值 = 对应主题 splash
-/// 底色（index.html 例外位注释同源：浅 #FAFBFC / 深 #0B1116）。
+/// 底色（index.html 例外位注释同源：浅 #FAFBFC / 深 #14181F——2026-10-28 与 app 基底归一）。
 fn theme_window_bg(identifier: &str) -> tauri::utils::config::Color {
     let marker = dirs::data_dir()
         .map(|d| d.join(identifier).join(commands::preferences_cmd::THEME_MARKER_FILE))
@@ -757,7 +757,8 @@ fn theme_window_bg(identifier: &str) -> tauri::utils::config::Color {
         .map(|s| s.trim().to_ascii_lowercase());
     let dark = marker.as_deref() == Some("dark");
     if dark {
-        tauri::utils::config::Color(0x0B, 0x11, 0x16, 0xFF)
+        // 2026-10-28 基底归一：#14181F = app gray-900（原 #0B1116 DSH 黑场值退役；splash --sp-bg 同步）
+        tauri::utils::config::Color(0x14, 0x18, 0x1F, 0xFF)
     } else {
         tauri::utils::config::Color(0xFA, 0xFB, 0xFC, 0xFF)
     }

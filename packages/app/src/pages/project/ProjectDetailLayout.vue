@@ -135,8 +135,7 @@ watch(current, (cur) => {
   padding: var(--ip-spacing-3) var(--ip-spacing-6);
   min-height: 68px;
   border-bottom: 1px solid var(--ip-color-border-default);
-  background-color: var(--ip-color-bg-chat-header);
-  backdrop-filter: blur(8px);
+  background-color: var(--ip-color-bg-chat-header); /* blur 2026-10-28 随令牌实色化退役 */
   flex-shrink: 0;
 }
 /* 标签条在场（正常态）：去底边线（error 态无 tab 条，保留分割线） */
@@ -168,8 +167,7 @@ watch(current, (cur) => {
 .tab-bar {
   display: flex; gap: var(--ip-spacing-2_5);
   padding: 0 var(--ip-spacing-6);
-  background: var(--ip-color-bg-chat-header);
-  backdrop-filter: blur(8px);
+  background: var(--ip-color-bg-chat-header); /* blur 2026-10-28 随令牌实色化退役 */
   flex-shrink: 0;
 }
 .tab-item {

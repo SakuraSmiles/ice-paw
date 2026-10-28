@@ -97,8 +97,9 @@ onUnmounted(() => {
   justify-content: flex-end;
   height: 36px;
   flex-shrink: 0;
-  background: var(--ip-color-bg-primary);
-  border-bottom: 1px solid var(--ip-color-border-default);
+  background: var(--ip-color-bg-base); /* 窗口基底语义别名（=bg-primary；2026-10-28 收口：基底位统一走别名） */
+  /* 底缘横线退役（2026-10-28 悬浮面板化）：TitleBar 属窗口基底（L0），侧栏
+     以缝隙+圆角+投影浮于其下——基底保持连续无分割线 */
   user-select: none;
 }
 

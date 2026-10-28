@@ -590,7 +590,7 @@ async function toggleScreenShare() {
    header 提档不破坏既有相对序：其内最高竞争者 confirm-bar 走 base 档相对层级。
    padding 垂直 14→12：间距令牌无 14 档就近收编（min-height:68 兜底，无头像
    态高度不变；有 xl 头像态 72→68） */
-.chat-header { display:flex; align-items:center; justify-content:space-between; padding:var(--ip-spacing-3) var(--ip-spacing-6); min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:var(--ip-z-dropdown); }
+.chat-header { display:flex; align-items:center; justify-content:space-between; padding:var(--ip-spacing-3) var(--ip-spacing-6); min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); /* blur 2026-10-28 随令牌实色化退役 */ flex-shrink:0; position:relative; z-index:var(--ip-z-dropdown); }
 /* 标签条在场（会话态）：去底边线，标题与标签条视觉一体（同底色无分割） */
 .chat-header.has-tabbar { border-bottom:none; }
 .header-left { display:flex; align-items:center; gap: var(--ip-spacing-3); min-width:0; }
