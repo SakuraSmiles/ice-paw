@@ -22,7 +22,7 @@
 |------|------|------|
 | Node.js | **20+** | CI 使用 22；推荐 20 LTS 及以上 |
 | pnpm | **9+** | monorepo 包管理 |
-| Rust | **1.77+** | Tauri 2 MSRV；推荐 rustup stable |
+| Rust | **1.99.0**（钉版） | rust-toolchain.toml 钉死，仓库内自动安装切换；升级须本地全绿后再改钉版 |
 | OS | Windows / macOS / Linux | 需 WebView（Win: WebView2 / macOS: WKWebView / Linux: WebKitGTK） |
 
 > 平台工具链细节见 [Tauri 官方文档](https://v2.tauri.app/start/prerequisites/)
@@ -86,7 +86,7 @@ ice-paw/
 ### 前端
 
 ```bash
-pnpm test          # Vitest：utils/stores/api/composables/组件（700+，持续增长，以 CI 为准）
+pnpm test          # Vitest：utils/stores/api/composables/组件（750+，持续增长，以 CI 为准）
 pnpm test:watch    # watch 模式（须在 packages/app 下执行）
 ```
 
@@ -97,7 +97,7 @@ cd packages/app/src-tauri
 
 # 需显式传 SODIUM_LIB_DIR（或 cd 到 src-tauri 让 Cargo 自动读取 .cargo/config.toml）
 SODIUM_LIB_DIR="path/to/sodium-prebuilt/libsodium/x64/Release/v143/static" \
-SODIUM_STATIC=true cargo test --lib   # 单元测试（1500+，持续增长，以 CI 为准）
+SODIUM_STATIC=true cargo test --lib   # 单元测试（1600+，持续增长，以 CI 为准）
 
 cargo clippy                           # Lint
 ```
@@ -133,7 +133,7 @@ Stronghold key 派生：passphrase → blake2b256 → 32 字节 key。
 ## 路线图
 
 - [x] M1-M5：基础架构 + 多 Agent + 工具系统 + 项目空间
-- [x] 测试体系（Rust 1500+ + 前端 700+，持续增长，以 CI 为准）
+- [x] 测试体系（Rust 1600+ + 前端 750+，持续增长，以 CI 为准）
 - [x] 会话轨迹导出（`export_session_trajectory` JSONL）
 - [ ] OS keyring 接入替代固定 passphrase
 - [ ] 会话全文搜索

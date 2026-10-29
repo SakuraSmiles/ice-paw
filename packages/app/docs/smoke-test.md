@@ -26,7 +26,7 @@
 | 配置项 | 值 |
 |--------|-----|
 | Provider | `glm` |
-| Model | `glm-4-flash` |
+| Model | `glm-5.3` |
 | Base URL | `https://open.bigmodel.cn/api/paas/v4` |
 | System Prompt | `你是一个有用的助手。` |
 
@@ -35,7 +35,7 @@
 | 配置项 | 值 |
 |--------|-----|
 | Provider | `minimax` |
-| Model | `MiniMax-M2.5` |
+| Model | `MiniMax-M3` |
 | Base URL | `https://api.minimaxi.com/anthropic` |
 | System Prompt | `你是一个有用的助手。` |
 
@@ -44,7 +44,7 @@
 | 配置项 | 值 |
 |--------|-----|
 | Provider | `anthropic` |
-| Model | `claude-sonnet-4-20250514` |
+| Model | `claude-sonnet-5` |
 | Base URL | `https://api.anthropic.com` |
 | System Prompt | `You are a helpful assistant.` |
 | Temperature | 0.7 |
