@@ -3,7 +3,9 @@
      ⚠️ 取舍已拍板（2026-10-26）：Win11 Snap Layouts 悬停最大化按钮的布局
      弹层丢失（DWM 层能力，自绘按钮无法触发）；Aero Snap（Win+方向键/拖到
      边缘）不受影响。Alt+Space 系统菜单仍可用。
-     macOS 交通灯不支持（产品线 Windows NSIS 单端）。
+     macOS 原生交通灯不支持（Windows NSIS 单端），但三键采用 mac 交通灯
+     视觉（2026-10-29 拍板：12px 彩点 + hover 微符号；键序仍 Windows 惯例）。
+     栏体只罩内容区（侧栏 2026-10-29 顶到顶部）。
 -->
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
@@ -68,29 +70,29 @@ onUnmounted(() => {
   >
     <!-- 左侧无内容（2026-10-27 用户拍板去字标）：整条栏体空白区皆拖拽区 -->
     <div class="tb-actions" role="group" aria-label="窗口控制">
-      <button class="tb-btn" type="button" aria-label="最小化" @click="onMinimize">
-        <Minus :size="14" :stroke-width="1.75" />
+      <button class="tb-btn tb-min" type="button" aria-label="最小化" @click="onMinimize">
+        <Minus :size="9" :stroke-width="3" />
       </button>
       <button
-        class="tb-btn"
+        class="tb-btn tb-max"
         type="button"
         :aria-label="maximized ? '还原' : '最大化'"
         @click="onToggleMaximize"
       >
-        <Copy v-if="maximized" :size="13" :stroke-width="1.75" />
-        <Square v-else :size="12" :stroke-width="1.75" />
+        <Copy v-if="maximized" :size="9" :stroke-width="3" />
+        <Square v-else :size="9" :stroke-width="3" />
       </button>
       <button class="tb-btn tb-close" type="button" aria-label="关闭" @click="onClose">
-        <X :size="15" :stroke-width="1.75" />
+        <X :size="9" :stroke-width="3" />
       </button>
     </div>
   </header>
 </template>
 
 <style scoped>
-/* 栏体 = 侧栏顶缘的视觉延续（同底色），全宽压在 Sidebar + 内容区之上，
-   呈「框」而非「横带」——一体感的关键。高度 36px 贴 Discord/Slack 惯例。
-   左侧恒空（去字标拍板）：按钮区右贴，其余整条为拖拽区。 */
+/* 栏体只罩内容区（2026-10-29 侧栏顶到顶部拍板）：侧栏全高后 TitleBar 不再
+   整宽压顶。高度 36px；左侧恒空（去字标拍板）：按钮区右贴，其余整条为
+   拖拽区（侧栏 header 空白区兼任拖拽——窗口拖拽面不缩水）。 */
 .titlebar {
   display: flex;
   align-items: center;
@@ -98,50 +100,73 @@ onUnmounted(() => {
   height: 36px;
   flex-shrink: 0;
   background: var(--ip-color-bg-base); /* 窗口基底语义别名（=bg-primary；2026-10-28 收口：基底位统一走别名） */
-  /* 底缘横线退役（2026-10-28 悬浮面板化）：TitleBar 属窗口基底（L0），侧栏
-     以缝隙+圆角+投影浮于其下——基底保持连续无分割线 */
   user-select: none;
 }
 
-/* 失焦降对比（不消失——窗口控制恒可见是平台惯例） */
-.titlebar:not(.focused) .tb-btn { color: var(--ip-color-text-tertiary); }
-
+/* ---- 三键 = mac 交通灯风格（2026-10-29 拍板）：12px 彩色圆点、静止无符号、
+   hover 浮现微型符号（lucide 图标常驻 DOM 仅视觉隐藏——测试锁图标切换）。
+   键序保持 Windows 惯例（最小化/最大化/关闭 = 黄/绿/红），颜色即语义跨平台
+   无歧义；命中区 20px（圆点 12px 视觉 + 呼吸边距）。失焦态圆点退灰
+   （mac 惯例的激活语义）。drag-region 只挂栏体——按钮区不挂。 */
 .tb-actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
   height: 100%;
+  padding-right: 10px; /* 圆点组离窗口右缘的呼吸位 */
 }
 
-/* 三键命中区 46px 宽贴 Windows 惯例；hover 微底色（关闭键 danger 惯例红）。
-   drag-region 属性只挂在栏体——按钮区不挂，点击不会被拖拽吞掉。 */
 .tb-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 100%;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border: none;
   background: transparent;
-  color: var(--ip-color-text-secondary);
   cursor: default; /* 窗口控制不是链接语义，default 比 pointer 贴平台惯例 */
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out, ease);
 }
 
-.tb-btn:hover {
+/* 圆点本体 */
+.tb-btn::before {
+  content: "";
+  position: absolute;
+  inset: 4px; /* 20px 命中区 → 12px 圆点 */
+  border-radius: 50%;
+  transition: filter var(--ip-duration-fast) var(--ip-ease-out, ease);
+}
+.tb-min::before  { background: #febc2e; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.tb-max::before  { background: #28c840; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.tb-close::before { background: #ff5f57; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+
+/* 微型符号：静止隐藏、hover/聚焦浮现（lucide 常驻 DOM——aria/键盘可达不断） */
+.tb-btn :deep(svg) {
+  position: relative;
+  z-index: 1;
+  width: 9px;
+  height: 9px;
+  stroke-width: 3;
+  color: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out, ease);
+}
+.tb-btn:hover :deep(svg),
+.tb-btn:focus-visible :deep(svg) {
+  opacity: 1;
+}
+
+/* 失焦：圆点退灰（激活窗口语义；符号不浮现） */
+.titlebar:not(.focused) .tb-btn::before {
   background: var(--ip-color-bg-tertiary);
-  color: var(--ip-color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--ip-color-border-default);
 }
-
-.tb-btn:active {
-  background: var(--ip-color-border-default);
-}
-
-.tb-close:hover {
-  background: #e81123; /* Windows 关闭键惯例红（语义层 danger 令牌为此场景的例外位） */
-  color: #fff;
-}
+.titlebar:not(.focused) .tb-btn :deep(svg) { opacity: 0; }
 
 .tb-btn:focus-visible {
   outline: 2px solid var(--ip-color-border-focus, var(--ip-primary-400));
-  outline-offset: -2px;
+  outline-offset: -1px;
+  border-radius: 50%;
 }
 </style>

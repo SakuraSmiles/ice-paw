@@ -425,7 +425,7 @@ function timeAgoLabel(dateStr: string): string {
 <template>
   <aside class="sidebar" :class="{ collapsed, animating }" :style="sidebarStyle">
     <!-- 顶部：标题 + 收起侧栏（主题钮已移 footer，2026-09-01） -->
-    <div v-if="!collapsed" class="sidebar-header">
+    <div v-if="!collapsed" class="sidebar-header" data-tauri-drag-region>
       <div class="sidebar-brand" role="button" tabindex="0" @click="router.push('/')" @keydown.enter="router.push('/')" @keydown.space.prevent="router.push('/')">
         <span class="brand-icon"><Sparkle :size="20" /></span>
         <span class="brand-name">IcePaw</span>
@@ -627,7 +627,7 @@ function timeAgoLabel(dateStr: string): string {
     <div v-else class="sidebar-rail">
       <!-- header：单占位展开钮（收起态不保品牌位，用户拍板 2026-09-01；
            居中与行动区按钮同列） -->
-      <div class="sidebar-header rail-header">
+      <div class="sidebar-header rail-header" data-tauri-drag-region>
         <button class="btn-icon" title="展开侧边栏" @click="toggleCollapsed">
           <PanelLeftOpen :size="20" />
         </button>
@@ -770,7 +770,7 @@ function timeAgoLabel(dateStr: string): string {
 <style scoped>
 .sidebar {
   /* 宽度改由 useResizablePanel 响应式绑定（内联 style）——把手 overlay 定位挂靠。
-     高度由 .app-layout 的 flex stretch 撑满（原 height:100%——悬浮化后 margin
+     高度由 .app-shell 行向 flex stretch 撑满全高（原 height:100%——悬浮化后 margin
      缝隙会与百分比高度相加溢出，stretch 自动扣缝更稳）。 */
   position: relative;
   display: flex;
@@ -795,7 +795,11 @@ function timeAgoLabel(dateStr: string): string {
   align-items: center;
   justify-content: space-between;
   padding: 14px var(--ip-spacing-4);
-  min-height: 68px;
+  /* 100px = LOGO 行底缘（分割线）对齐右侧会话标题行底缘（窗口顶 110px）：
+     36(TitleBar) + 6(内容列上偏移，实测) + 68(ChatHeader) − 8(侧栏 margin-top)
+     − 1(侧栏描边) − 1(分割线厚)。侧栏上顶 36px 后由本行高吸收（2026-10-29
+     拍板「调 LOGO 行高而非整体」——探针实测值，勿凭 +36 推算（差 5px）） */
+  min-height: 100px;
   flex-shrink: 0;
 }
 
@@ -1209,6 +1213,7 @@ function timeAgoLabel(dateStr: string): string {
 
 /* rail header：单占位展开钮居中（与行动区按钮同列；收起态不保品牌位） */
 .rail-header {
+  min-height: 0; /* 对齐语义仅展开态 LOGO 行；rail 窄列不参与 */
   padding: 14px var(--ip-spacing-0_5);
   justify-content: center;
 }

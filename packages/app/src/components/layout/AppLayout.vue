@@ -54,11 +54,13 @@ watch(
 
 <template>
   <div class="app-shell" :class="{ 'is-entered': entered }">
-    <!-- 自绘窗口栏（感官升级批 3 · L3）：decorations:false 后承接拖拽/三键，
-         全宽压顶与侧栏同底色成「框」——见 TitleBar 组件头取舍注释 -->
-    <TitleBar />
-    <div class="app-layout">
-      <Sidebar />
+    <!-- 侧栏顶到顶部（2026-10-29 拍板）：全高悬浮浮板列 + 右侧内容列
+         （TitleBar 只罩内容区，不再整宽压顶——Arc/Linear 形态）。侧栏
+         header 的空白区兼任拖拽区（见 Sidebar），窗口拖拽面不缩水 -->
+    <Sidebar />
+    <div class="app-right">
+      <!-- 自绘窗口栏（感官升级批 3 · L3）：decorations:false 后承接拖拽/三键 -->
+      <TitleBar />
       <main class="app-main">
         <router-view v-slot="{ Component }">
           <!-- 页级过渡（UX #7 + 批 1 方向感知）：out-in 顺序切换（无叠影）；
@@ -78,11 +80,10 @@ watch(
 </template>
 
 <style scoped>
-/* 纵向壳：TitleBar（36px 固定）+ 原横向布局（占余高）。100vh 归属从
-   .app-layout 上移到壳层，内层改 flex:1（min-height:0 保滚动语义）。 */
+/* 横向壳（2026-10-29 侧栏顶到顶部拍板）：全高侧栏列 + 右侧内容列
+   （TitleBar 36px + app-main）。侧栏由本行 stretch 撑满全高。 */
 .app-shell {
   display: flex;
-  flex-direction: column;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
@@ -121,10 +122,12 @@ watch(
 .app-main {
   transition-delay: 300ms;
 }
-.app-layout {
+.app-right {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
