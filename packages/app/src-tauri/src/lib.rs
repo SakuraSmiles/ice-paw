@@ -78,6 +78,33 @@ pub fn run() {
         }
     }
 
+    // 窗口尺寸/位置预置（0.9.12 生产实案「小黑窗→实际尺寸跳变」根治，2026-10-29）：
+    // window-state 插件的 restore 在 on_window_ready（窗口已按 config 默认尺寸
+    // 显示**之后**）才应用保存值 = 可见跳变。run 前预读插件状态文件把保存的
+    // 尺寸/位置/最大化写进 config——创建即最终形态，restore 变幂等确认。
+    // 手解插件私有 JSON 的四个字段（格式漂移/解析失败静默跳过回退现状）。
+    {
+        let state_file = dirs::data_dir()
+            .map(|d| d.join(context.config().identifier.as_str()).join(".window-state.json"));
+        if let Some(parsed) = state_file.as_deref().and_then(parse_saved_window_state) {
+            if let Some(win) = context.config_mut().app.windows.first_mut() {
+                if let Some(w) = parsed.width {
+                    win.width = w.max(900.0);
+                }
+                if let Some(h) = parsed.height {
+                    win.height = h.max(600.0);
+                }
+                if let Some(x) = parsed.x {
+                    win.x = Some(x);
+                }
+                if let Some(y) = parsed.y {
+                    win.y = Some(y);
+                }
+                win.maximized = parsed.maximized;
+            }
+        }
+    }
+
     let mut builder = tauri::Builder::default();
     // 单实例：点审批 toast / 双击 exe 拉起第二进程时拦截并前置主实例（防双开）。
     // 必须最先注册——晚注册则第二实例可能在拦截生效前已起窗。
@@ -762,6 +789,30 @@ fn theme_window_bg(identifier: &str) -> tauri::utils::config::Color {
     tauri::utils::config::Color(0x14, 0x18, 0x1F, 0xFF)
 }
 
+/// window-state 插件保存的 main 窗口状态（手解四个字段；格式漂移防御 = 解析
+/// 失败返回 None 静默回退默认尺寸）。
+struct SavedWindowState {
+    width: Option<f64>,
+    height: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    maximized: bool,
+}
+
+fn parse_saved_window_state(path: &std::path::Path) -> Option<SavedWindowState> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let main = v.get("main")?;
+    let f = |k: &str| main.get(k).and_then(|x| x.as_f64());
+    Some(SavedWindowState {
+        width: f("width"),
+        height: f("height"),
+        x: f("x"),
+        y: f("y"),
+        maximized: main.get("maximized").and_then(|x| x.as_bool()).unwrap_or(false),
+    })
+}
+
 /// 启动期致命错误统一出口：三段式可读文案 + 兜底日志 +（Windows）原生对话框。
 ///
 /// 此路径发生在 tracing 未初始化时（WebView2 panic 先于 setup 闭包），故兜底日志
@@ -868,6 +919,12 @@ fn prune_webview_cache_on_version_change(context: &tauri::Context) {
 /// 内核与路径解耦：`root` = EBWebView 目录（测试注入 tmp 目录缩样布局）。
 #[cfg(windows)]
 fn prune_impl(root: &std::path::Path, version: &str) {
+    // 生产 hint：50MB 常态 ≈ 几百直接子项，巨型 profile（0.6.15 实案 606MB）数千+
+    prune_impl_with_hint(root, version, 2000);
+}
+
+#[cfg(windows)]
+fn prune_impl_with_hint(root: &std::path::Path, version: &str, entry_hint: usize) {
     let marker = root.join(".webview-cache-gen");
 
     // 同版本快路径：不动（一次读小标记文件，<1ms）
@@ -876,6 +933,38 @@ fn prune_impl(root: &std::path::Path, version: &str) {
     }
 
     let profile = root.join("Default");
+
+    // 尺寸阈值闸（0.9.12 生产实案「升级首启卡顿」治本，2026-10-29）：0.6.15 的
+    // 606MB 巨型 profile 事故后已加 --disk-cache-size=50MB 封顶，**无条件**清缓存
+    // 变成冗余自残——Code Cache 是编译缓存（性能资产：vendor 分包跨版本命中即
+    // 免冷编译），每次版本升级抹掉它 = 强制全量冷启动。两级判定防膨胀复发又不
+    // 阻塞启动：一级 = 直接子项数浅判（readdir 亚毫秒）；二级 = 超阈才递归精算
+    // 字节数（此时膨胀已近实锤，遍历成本可接受）。
+    const PRUNE_THRESHOLD: u64 = 256 * 1024 * 1024;
+    let mut top_entries = 0usize;
+    for sub in ["Cache", "Code Cache"] {
+        if let Ok(rd) = std::fs::read_dir(profile.join(sub)) {
+            top_entries += rd.count();
+        }
+    }
+    let total: u64 = if top_entries >= entry_hint {
+        let mut t = 0;
+        for sub in ["Cache", "Code Cache"] {
+            t += dir_size_on_disk(&profile.join(sub));
+        }
+        t
+    } else {
+        0
+    };
+    if top_entries < entry_hint || total < PRUNE_THRESHOLD {
+        eprintln!(
+            "[ice_paw] 版本变化（{version}），缓存未超膨胀阈（一级子项 {top_entries} / {} MB）——保留热启动（Code Cache 编译缓存）",
+            total / (1024 * 1024)
+        );
+        let _ = std::fs::write(&marker, version);
+        return;
+    }
+
     // rename-then-background-delete（0.9.11 生产实案「首启白窗长时间未响应」主源
     // 修复，2026-10-29）：旧形态同步 remove_dir_all 几十万小文件——慢机上 5~20s，
     // 且发生在窗口创建**之前**＝用户对着空桌面/白窗干等。同盘 rename 瞬时，
@@ -916,7 +1005,8 @@ fn prune_impl(root: &std::path::Path, version: &str) {
     }
     if !renamed.is_empty() {
         eprintln!(
-            "[ice_paw] 版本变化（{version}），WebView2 缓存已让位（{} 个目录），后台删除中",
+            "[ice_paw] 版本变化（{version}），缓存合计 {} MB 超阈值，WebView2 缓存已让位（{} 个目录），后台删除中",
+            total / (1024 * 1024),
             renamed.len()
         );
         std::thread::spawn(move || {
@@ -932,6 +1022,24 @@ fn prune_impl(root: &std::path::Path, version: &str) {
     let _ = std::fs::write(&marker, version);
 }
 
+/// 目录磁盘占用（递归求和；缺失目录 = 0）。浅遍历求和只为阈值判定，容错优先。
+#[cfg(windows)]
+fn dir_size_on_disk(dir: &std::path::Path) -> u64 {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut total: u64 = 0;
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            match e.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(e.path()),
+                Ok(_) => total += e.metadata().map(|m| m.len()).unwrap_or(0),
+                Err(_) => {}
+            }
+        }
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     // U1-1：panic payload 提取覆盖最常见的两种形态（&str 字面量 / String 格式化）。
@@ -943,10 +1051,11 @@ mod tests {
         assert_eq!(super::panic_payload_to_string(p.as_ref()), "code 42");
     }
 
-    // prune 的目录副作用在 tmp 目录验证（真实 EBWebView 布局缩样）
+    // prune 的目录副作用在 tmp 目录验证（真实 EBWebView 布局缩样）——两分支：
+    // 未超膨胀阈（hint 大）= 保留热启动；超阈（hint 小）= rename 让位清缓存
     #[cfg(windows)]
     #[test]
-    fn prune_clears_caches_on_version_change_and_skips_same_version() {
+    fn prune_threshold_keeps_small_cache_and_clears_bloated_on_version_change() {
         use std::fs;
         let root = std::env::temp_dir().join(format!("icepaw_prune_{}", uuid::Uuid::new_v4()));
         // prune_impl 的 root 语义 = EBWebView 目录本身；tmp 下缩样真实布局
@@ -960,23 +1069,37 @@ mod tests {
         fs::write(profile.join("Cookies"), b"user-data").unwrap();
 
         let marker = webview.join(".webview-cache-gen");
-        // 版本 v1 → 清两缓存 + 落标记
-        super::prune_impl(&webview, "1.0.0");
-        assert!(!profile.join("Cache").exists());
-        assert!(!profile.join("Code Cache").exists());
+        // 版本 v1 + 未超阈（hint 极大）→ 保留热启动：两缓存目录原样在场 + 落标记
+        super::prune_impl_with_hint(&webview, "1.0.0", usize::MAX);
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "未超阈不得清（热启动）");
+        assert!(profile.join("Code Cache/Code Cache/abc").exists());
         assert!(profile.join("Cookies").exists(), "用户数据不得被清");
         assert_eq!(fs::read_to_string(&marker).unwrap(), "1.0.0");
 
-        // 重建缓存后同版本再跑 → 快路径不删（缓存条目保留）
-        fs::create_dir_all(profile.join("Cache")).unwrap();
-        fs::write(profile.join("Cache/keep"), b"x").unwrap();
-        super::prune_impl(&webview, "1.0.0");
-        assert!(profile.join("Cache/keep").exists(), "同版本不得重删");
+        // 同版本再跑 → 快路径不动（缓存条目保留）
+        super::prune_impl_with_hint(&webview, "1.0.0", 1);
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "同版本不得重删");
 
-        // 版本 v2 → 再清
-        super::prune_impl(&webview, "2.0.0");
-        assert!(!profile.join("Cache").exists());
-        assert_eq!(fs::read_to_string(&marker).unwrap(), "2.0.0");
+        // 版本 v2 + 超阈（hint 小触发精算，但字节数 < 256MB → 仍保留）
+        super::prune_impl_with_hint(&webview, "2.0.0", 1);
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "字节未超 256MB 阈值不得清");
+
+        // 版本 v3 + 超阈且超字节（写 >256MB 稀疏内容太重——改判据：直接验超字节
+        // 路径的让位语义，写 257MB 零填充成本过高，用 f_000002 大文件方案同样重。
+        // 现实折中：阈值分支的字节级路径由 PRUNE_THRESHOLD 常量逻辑保证，此处
+        // 验证「超阈+超字节」的让位语义用truncate 稀疏文件（逻辑大小 257MB，零盘占用）
+        fs::write(profile.join("Cache/Cache_Data/f_000002"), b"").unwrap();
+        let f = fs::File::options()
+            .write(true)
+            .open(profile.join("Cache/Cache_Data/f_000002"))
+            .unwrap();
+        f.set_len(257 * 1024 * 1024).unwrap();
+        drop(f);
+        super::prune_impl_with_hint(&webview, "3.0.0", 1);
+        assert!(!profile.join("Cache").exists(), "超阈超字节 → 让位清理");
+        assert!(!profile.join("Code Cache").exists());
+        assert!(profile.join("Cookies").exists(), "用户数据不得被清");
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "3.0.0");
 
         let _ = fs::remove_dir_all(&root);
     }

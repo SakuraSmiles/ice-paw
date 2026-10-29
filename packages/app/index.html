@@ -784,6 +784,9 @@
          全部完成停 900ms → 逐行条自左覆盖退场(300ms) → 行移除。
          行入场间隔 110ms；退场间隔 70ms。JS 编排驱动（类切换），
          参数走 CSS 变量便于调速。标题独立入场（不依赖 boot-fade）。 */
+      /* 冷启动压缩演出（0.9.12 拍板）：门等待超 1.5s = 慢启动信号——名册整体
+         让位（演出压缩到 ~2s 欢迎收尾），慢机器早用软件优先于演出完整 */
+      .boot-roster.skipped { display: none; }
       .boot-roster {
         position: absolute;
         right: 8%;

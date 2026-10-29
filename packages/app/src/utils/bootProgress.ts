@@ -105,15 +105,36 @@ let rosterDoneTimer = 0; // 名册演完回调定时器（clear+reschedule，与
 
 // 首帧可见门状态：null = 门已过（正常路径零开销）；非 null = 待 flush 队列
 let rosterGate: Array<[string, readonly string[]]> | null = [];
+let rosterCompressed = false; // 压缩模式已生效（名册跳过，后续 append no-op）
+const gateStartAt = performance.now();
 (() => {
   const flush = () => {
     const pending = rosterGate;
     rosterGate = null;
-    if (pending) for (const [g, l] of pending) rosterAppendNow(g, l);
+    if (!pending || pending.length === 0) return;
+    // 演出自适应（0.9.12 拍板「慢启动压缩演出」）：门等待超 1.5s = 冷启动/慢机
+    // 信号——名册跳过逐组编舞（.boot-roster 隐藏），中心直接进欢迎收尾，演出
+    // 压缩到 ~2s；快机器完整演出不受影响。「慢机器早用软件」优先于演出完整。
+    const coldStart = performance.now() - gateStartAt > 1500;
+    if (coldStart) {
+      rosterCompressed = true;
+      const splash = document.getElementById("boot-splash");
+      splash?.querySelector<HTMLElement>(".boot-roster")?.classList.add("skipped");
+      rosterClock = 0;
+      rosterEndAt = performance.now();
+      window.clearTimeout(settleTimer);
+      const center = splash?.querySelector<HTMLElement>(".boot-center");
+      if (center) settleTimer = window.setTimeout(() => center.classList.add("welcoming"), 200);
+      window.clearTimeout(rosterDoneTimer);
+      rosterDoneTimer = window.setTimeout(() => rosterDoneCb?.(), 400);
+      return;
+    }
+    for (const [g, l] of pending) rosterAppendNow(g, l);
   };
   // 双 rAF：首帧提交后的下一帧 = 已真实可见；单 rAF 在首帧前回调不足以证明上屏
   requestAnimationFrame(() => requestAnimationFrame(flush));
-  // 兜底：页面后台/最小化启动时 rAF 恒不触发——3s 放行防演出卡死
+  // 兜底：页面后台/最小化启动时 rAF 恒不触发——3s 放行防演出卡死（超 1.5s
+  // 必然走压缩分支——异常态不演完整，交由 14s 总兜底收口）
   setTimeout(flush, 3000);
 })();
 
@@ -130,8 +151,9 @@ export function rosterAppend(groupId: string, labels: readonly string[]): void {
   // 「没人看得见」的窗口里照演，合成器就绪上屏时已演到中段 = 用户看到快进。
   // 双 rAF = 首帧已提交后的下一帧（可见性代理信号：合成器未就绪时 rAF 不触发）；
   // 门前的 append 请求排队保序，flush 后从 agents 组从头开演。3s 兜底放行防
-  // 异常态（页面后台启动 rAF 恒不来）卡死演出——超 3s 的极端冷启动仍会快进，
-  // 交由 14s 总兜底收口。
+  // 异常态（页面后台启动 rAF 恒不来）卡死演出。压缩模式（冷启动）后名册已
+  // 跳过——迟到的 append 全部 no-op（定时器不排、隐藏容器不动）。
+  if (rosterCompressed) return;
   if (rosterGate !== null) {
     rosterGate.push([groupId, labels]);
     return;
