@@ -249,6 +249,14 @@ const BUILTIN_TOOL_META: Record<string, string> = {
   read_agent_config: "读取自己的 agent.yaml 配置",
   propose_config_change: "提出 agent 配置变更提案（待审批）",
   update_plan: "维护任务计划（待办清单）",
+  // 发现与项目（0.9.4 发现四件，批次 Z 补中文描述）
+  list_projects: "列出全部项目（成员数 / 最近会话）",
+  get_project_details: "项目详情（成员 / 会话 / 任务台账概况）",
+  search_conversations: "全文检索会话内容",
+  get_task_ledger: "读项目任务台账（五桶进度）",
+  // 图片双向通道（0.9.7，批次 Z 补中文描述）
+  view_image: "读取本地图并回传给模型（降采样 PNG）",
+  show_image: "向用户展示本地图（汇报图）",
   // 屏幕操作
   capture_screen: "截取整个屏幕画面",
   list_windows: "列出当前打开的窗口",

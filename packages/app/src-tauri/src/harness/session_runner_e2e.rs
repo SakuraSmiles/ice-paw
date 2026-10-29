@@ -1408,6 +1408,25 @@ fn count_images(blocks: &[ContentBlock]) -> usize {
     blocks.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count()
 }
 
+/// Image 块 data 值级断言（批次 Z/A3）：PNG base64 魔数前缀（\x89PNG → "iVBOR"）。
+/// 只数块形状的 count 断言放不过空 data（外置指针形态 / 序列化丢字段）——事件侧
+/// 1467 行已是值级，DB/LLM 两侧对齐同强度。
+fn expect_png_b64(data: &str, ctx: &str) {
+    let head: String = data.chars().take(12).collect();
+    assert!(
+        !data.is_empty() && data.starts_with("iVBOR"),
+        "{ctx}：Image data 须为非空 PNG base64，实际前 12 字符 = {head:?}"
+    );
+}
+
+/// 首个 Image 块的 data（值级断言取值用）。
+fn first_image_data(blocks: &[ContentBlock]) -> Option<String> {
+    blocks.iter().find_map(|b| match b {
+        ContentBlock::Image { data, .. } => Some(data.clone()),
+        _ => None,
+    })
+}
+
 /// **非视觉 agent**（分家核心断言）：返图工具执行后——
 /// 1. DB 的 tool_result 行 blocks 含 Image（落库 = 前端展示数据源）；
 /// 2. 下轮 LLM 请求不含任何 Image（绝不向非视觉模型塞图；代读文本在 content）；
@@ -1442,6 +1461,7 @@ async fn non_vision_agent_tool_image_persisted_but_stripped_from_llm() {
         .expect("tool_result 行");
     let blocks: Vec<ContentBlock> = serde_json::from_str(&tool_row.content_blocks).expect("blocks json");
     assert_eq!(count_images(&blocks), 1, "Image 块必须落库（前端展示数据源）");
+    expect_png_b64(&first_image_data(&blocks).unwrap_or_default(), "落库 tool_result 行");
 
     // 2) LLM 侧：所有请求的消息不含 Image（第二次请求含 tool_result 轮）
     for (i, msgs) in fx.mock.received_messages().iter().enumerate() {
@@ -1498,15 +1518,22 @@ async fn vision_agent_tool_image_persisted_and_passed_to_llm() {
         .expect("tool_result 行");
     let blocks: Vec<ContentBlock> = serde_json::from_str(&tool_row.content_blocks).expect("blocks json");
     assert_eq!(count_images(&blocks), 1);
+    expect_png_b64(&first_image_data(&blocks).unwrap_or_default(), "落库 tool_result 行（视觉）");
 
     // 第二次请求（工具轮之后）的 user 消息含 Image——视觉模型直读
     let received = fx.mock.received_messages();
     assert!(received.len() >= 2, "工具轮后应有第二次请求");
     let second = &received[1];
-    let tool_msgs: usize = second
-        .iter()
-        .filter(|m| m.role == "user")
-        .map(|m| count_images(&m.content))
-        .sum();
+    let mut tool_msgs = 0usize;
+    let mut llm_img: Option<String> = None;
+    for m in second.iter().filter(|m| m.role == "user") {
+        for b in &m.content {
+            if let ContentBlock::Image { data, .. } = b {
+                tool_msgs += 1;
+                llm_img = Some(data.clone());
+            }
+        }
+    }
     assert_eq!(tool_msgs, 1, "视觉 agent 的下轮请求应保留 1 个 Image 供模型直读");
+    expect_png_b64(&llm_img.unwrap_or_default(), "下轮 LLM 请求的 Image");
 }

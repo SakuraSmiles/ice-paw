@@ -488,3 +488,52 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".process-group-summary")[0].text()).toContain("收起");
   });
 });
+
+describe("带图工具回执行行的组连续性（批次 Z：[tool_result,image] 不切断 assistant 组）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    push.mockReset();
+  });
+
+  it("0.9.9 落库形态 [tool_result,image]：数据行被跳过，同回合 assistant 合并为一个组", async () => {
+    // 修复前：isAllToolResultBlocks 的 every 判定遇 Image 块返回 false →
+    // user 数据行不被跳过 → assistant(tool_use) 与 assistant(text) 被切成两组
+    // + 空用户组（0.9.11 汇报图双缺陷的同族残余，批次 Z 修复）
+    const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const w = await mountWith([
+      msg({ id: "u1", role: "user", content: "看下这张图" }),
+      msg({
+        id: "a1", role: "assistant", model: "glm-5.3", content: "",
+        content_blocks: JSON.stringify([{ type: "tool_use", id: "call_1", name: "show_image", input: "{\"path\":\"x.png\"}" }]),
+      }),
+      msg({
+        id: "tr1", role: "user", content: "",
+        content_blocks: JSON.stringify([
+          { type: "tool_result", tool_use_id: "call_1", content: '{"path":"x.png"}', is_error: false },
+          { type: "image", data: pngB64, media_type: "image/png" },
+        ]),
+      }),
+      textMsg("a2", "图中是一个 1×1 的红色像素点。"),
+    ]);
+
+    // assistant 同回合一个组（工具行 + 收尾文本同组），user 数据行不独立成组
+    const groups = w.findAll(".message-group");
+    const assistantGroups = groups.filter((g) => g.classes().includes("assistant"));
+    expect(assistantGroups.length).toBe(1);
+    const userGroups = groups.filter((g) => g.classes().includes("user"));
+    expect(userGroups.length).toBe(1); // 只有 u1 真用户消息；tr1 数据行不渲染
+    expect(w.findAll("[data-mid='tr1']").length).toBe(0);
+    // 工具行在 assistant 组内（收尾文本与工具行同组连续）
+    expect(w.text()).toContain("图中是一个 1×1 的红色像素点。");
+  });
+
+  it("纯 [image] 用户发图行不被误吞（some 语义边界）", async () => {
+    const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const w = await mountWith([
+      msg({ id: "u1", role: "user", content: "", content_blocks: JSON.stringify([{ type: "image", data: pngB64, media_type: "image/png" }]) }),
+      textMsg("a1", "收到图了。"),
+    ]);
+    // 用户发图行正常成组（不因 some 语义被跳过——只跳含 tool_result 的行）
+    expect(w.findAll("[data-mid='u1']").length).toBe(1);
+  });
+});

@@ -82,9 +82,12 @@ describe("bootProgress（工业制图语言）", () => {
     reportBootProgress(100, "就绪");
     expect(splash.querySelector<HTMLElement>(".boot-status")!.textContent).toBe("就绪");
     expect(splash.querySelector<HTMLElement>(".boot-sub")!.textContent).toBe("READY");
-    // 乱码流自终止（~380ms 上限），终态与权威层一致
-    await new Promise((r) => setTimeout(r, 520));
-    expect(splash.querySelector<HTMLElement>(".boot-status-visual")!.textContent).toBe("就绪");
+    // 乱码流自终止（~380ms 上限），终态与权威层一致。vi.waitFor 条件轮询——
+    // 乱码流是真实 setInterval(30ms) 按墙钟推进，固定 520ms 等待在慢 runner 上
+    // 余量不足会读到中间态（tool-collapse CI flake 同族，批次 Z/A1 改造）
+    await vi.waitFor(() =>
+      expect(splash.querySelector<HTMLElement>(".boot-status-visual")!.textContent).toBe("就绪"),
+    );
   });
 
   it("reduced-motion：视觉层直接写入（无乱码流）", () => {

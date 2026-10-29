@@ -511,6 +511,10 @@ export async function useChatEvents(): Promise<() => void> {
     const m = new Map(chat.pendingAuthRequests);
     m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
     chat.pendingAuthRequests = m;
+    // 委派授权等待也是「等待用户」相位（批次 Z 补接线）——复用 awaiting_approval
+    // 臂；退出天然闭环（respond 走后端单一 emit 点 chat:tool-auth-responded，
+    // 上方 responded 订阅按 request_id 反查推进，与工具授权同栈）
+    chat.advancePhase(e.payload.conversation_id, "chat:tool-auth-request", {});
     maybeNotifyPendingApprovals();
   });
   /** 按 request_id 从 pendingAuthRequests 删条目（单会话单活请求，Map 按 convId 键） */

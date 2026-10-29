@@ -751,17 +751,15 @@ fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
 /// linux=~/.local/share，与 Tauri/ dirs 完全一致）。色值 = 对应主题 splash
 /// 底色（index.html 例外位注释同源：浅 #FAFBFC / 深 #14181F——2026-10-28 与 app 基底归一）。
 fn theme_window_bg(identifier: &str) -> tauri::utils::config::Color {
-    let marker = dirs::data_dir()
-        .map(|d| d.join(identifier).join(commands::preferences_cmd::THEME_MARKER_FILE))
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim().to_ascii_lowercase());
-    let dark = marker.as_deref() == Some("dark");
-    if dark {
-        // 2026-10-28 基底归一：#14181F = app gray-900（原 #0B1116 DSH 黑场值退役；splash --sp-bg 同步）
-        tauri::utils::config::Color(0x14, 0x18, 0x1F, 0xFF)
-    } else {
-        tauri::utils::config::Color(0xFA, 0xFB, 0xFC, 0xFF)
-    }
+    // 恒深底（0.9.11 生产实案「首启白窗长时间未响应」观感修复，2026-10-29）：
+    // 窗口底色只在 WebView2 首帧前可见（常态 <1s；版本升级清缓存后冷启动数秒）。
+    // 浅色主题返回白底会让冷启动呈现白屏窗（用户极力避免的形态）；splash 演出
+    // 本就恒深底（黑场开场语义），窗口底与它同值 #14181F——冷启动深底 → splash
+    // 深底无缝连续，浅色 app 在演出退场后到达。主题标记保留读取位（identifier
+    // 参数），未来若做浅色 splash 再分叉。
+    let _ = identifier;
+    // 2026-10-28 基底归一：#14181F = app gray-900（原 #0B1116 DSH 黑场值退役；splash --sp-bg 同步）
+    tauri::utils::config::Color(0x14, 0x18, 0x1F, 0xFF)
 }
 
 /// 启动期致命错误统一出口：三段式可读文案 + 兜底日志 +（Windows）原生对话框。
@@ -878,34 +876,56 @@ fn prune_impl(root: &std::path::Path, version: &str) {
     }
 
     let profile = root.join("Default");
-    let mut freed: u64 = 0;
-    let mut failed = false;
+    // rename-then-background-delete（0.9.11 生产实案「首启白窗长时间未响应」主源
+    // 修复，2026-10-29）：旧形态同步 remove_dir_all 几十万小文件——慢机上 5~20s，
+    // 且发生在窗口创建**之前**＝用户对着空桌面/白窗干等。同盘 rename 瞬时，
+    // WebView2 对缺席的 Cache/Code Cache 目录自动重建；真删挪后台线程，不阻塞
+    // 启动链。旧实例崩溃残留的 .old-{ts} 目录顺带一并后台清。
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut renamed: Vec<std::path::PathBuf> = Vec::new();
     for sub in ["Cache", "Code Cache"] {
         let dir = profile.join(sub);
         if !dir.is_dir() {
             continue;
         }
-        let size: u64 = std::fs::read_dir(&dir)
-            .map(|rd| {
-                rd.flatten()
-                    .filter_map(|e| e.metadata().ok())
-                    .map(|m| m.len())
-                    .sum()
-            })
-            .unwrap_or(0);
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => freed += size,
+        let old = profile.join(format!("{sub}.old-{stamp}"));
+        match std::fs::rename(&dir, &old) {
+            Ok(()) => renamed.push(old),
             Err(e) => {
-                failed = true;
-                eprintln!("[ice_paw] WebView2 缓存清理失败（{sub}）: {e}");
+                // rename 失败（罕见：残留占用）退回同步删——保住「缓存确已清理」
+                // 的原语义；删不掉由 disk-cache-size 上限兜底，与旧形态一致
+                eprintln!("[ice_paw] WebView2 缓存 rename 失败（{sub}），退回同步删: {e}");
+                let _ = std::fs::remove_dir_all(&dir);
             }
         }
     }
-    if freed > 0 || !failed {
+    // 残留的旧后台删目录（上次崩溃没删完）一并收编
+    if let Ok(rd) = std::fs::read_dir(&profile) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if (name.starts_with("Cache.old-") || name.starts_with("Code Cache.old-"))
+                && !renamed.iter().any(|p| p == &e.path())
+            {
+                renamed.push(e.path());
+            }
+        }
+    }
+    if !renamed.is_empty() {
         eprintln!(
-            "[ice_paw] 版本变化（{version}），清理 WebView2 缓存 {} 字节",
-            freed
+            "[ice_paw] 版本变化（{version}），WebView2 缓存已让位（{} 个目录），后台删除中",
+            renamed.len()
         );
+        std::thread::spawn(move || {
+            for p in renamed {
+                if let Err(e) = std::fs::remove_dir_all(&p) {
+                    eprintln!("[ice_paw] WebView2 缓存后台删除失败（{}）: {e}", p.display());
+                }
+            }
+        });
     }
     // 尽力而为语义：无论成败都落标记（失败常为暂时性文件占用，但每次启动重删
     // 几百 MB 同样拖启动；真删不掉由 disk-cache-size 上限兜住增长）

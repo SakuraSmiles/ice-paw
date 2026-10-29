@@ -72,16 +72,25 @@ export function buildTurnWindow(anchors: TurnAnchor[], from: number, size: numbe
 /** 锚点拉取：按会话切换/新轮到达重拉（全量轻量行，幂等） */
 export function useTurnRail() {
   const anchors = ref<TurnAnchor[]>([]);
+  /** 实例内最新请求的会话 id（竞态守卫：迟到响应即丢） */
+  let latestConvId: string | null = null;
 
   async function loadAnchors(conversationId: string | null) {
+    latestConvId = conversationId;
     if (!conversationId) {
       anchors.value = [];
       return;
     }
+    // 会话竞态守卫（批次 Z/B5 修复，useTrajectory.load 同款）：A→B 快速切换时
+    // A 的晚到响应会把 B 的轮次锚点表整个换掉（轮号/preview 全错 + jumpToTurn
+    // 钉错轮）——await 归来时已被更新的请求追上即自弃
     try {
-      anchors.value = await bridge.trajectory.turnAnchors(conversationId);
+      const rows = await bridge.trajectory.turnAnchors(conversationId);
+      if (latestConvId !== conversationId) return;
+      anchors.value = rows;
     } catch (err) {
       // 拉取失败静默：导航条隐藏（空锚点），下次触发点重试
+      if (latestConvId !== conversationId) return;
       console.warn("[turn-rail] 锚点拉取失败", err);
       anchors.value = [];
     }

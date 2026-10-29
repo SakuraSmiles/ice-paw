@@ -23,8 +23,8 @@
       生命周期改造：骨架是 #app 的**兄弟节点**（body 直接子级）——Vue mount 只替换
       #app 内容，骨架不再被 mount 吞掉「一闪而过」；退场由 main.ts 接管——**真实
       就绪 + 亮窗起最少展示 2.5s** 双条件（utils/bootProgress.ts 上报链：模块执行
-      15 → mount 50 → 亮窗 60 → Sidebar 初始数据完成 100；~10s 超时兜底防上报链
-      断裂骨架滞留），再挂 .boot-letting 分层让位编舞（见样式区时间表）并移除节点（JS 挂死时骨架留存 =
+      15 → mount 50 → 亮窗 60 → Sidebar 初始数据完成 100；main.ts 14s 超时兜底防
+      上报链断裂骨架滞留），再挂 .boot-letting 分层让位编舞（见样式区时间表）并移除节点（JS 挂死时骨架留存 =
       诚实的「启动中」而非空白窗）。pointer-events:none 保证任何时刻不挡输入。
 
       进度条两形态（2026-09-16 Phase2：用户反馈循环动画像假进度——确实是假的）：
@@ -51,13 +51,16 @@
       （同步写入，bootProgress 测试契约 + 屏幕阅读器）；.boot-status-visual =
       视觉层（乱码→落定解码动效，aria-hidden）。
 
-      ⚠️ 全应用唯一硬编码颜色/系统字体栈/z-index 例外位：令牌体系（tokens.css /
+      ⚠️ 全应用唯一硬编码颜色/系统字体栈/z-index/9-10px 字号例外位：令牌体系（tokens.css /
       --ip-* / --ip-z-* / @fontsource 字体）全部打进 JS bundle，首帧必然不可用。
       色值同源 dsh-prologue 设计常量：bg 原 #0B1116→2026-10-28 对齐 app 基底 #14181F / ink #E6EDF0 / soft #8497A1 /
       accent 冷青 #82BFD2 / line #2B424E。英文等宽小字用系统等宽栈（Consolas /
       Cascadia，零体积——本地字体纪律，不引入新字体资产）。z-index 取高值压过
       app 内一切 --ip-z-* 浮层（启动期一瞬，不进令牌体系）；reduced-motion
-      静态降级与全局规范一致。
+      静态降级与全局规范一致。**字号例外（2026-10-29 批次 Z/Z23 用户拍板「登记
+      例外」）**：splash 等宽小字 9-10px 是 DSH 工业制图语言的刻意质感（档案
+      小字密度），且为几秒钟一次性演出、非长时间阅读面——例外**仅限本 splash
+      演出区**，产品 UI 仍禁 9px/10px（micro 11px 是最小合法档）。
     -->
     <style>
       .boot-splash {
@@ -541,113 +544,11 @@
       /* （seal 第二代重复块已删——sealMechanism 样式唯一源在上方 DSH 块；
          散落的浅色补偿重复行一并清理） */
 
-      .boot-center {
-        transition:
-          opacity 400ms cubic-bezier(0.4, 0, 1, 1) 0ms,
-          transform 400ms cubic-bezier(0.4, 0, 1, 1) 0ms;
-      }
-      .boot-letting .boot-center {
-        opacity: 0;
-        transform: translateY(-14px) scale(0.95);
-      }
-      /* 氛围层：先去脉冲动画（keyframes 恒写 opacity 会压住过渡），再统一淡出 */
-      .boot-letting .bc {
-        animation: none;
-        opacity: 0;
-        transition: opacity 450ms ease 350ms;
-      }
-      .boot-letting .boot-meta {
-        animation: none; /* 入场 forwards 会恒写 opacity 压住过渡——先摘 */
-        opacity: 0;
-        transition: opacity 450ms ease 350ms;
-      }
-      /* 环场随氛围层同拍退场（内部各环的 spin 动画不写 opacity，可安全过渡） */
-      .boot-letting .boot-rings {
-        opacity: 0;
-        transition: opacity 450ms ease 350ms;
-      }
-
-      /* ---- 四角 L 角标（registration marks，DSH 同源）：2.4s 周期错峰脉冲 ---- */
-      .bc {
-        position: absolute;
-        width: 22px;
-        height: 22px;
-        opacity: 0;
-        animation: bc-in 400ms ease-out forwards, bc-pulse 2.4s ease-in-out infinite;
-      }
-      .bc.tl { top: 26px; left: 30px; /* 相对 splash 容器（已让位 36px）= 窗口 62px */ border-top: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); }
-      .bc.tr { top: 26px; right: 30px; border-top: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 60ms, 300ms; }
-      .bc.bl { bottom: 26px; left: 30px; border-bottom: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); animation-delay: 120ms, 600ms; }
-      .bc.br { bottom: 26px; right: 30px; border-bottom: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 180ms, 900ms; }
-      @keyframes bc-in { from { opacity: 0; } to { opacity: 0.55; } }
-      @keyframes bc-pulse {
-        0%, 100% { opacity: 0.55; }
-        22% { opacity: 0.95; }
-      }
-
-      /* ---- 中央编队：标 → 字标 → 副题 → 进度 → 状态双行 ---- */
-      .boot-center {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 12px;
-      }
-
-      /* （v11 旧代环组块已删——多代累积互相覆盖的病灶，DSH 1:1 块为唯一环组样式源） */
-
-      .boot-center {
-        transition:
-          opacity 400ms cubic-bezier(0.4, 0, 1, 1) 0ms,
-          transform 400ms cubic-bezier(0.4, 0, 1, 1) 0ms;
-      }
-      .boot-letting .boot-center {
-        opacity: 0;
-        transform: translateY(-14px) scale(0.95);
-      }
-      /* 氛围层：先去脉冲动画（keyframes 恒写 opacity 会压住过渡），再统一淡出 */
-      .boot-letting .bc {
-        animation: none;
-        opacity: 0;
-        transition: opacity 450ms ease 350ms;
-      }
-      .boot-letting .boot-meta {
-        animation: none; /* 入场 forwards 会恒写 opacity 压住过渡——先摘 */
-        opacity: 0;
-        transition: opacity 450ms ease 350ms;
-      }
-      /* 环场随氛围层同拍退场（内部各环的 spin 动画不写 opacity，可安全过渡） */
-      .boot-letting .boot-rings {
-        opacity: 0;
-        transition: opacity 450ms ease 350ms;
-      }
-
-      /* ---- 四角 L 角标（registration marks，DSH 同源）：2.4s 周期错峰脉冲 ---- */
-      .bc {
-        position: absolute;
-        width: 22px;
-        height: 22px;
-        opacity: 0;
-        animation: bc-in 400ms ease-out forwards, bc-pulse 2.4s ease-in-out infinite;
-      }
-      .bc.tl { top: 26px; left: 30px; /* 相对 splash 容器（已让位 36px）= 窗口 62px */ border-top: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); }
-      .bc.tr { top: 26px; right: 30px; border-top: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 60ms, 300ms; }
-      .bc.bl { bottom: 26px; left: 30px; border-bottom: 2px solid var(--sp-accent); border-left: 2px solid var(--sp-accent); animation-delay: 120ms, 600ms; }
-      .bc.br { bottom: 26px; right: 30px; border-bottom: 2px solid var(--sp-accent); border-right: 2px solid var(--sp-accent); animation-delay: 180ms, 900ms; }
-      @keyframes bc-in { from { opacity: 0; } to { opacity: 0.55; } }
-      @keyframes bc-pulse {
-        0%, 100% { opacity: 0.55; }
-        22% { opacity: 0.95; }
-      }
-
-      /* ---- 中央编队：标 → 字标 → 副题 → 进度 → 状态双行 ---- */
-      .boot-center {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 12px;
-      }
-
-      /* （v7 旧代环组块已删——同上） */
+      /* （批次 Z/B2·B3 沉积清理 2026-10-29：此处原有 center/letting/bc 角标/flex 编队
+         的第二代与第三代逐字重复块（v11/v7 两代累积，仅环组块被清而其余未清）——
+         已删。唯一源 = 文件头部「分层让位编舞」区（.boot-center transition +
+         .boot-letting 退场族 + .bc 四角角标 + @keyframes bc-in/bc-pulse）与
+         「中央编队」flex 块。调参改头部那份即生效。） */
 
       /* （爪印标已删 2026-10-28：用户拍板「没有的情况挺好」——预览台本就无此元素，
          生产侧移除对齐；boot-rise 入场动画由字标继续承载） */

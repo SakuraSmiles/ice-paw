@@ -11,8 +11,10 @@ import TitleBar from "./TitleBar.vue";
  * 之后才派发（同帧起跑会让首页与未退完的环组重叠 ~950ms；本版接受短暂
  * 纯底色空窗，下一版再做骨架分阶段渲染的无感衔接）。（⚠️ 挂 boot-ready
  * 会在不透明骨架背后提前播完，淡出时 stagger 已结束。）兜底两道：splash 节点已不在（退场后再挂载，如
- * HMR 重挂 → 直接入场）/ 11.5s 超时（main.ts 10s 强制退场 + 360ms 移除之后，
- * 上报链断裂时 app 不得永远隐身）。reduced-motion 下全局 transition 归零
+ * HMR 重挂 → 直接入场）/ 15.5s 超时（main.ts 真实兜底 = 14s 强制退场 + 950ms
+ * 节点移除 ≈ 14.95s；须晚于它——提前入场会被不透明 splash 盖住且点击穿透成
+ * 盲交互窗，批次 Z/B3 修正了按旧值 10s+360ms 算出的 11.5s 漂移），
+ * 上报链断裂时 app 不得永远隐身。reduced-motion 下全局 transition 归零
  * （tokens §12），入场瞬时完成。 */
 const entered = ref(false);
 let enterTimer = 0;
@@ -25,7 +27,7 @@ onMounted(() => {
     return;
   }
   window.addEventListener("icepaw:splash-out", markEntered, { once: true });
-  enterTimer = window.setTimeout(markEntered, 11500);
+  enterTimer = window.setTimeout(markEntered, 15500);
 });
 onUnmounted(() => {
   window.removeEventListener("icepaw:splash-out", markEntered);

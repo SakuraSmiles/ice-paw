@@ -1,6 +1,6 @@
 {
   "name": "ice-paw",
-  "version": "0.9.11",
+  "version": "0.9.12",
   "private": true,
   "type": "module",
   "scripts": {
@@ -22,7 +22,9 @@
     "format:check": "prettier --check .",
 
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+
+    "preflight": "node scripts/preflight.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

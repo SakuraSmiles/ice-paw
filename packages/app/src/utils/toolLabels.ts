@@ -4,8 +4,9 @@
  * 设置-工具集（McpSettings 内置工具行主名）。
  * 词表外裸透英文原值（技术兜底，不猜）——新增工具忘了配不会出错，
  * 与 McpSettings.builtinDescZh 同款降级口径。
- * 2026-09-07 二轮扩全：内置 39 件 + delegate_to_agent（chat 错误兜底行用），
- * 词表与 McpSettings.BUILTIN_TOOL_META 的 key 集合保持同步（增工具两边一起补）。
+ * 2026-09-07 二轮扩全（批次 Z 计数订正：现 54 件 + delegate_to_agent——chat 错误
+ * 兜底行用），词表与 McpSettings.BUILTIN_TOOL_META 的 key 集合保持同步（增工具
+ * 两边一起补）。
  */
 export function toolDisplayName(name: string): string {
   return TOOL_LABELS[name] ?? name;

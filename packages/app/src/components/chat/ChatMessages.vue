@@ -584,6 +584,14 @@ const liveShowImages = computed(() => {
   return out;
 });
 
+/** 该 item 的汇报图统一出口（历史优先，live 兜底）——模板单图直显 / 多图叠压
+ *  两态共用（多张汇报图竖排会大量占用聊天区空间，0.9.11 生产实案：与用户发多图
+ *  同款叠压形态，点击预览器翻张看全量）。 */
+function showImagesFor(item: { msg: { id: string; content_blocks?: string } }): { data: string; mediaType: string }[] {
+  const hist = showImagesOfItem(item);
+  return hist.length ? hist : liveShowImages.value;
+}
+
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
 function getToolHasError(toolUseId: string): boolean {
   return findToolResult(toolUseId)?.isError ?? false;
@@ -591,21 +599,59 @@ function getToolHasError(toolUseId: string): boolean {
 
 // ===== 工具行展示（2026-09-07 拍板）：展示名 + 次级信息左置 + 文件名右锚可点 =====
 
-/** 历史工具行摘要：memo 化（模板热路径每渲染每工具调用；findToolResult 每次
- *  computed 重建新对象，memo 键取内容值拼串——与 parseToolUseBlocks 同款模式，
- *  返回同引用勿 mutate）。流式行走直调（参数逐字变化，memo 无益）。 */
-const summarizeCached = memoized((key: string): ToolLineSummary | null => {
-  const [name, input, content, isError] = JSON.parse(key) as [
-    string, string, string | null, boolean | null,
-  ];
-  return content != null
+/** 历史工具行摘要缓存：id 键 + 值比较快路径（批次 Z/Z17，0.9.11 生产实案
+ *  「生成中切设置页卡顿」主源之一）。旧形态 memo 键 = JSON.stringify([name,
+ *  input, content, isError])——memo 防住了重算但**键构造本身**每渲染重跑，tr.content
+ *  上限 256KB，大会话 × 流式 40ms 节拍全列表重渲染 = MB 级字符串重建。新形态：
+ *  按 tool_use id 记住输入值，四个 === 全同（V8 字符串比较 O(1)；上游
+ *  parseToolUseBlocks/toolResultIndex 均 memo 化返回同引用）直接返回上次摘要，
+ *  零 stringify；值变了才重算。跨会话 id 重名（call_1）只致缓存互踩重算，值比较
+ *  保正确性；容量闸对齐 blockMemo 分代淘汰（4000 清半）。返回同引用勿 mutate。 */
+const summaryCache = new Map<string, {
+  name: string; input: string; content: string | null; isError: boolean | null;
+  out: ToolLineSummary | null;
+}>();
+function summaryWithCache(
+  id: string, name: string, input: string, content: string | null, isError: boolean | null,
+): ToolLineSummary | null {
+  const hit = summaryCache.get(id);
+  if (
+    hit && hit.name === name && hit.input === input &&
+    hit.content === content && hit.isError === isError
+  ) {
+    return hit.out;
+  }
+  if (summaryCache.size >= 4000) {
+    const drop = summaryCache.size - 2000;
+    let n = 0;
+    for (const k of summaryCache.keys()) {
+      if (n >= drop) break;
+      summaryCache.delete(k);
+      n += 1;
+    }
+  }
+  const out = content != null
     ? summarizeToolCall(name, input, { content, isError: isError === true })
     : summarizeToolCall(name, input, null);
-});
+  summaryCache.set(id, { name, input, content, isError, out });
+  return out;
+}
 
+/** 历史工具行摘要（模板热路径每渲染每工具调用）。 */
 function summaryFor(tu: { id: string; name: string; input: string }): ToolLineSummary | null {
   const tr = findToolResult(tu.id);
-  return summarizeCached(JSON.stringify([tu.name, tu.input, tr?.content ?? null, tr?.isError ?? null]));
+  return summaryWithCache(tu.id, tu.name, tu.input, tr?.content ?? null, tr?.isError ?? null);
+}
+
+/** live 工具行摘要：参数流式期输入逐字变化（缓存自然 miss 重算），result 到达后
+ *  的静止窗口（多轮工具回合的大头）经 id+值缓存零重算——此前直调每渲染全量
+ *  re-parse 已完成的大结果（Z17 ③）。 */
+function summaryForLive(call: { id: string; name: string; arguments?: string; result?: { content: string; isError: boolean } | null }): ToolLineSummary | null {
+  return summaryWithCache(
+    call.id, call.name, call.arguments || "{}",
+    call.result ? call.result.content : null,
+    call.result ? call.result.isError : null,
+  );
 }
 
 /** 文件名点击：资源管理器中定位该文件（revealItemInDir 选中）；失败（文件已
@@ -765,22 +811,15 @@ function planStreamCard(call: {
   return parsePlanInput(call.arguments || "{}");
 }
 
-/** blocks 是否全部为 tool_result（memo 化：messageGroups 每次重算对每消息调用）。 */
-const isAllToolResultBlocks = memoized((contentBlocks: string): boolean => {
-  try {
-    const blocks = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks) || blocks.length === 0) return false;
-    return blocks.every((b: Record<string, unknown>) => b.type === "tool_result");
-  } catch {
-    return false;
-  }
-});
-
-/** 判断 user 消息是否仅含 tool_result（无文本/图片）。
- *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。*/
+/** 判断 user 消息是否仅含 tool_result（无文本）。
+ *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。
+ *  ⚠️ 用 some 语义（rowHasToolResult）而非 every：0.9.9 起带图工具回执行行落库
+ *  形态 = [tool_result, image]，every 判定漏跳过该数据行 → 切断 assistant 组
+ *  连续性（同回合分裂成多个气泡 + 空用户组，批次 Z 修复）。纯 [image] 的用户
+ *  发图行不含 tool_result，不受 some 语义影响——勿回退 every 形态。*/
 function isToolResultOnlyUser(msg: { role: string; content: string; content_blocks: string }): boolean {
   if (msg.role !== "user" || msg.content) return false;
-  return isAllToolResultBlocks(msg.content_blocks);
+  return rowHasToolResult(msg.content_blocks);
 }
 
 // ===== 消息分组（连续同 agent 的 assistant 合并成一个气泡块）=====
@@ -1026,18 +1065,34 @@ function isTurnStreaming(item: GroupedItem): boolean {
 const TOOL_COLLAPSE_THRESHOLD = 8;
 
 /** 豁免谓词：该 tool_use 渲染为结构化卡片（委派/计划）而非通用行。
- *  memo 化（summarizeCached 的 JSON-key 先例）；**计数与渲染必须共用同一判定**
- *  （本函数 ↔ delegateCardFor/planCardFor 的非 null 条件）——否则「摘要说 42
- *  实际显示 41」。委托 Err 的兜底通用行随折叠隐藏，错误态仍由卡片本体检出。 */
-const structuredCardKind = memoized((key: string): "delegate" | "plan" | null => {
-  const [name, input, isError] = JSON.parse(key) as [string, string, boolean];
-  if (name === "delegate_to_agent") return "delegate";
-  if (name === "update_plan" && !isError && parsePlanInput(input) != null) return "plan";
-  return null;
-});
-
+ *  id+值缓存（summaryWithCache 同款——旧 JSON 键把 write_file 全文参数 stringify
+ *  进键构造，每渲染重跑，Z17 ②）；**计数与渲染必须共用同一判定**（本函数 ↔
+ *  delegateCardFor/planCardFor 的非 null 条件）——否则「摘要说 42 实际显示
+ *  41」。委托 Err 的兜底通用行随折叠隐藏，错误态仍由卡片本体检出。 */
+const cardKindCache = new Map<string, {
+  name: string; input: string; isError: boolean; out: "delegate" | "plan" | null;
+}>();
 function structuredCardKindOf(tu: { id: string; name: string; input: string }): "delegate" | "plan" | null {
-  return structuredCardKind(JSON.stringify([tu.name, tu.input, getToolHasError(tu.id)]));
+  const isError = getToolHasError(tu.id);
+  const hit = cardKindCache.get(tu.id);
+  if (hit && hit.name === tu.name && hit.input === tu.input && hit.isError === isError) {
+    return hit.out;
+  }
+  if (cardKindCache.size >= 4000) {
+    const drop = cardKindCache.size - 2000;
+    let n = 0;
+    for (const k of cardKindCache.keys()) {
+      if (n >= drop) break;
+      cardKindCache.delete(k);
+      n += 1;
+    }
+  }
+  const out: "delegate" | "plan" | null =
+    tu.name === "delegate_to_agent" ? "delegate"
+    : tu.name === "update_plan" && !isError && parsePlanInput(tu.input) != null ? "plan"
+    : null;
+  cardKindCache.set(tu.id, { name: tu.name, input: tu.input, isError, out });
+  return out;
 }
 
 /** 各 assistant 组的工具行统计（跨 item 聚合——刷屏源是回合内多轮 × 每轮 3-5 条
@@ -1642,19 +1697,34 @@ const RESUMABLE_REASONS = new Set([
                 <!-- show_image 呈现图（2026-10-22）：agent 汇报效果图作为对话内容
                      渲染（气泡兄弟块——纯图片汇报无文本时气泡不渲染，图卡独立在场）。
                      live 期间（2026-10-26）从事件携带图即时显示（chat:tool-result
-                     images），轮末落库后历史渲染接管 -->
-                <div
-                  v-if="showImagesOfItem(item).length || (isLiveAssistant(item) && liveShowImages.length)"
-                  class="show-image-card"
-                >
+                     images），轮末落库后历史渲染接管。
+                     多图叠压（0.9.11 生产实案）：≥2 张与用户发多图同款 image-stack
+                     形态——竖排全量会大量占用聊天区空间；叠压看首图、点击进预览器
+                     翻张看全量。 -->
+                <div v-if="showImagesFor(item).length" class="show-image-card">
                   <img
-                    v-for="(im, i) in (showImagesOfItem(item).length ? showImagesOfItem(item) : liveShowImages)"
-                    :key="item.msg.id + '-show-' + i"
-                    :src="`data:${im.mediaType};base64,${im.data}`"
+                    v-if="showImagesFor(item).length === 1"
+                    :src="`data:${showImagesFor(item)[0].mediaType};base64,${showImagesFor(item)[0].data}`"
                     class="show-image"
                     loading="lazy"
-                    @click="openImagePreview(showImagesOfItem(item).length ? showImagesOfItem(item) : liveShowImages, i)"
+                    @click="openImagePreview(showImagesFor(item), 0)"
                   >
+                  <div
+                    v-else
+                    class="image-stack"
+                    :title="`共 ${showImagesFor(item).length} 张图片，点击预览`"
+                    @click="openImagePreview(showImagesFor(item), 0)"
+                  >
+                    <img
+                      v-for="(im, i) in showImagesFor(item).slice(0, 3)"
+                      :key="item.msg.id + '-show-' + i"
+                      :src="`data:${im.mediaType};base64,${im.data}`"
+                      class="user-image stacked"
+                      :style="imgStackStyle(i)"
+                      loading="lazy"
+                    >
+                    <span v-if="showImagesFor(item).length > 3" class="stack-badge">+{{ showImagesFor(item).length - 3 }}</span>
+                  </div>
                 </div>
 
                 <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
@@ -1769,7 +1839,7 @@ const RESUMABLE_REASONS = new Set([
                           <template v-else>
                             <!-- 流式工具行摘要：直调（参数逐字变化，memo 无益）；参数到齐瞬间
                                  从通用行切结构行（delegate 卡同款切换形态） -->
-                            <template v-for="s in [summarizeToolCall(call.name, call.arguments || '{}', call.result ?? null)]" :key="s ? 'sum' : 'sum-none'">
+                            <template v-for="s in [summaryForLive(call)]" :key="s ? 'sum' : 'sum-none'">
                               <div v-if="s" class="tool-toggle" @click="toggleToolCall(call.id)">
                                 <StatusGlyph
                                   v-if="call.ended && call.result"
@@ -1827,13 +1897,13 @@ const RESUMABLE_REASONS = new Set([
                   </div>
                 </div>
 
-                <!-- live 相位行（2026-10-26 批 3）：注意力所在处——正在生成的
-                     气泡自身携带权威相位 + 进程感（读历史滚到上方也能从此行看到
-                     「正在执行 xx · 第 N 轮 · Xs」）；等待用户/退避相位不带进度 -->
-                <div v-if="isLiveAssistant(item) && phaseMachineLabel" class="cursor-bar phase-inline">
-                  <div class="cursor-track">
-                    <StatusGlyph status="running" /><span class="cursor-label">{{ activePhaseLabel }}</span>
-                  </div>
+                <!-- live 生成中指示（2026-10-26 批 3 引入；2026-10-29 生产反馈改版）：
+                     旧形态 = 气泡内尾相位行（StatusGlyph + 文案）与气泡外下方全局
+                     相位行完全重复——拍板去重：气泡内只留三点演绎动画（think-dots
+                     同款，「还在生成」的视觉心跳），描述文案只在气泡外下方权威
+                     相位行（列表尾 cursor-bar：正在执行 xx · 第 N 轮 · Xs） -->
+                <div v-if="isLiveAssistant(item)" class="phase-inline phase-dots">
+                  <span class="think-dot" /><span class="think-dot" /><span class="think-dot" />
                 </div>
               </template>
             </div>
@@ -2269,6 +2339,9 @@ const RESUMABLE_REASONS = new Set([
 .cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap: var(--ip-spacing-2_5); padding:4px var(--ip-spacing-12) 0; }
 /* live 气泡内联相位行（批 3）：复用 cursor 视觉语言，去横向大边距（随内容列） */
 .phase-inline { padding: var(--ip-spacing-0_5) 0 0 var(--ip-spacing-2); }
+/* 气泡内生成中三点（2026-10-29 去重改版）：think-dots 同款动画形态，
+   承接旧相位行的占位（文案只在气泡外下方权威相位行） */
+.phase-dots { display:flex; align-items:center; gap:4px; min-height:22px; }
 .cursor-track { display:flex; align-items:center; gap: var(--ip-spacing-2); padding:4px 0; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }
 /* 生成指示的脉冲点已由 StatusGlyph running 像素格取代（2026-09-04 语系统一）；

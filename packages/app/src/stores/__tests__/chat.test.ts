@@ -222,6 +222,21 @@ describe("chatStore", () => {
         expect(askCalls.length).toBe(1); // 在途期间第二次点击早退
         expect(store.pendingAskRequests.size).toBe(0); // 成功后删除
       });
+
+      it("批次 Z：作答成功即推进相位——awaiting_choice 不再挂满后半回合", async () => {
+        // ask_user 无 responded 后端事件（不变式），awaiting_choice 只被显式
+        // 响应/取消/done 退出——修复前作答后相位行/侧栏持续「等待你的选择」
+        mockInvoke.mockResolvedValue(undefined);
+        const store = useChatStore();
+        store.ensureStream("c1").sending = true;
+        store.advancePhase("c1", "chat:ask-user-request", {});
+        expect(store.phaseOfConv("c1")?.phase).toBe("awaiting_choice");
+        seedAsk(store);
+
+        await store.respondToAsk("ask-1", "answered", ["A"]);
+
+        expect(store.phaseOfConv("c1")?.phase).not.toBe("awaiting_choice");
+      });
     });
 
     it("createConversation calls bridge and adds to list", async () => {
@@ -464,6 +479,35 @@ describe("chatStore", () => {
       const lastMsg = store.messages[store.messages.length - 1];
       expect(lastMsg.id).toBe("asst-r2");
       expect(lastMsg.role).toBe("assistant");
+    });
+
+    it("批次 Z：freeze 把 result.images 冻结为 Image 块（与后端落库 [tool_result,image] 同形态）", async () => {
+      // 修复前：freeze 合成的 toolresult 行不带图 + resetRoundStreaming 清空 live
+      // 渲染源 → 汇报图从 UI 消失直到切会话重载（chat:done 无 loadMessages）
+      const { store, handlers } = await setupStream();
+      store.ensureStream("c1").sending = true;
+      store.messages = [{
+        id: "asst-r1", conversation_id: "c1", role: "assistant", content: "",
+        content_blocks: "[]", token_count: null, error: null,
+        created_at: new Date().toISOString(), rowid: 0, model: null,
+      }];
+      handlers.get("chat:tool-call-start")!({ payload: { conversation_id: "c1", id: "tc-img", name: "show_image" } });
+      handlers.get("chat:tool-result")!({
+        payload: {
+          conversation_id: "c1", tool_use_id: "tc-img", content: "已生成图", is_error: false, duration_ms: 5,
+          images: [{ data: "iVBORw0KGgo=", media_type: "image/png" }],
+        },
+      });
+      store.ensureStream("c1").streamingText = "图好了";
+
+      store.freezeCurrentAssistant();
+
+      const trRow = store.messages.find((m) => m.role === "user" && m.id.startsWith("toolresult-"));
+      expect(trRow).toBeTruthy();
+      const blocks = JSON.parse(trRow!.content_blocks) as { type: string; data?: string; media_type?: string }[];
+      expect(blocks.map((b) => b.type)).toEqual(["tool_result", "image"]);
+      expect(blocks[1].data).toBe("iVBORw0KGgo=");
+      expect(blocks[1].media_type).toBe("image/png");
     });
 
     it("chat:error resets sending and sets lastError", async () => {

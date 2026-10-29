@@ -4,7 +4,7 @@
 //   main.ts 模块执行 15「加载应用」→ mount 50「初始化界面」→ 亮窗 60「加载会话
 //   数据」→ Sidebar 初始数据完成 100「就绪」。
 // 退场条件 = 100% 且亮窗起最少展示 2.5s（main.ts 监听 icepaw:boot-ready 双条件
-// 汇合，~10s 超时兜底防上报链断裂骨架滞留）。
+// 汇合，main.ts BOOT_TIMEOUT_MS=14s 超时兜底防上报链断裂骨架滞留）。
 //
 // 设计约束：
 // - **单调递增钳制**：上报点乱序到达时倒退会让进度条回跳 = 又一种假进度；
@@ -136,12 +136,17 @@ export function rosterAppend(groupId: string, labels: readonly string[]): void {
   const STEP = 80, IN_TO_REVEAL = 200, HOLD = 250, EXIT_STEP = 60;
   const allDone = rows.length * STEP + 250;
   const statusAt = start + allDone + HOLD + rows.length * EXIT_STEP + 300;
-  // 本组演出彻底结束 = 换字遮罩解除（statusAt + 320）；下一组从此起跑（+ 停顿）。
+  // 本组演出彻底结束（编舞节拍）= statusAt + 320；下一组从此起跑（+ 停顿）。
   // 记录绝对结束时刻供启动页「等名册演完再退场」使用。
   // ⚠️ 用「本次调用的 performance.now() + 相对 groupEnd」而非「序列头基准 + 累计
   // groupEnd」：三组 rosterAppend 之间夹着 Sidebar 的 await（project.load /
   // chat.loadConversations 真实耗时），序列头基准会把这些真实等待漏算，导致名册
   // 演完时刻被低估 → 中心收尾提前、总/子先后关系颠倒（production 实案）。
+  // ⚠️ 320 是「下一组起跑节拍」（时序测试锁定的契约值），**不等于**换字遮罩的
+  // CSS 全程——reveal 余韵（SWAP_TOTAL_MS=550）允许与下一组起跑重叠（不同
+  // 元素非阻塞余韵），摘 .swapping 类的 timer 用 550（批次 Z/B3：原 320 摘类
+  // 早于 reveal 播完，遮罩从半盖态瞬跳全开）。
+  const SWAP_TOTAL_MS = 550;
   const groupEnd = statusAt + 320;
   rosterClock = groupEnd + GROUP_GAP;
   rosterEndAt = Math.max(rosterEndAt, performance.now() + groupEnd);
@@ -181,7 +186,7 @@ export function rosterAppend(groupId: string, labels: readonly string[]): void {
       setTimeout(() => {
         if (textEl) textEl.textContent = ROSTER_DONE_TEXT[groupId](labels.length);
       }, 200);
-      setTimeout(() => statusEl.classList.remove("swapping"), 320);
+      setTimeout(() => statusEl.classList.remove("swapping"), SWAP_TOTAL_MS);
     }, statusAt);
   }
 

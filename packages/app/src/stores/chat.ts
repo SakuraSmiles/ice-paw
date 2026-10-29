@@ -257,6 +257,12 @@ export const useChatStore = defineStore("chat", () => {
       hasMore.value = page?.has_more === true;
       pageCursor.value = page?.next_before_anchor_rowid ?? null;
       messages.value = [...older, ...messages.value];
+      // 前插平移回合锚（批次 Z 修复）：turnFirstIdx 是回合起跑时的下标，前插 K 页
+      // 后 messages 头部插入 older.length 条 → 不平移则生成中深跳（TurnRail/
+      // @引用跳转补拉翻页）会把被前插的历史消息全部误判进 streaming 视图
+      // （isTurnStreaming/groupInLiveTurn 以 idx >= turnFirstIdx 判定）。
+      const s = streamOf(convId);
+      if (s && s.turnFirstIdx !== null) s.turnFirstIdx += older.length;
       pagedOnce.value = true;
       loadMoreError.value = null;
     } catch (e) {
@@ -659,8 +665,12 @@ export const useChatStore = defineStore("chat", () => {
       channelView.value = null;
       return;
     }
+    const convId = conv.id;
     try {
-      channelView.value = await bridge.channels.get(conv.project_id);
+      const view = await bridge.channels.get(conv.project_id);
+      // await 归属守卫（批次 Z/B5 修复）：频道 A→B 快速切换时两条 IPC 无顺序
+      // 保证，A 的晚到响应会覆盖 B 的名册/统筹者档案且无 watcher 自愈回正
+      if (activeConvId.value === convId) channelView.value = view;
     } catch (e) {
       console.error("加载频道视图失败:", e);
     }
@@ -739,6 +749,10 @@ export const useChatStore = defineStore("chat", () => {
           steerConvId, content, blocks.length > 0 ? blocks : undefined, true, files, mentions,
         );
         queuedSteerIds.value.add(msgId);
+        touchConversation(steerConvId); // id 键控的全局会话表操作，切走后照常执行
+        // await 归属守卫（批次 Z/B5 修复）：invoke 在途切会话时乐观行不得前插进
+        // 新会话列表（B5-2）
+        if (steerConvId !== activeConvId.value) return;
         messages.value = [
           ...messages.value,
           {
@@ -754,7 +768,6 @@ export const useChatStore = defineStore("chat", () => {
             model: steerModel,
           },
         ];
-        touchConversation(steerConvId);
       } catch (e) {
         console.error("1v1 插话发送失败:", e);
         const raw = e instanceof Error ? e.message : String(e);
@@ -960,15 +973,14 @@ export const useChatStore = defineStore("chat", () => {
       reason: response.reason ?? null,
       changes: response.changes,
     });
-    // 按激活会话 + request_id 双重校验后删除（避免删掉同 conv 已被新提案覆盖的旧条目）
-    const aid = activeConvId.value;
-    if (!aid) return;
-    const cur = pendingProposals.value.get(aid);
-    if (cur && cur.request_id === response.request_id) {
-      const m = new Map(pendingProposals.value);
-      m.delete(aid);
-      pendingProposals.value = m;
+    // 按 request_id 反查会话删条目（批次 Z/B5 修复：原在 await 之后才读
+    // activeConvId——长批准链中用户切走会话时拿到的是新激活会话，旧会话的
+    // 提案卡残留可二次点击（后端已消费）。镜像 respondToAuth 的反查形态）
+    const m = new Map(pendingProposals.value);
+    for (const [cid, entry] of m) {
+      if (entry.request_id === response.request_id) { m.delete(cid); break; }
     }
+    pendingProposals.value = m;
   }
 
   /** 发送用户选择（ask_user）作答回 Rust。按 request_id 定位（通知栈条目不属
@@ -1007,10 +1019,16 @@ export const useChatStore = defineStore("chat", () => {
       pendingResponds.delete(requestId);
     }
     const m = new Map(pendingAskRequests.value);
+    let answeredCid: string | null = null;
     for (const [cid, entry] of m) {
-      if (entry.payload.request_id === requestId) { m.delete(cid); break; }
+      if (entry.payload.request_id === requestId) { m.delete(cid); answeredCid = cid; break; }
     }
     pendingAskRequests.value = m;
+    // 作答即推进相位（批次 Z 修复）：ask_user 无 responded 后端事件（不变式），
+    // awaiting_choice 相位只被显式响应/取消退出——不在此推进的话相位行/侧栏
+    // 「等待你的选择」会挂满整个后半回合直到 chat:done。镜像 auth 侧
+    // chat:tool-auth-responded 的反查推进模式。
+    if (answeredCid) advancePhase(answeredCid, "chat:ask-user-responded", {});
   }
 
   // ===== 删除 / 置顶会话（含撤销机制） =====
@@ -1157,6 +1175,12 @@ export const useChatStore = defineStore("chat", () => {
           content: call.result.content,
           is_error: call.result.isError,
         });
+        // 工具返图随行冻结为 Image 块，与后端落库同形态（[tool_result, image]）——
+        // 否则 resetRoundStreaming 清空 live 渲染源后、DB 行加载前，汇报图从 UI
+        // 消失（批次 Z 修复：历史渲染路径 parseResultRow 自然接管，零新增渲染位）
+        for (const img of call.result.images ?? []) {
+          resultBlocks.push({ type: "image", data: img.data, media_type: img.media_type });
+        }
       }
     }
 
