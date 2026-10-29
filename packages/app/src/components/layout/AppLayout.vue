@@ -7,10 +7,12 @@ import AuthNoticeStack from "../chat/AuthNoticeStack.vue";
 import TitleBar from "./TitleBar.vue";
 
 /** 启动入场编排（感官升级批 2）：触发信号 = main.ts finish() 派发的
- * icepaw:splash-out——2026-10-28 实机拍板后移：编舞播完 + splash 节点移除
- * 之后才派发（同帧起跑会让首页与未退完的环组重叠 ~950ms；本版接受短暂
- * 纯底色空窗，下一版再做骨架分阶段渲染的无感衔接）。（⚠️ 挂 boot-ready
- * 会在不透明骨架背后提前播完，淡出时 stagger 已结束。）兜底两道：splash 节点已不在（退场后再挂载，如
+ * icepaw:splash-out——2026-10-29 无感衔接演进：入场信号前移到编舞**中段**
+ * （t=550 SPLASH_HANDOFF_MS，非节点移除后），「加载元素退场」与「应用骨架
+ * 入场」交叠成 crossfade——侧栏 t=700 / 消息区 t=850 起跑，落在环场淡净（800）
+ * 前后，无亮色重叠、无纯底色空窗。（⚠️ 挂 boot-ready 会在不透明骨架背后
+ * 提前播完，淡出时 stagger 已结束；勿回退到 t=0 同帧起跑——2026-10-28 实机
+ * 否决：首页与 0~350ms 满亮度环组重叠。）兜底两道：splash 节点已不在（退场后再挂载，如
  * HMR 重挂 → 直接入场）/ 15.5s 超时（main.ts 真实兜底 = 14s 强制退场 + 950ms
  * 节点移除 ≈ 14.95s；须晚于它——提前入场会被不透明 splash 盖住且点击穿透成
  * 盲交互窗，批次 Z/B3 修正了按旧值 10s+360ms 算出的 11.5s 漂移），
@@ -95,8 +97,9 @@ watch(
    TitleBar **不等退场编舞**（三键立刻可见可用确定项，2026-10-27）：mount 即
    渲染即显示，自带 300ms 入场淡入；splash 已让出顶部 36px 条带，主线程解冻
    （~0.65s）≈ mount（~1.4s）时刻起可拖可点。内容区两拍在 splash-out 信号
-   （= 退场完成）后起跑：侧栏 t=150（自左滑入）→ 消息区 t=300
-   （自下浮现）。Sidebar 是子组件根（.sidebar 继承父 scope id 可选中）。 ---- */
+   （t=550 SPLASH_HANDOFF_MS，编舞中段）后起跑：侧栏 t=700（自左滑入）→
+   消息区 t=850（自下浮现），与环场淡净（800）交叠成无感衔接。
+   Sidebar 是子组件根（.sidebar 继承父 scope id 可选中）。 ---- */
 .titlebar {
   animation: titlebar-in 300ms var(--ip-ease-out, ease) both;
 }

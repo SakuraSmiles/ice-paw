@@ -60,16 +60,27 @@ requestAnimationFrame(() => {
     finished = true;
     const splash = document.getElementById("boot-splash");
     if (!splash) return;
-    // 分层让位编舞（形态 A）：单一状态类驱动 splash 各层错峰退场（时间表见
-    // index.html 样式区注释）。应用入场放行在编舞播完、节点移除**之后**
-    // （实机反馈 2026-10-28：同帧起跑会让首页与未退完的环组重叠 ~950ms；
-    // 本版接受短暂纯底色空窗，下一版演进「应用骨架分阶段渲染 + 加载元素
-    // 分阶段退场」的无感衔接——届时入场信号再前移）。
+    // 分层让位 + 应用入场无感衔接（2026-10-29 演进，取代「先退净再入场」）：
+    // 单一状态类 .boot-letting 驱动 splash 各层错峰退场；应用入场信号在编舞**中段**
+    // 派发（非节点移除后），让「加载元素退场」与「应用骨架入场」交叠成 crossfade——
+    // 透过渐透明的底看见布局逐块生长，消除 ~500ms 纯底色空窗。时间表（ms，
+    // 与 index.html 样式区 / AppLayout 入场延迟三处对齐）：
+    //   t=0    中央演出收束（400ms）
+    //   t=150  容器底色透明（450ms）
+    //   t=350  氛围/环场/名册淡出（450ms，至 800 淡净）
+    //   t=550  SPLASH_HANDOFF_MS：派发 icepaw:splash-out → app 骨架入场起跑
+    //          （AppLayout 侧栏 +150 / 消息区 +300）——此刻中央已收束、环场已
+    //          大半淡出，入场落在环场淡净（800）前后，无亮色重叠
+    //   t=950  节点移除（编舞全长 + 余量）
+    // ⚠️ 勿回退到 t=0 同帧起跑（2026-10-28 实机否决：首页与 0~350ms 满亮度环组
+    // 重叠）；勿回退到节点移除后派发（产生底色空窗）。550 是唯一真相源。
+    const SPLASH_HANDOFF_MS = 550;
     splash.classList.add("boot-letting");
-    window.setTimeout(() => {
-      splash.remove();
-      window.dispatchEvent(new CustomEvent("icepaw:splash-out"));
-    }, 950); // 编舞全长 + 余量（三处对齐）
+    window.setTimeout(
+      () => window.dispatchEvent(new CustomEvent("icepaw:splash-out")),
+      SPLASH_HANDOFF_MS,
+    );
+    window.setTimeout(() => splash.remove(), 950); // 编舞全长 + 余量（三处对齐）
   };
   // 就绪事件先到 → 等满「最少展示时长 + 名册演完」再退场；先到的是时限 → 直接
   // 退（就绪事件迟到时 finished 已置位，天然幂等）。名册三组全序列（agents→

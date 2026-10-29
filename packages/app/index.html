@@ -108,13 +108,14 @@
       }
       /* ==== 分层让位编舞（形态 A，2026-10-27 渐进建设模型第一步）====
          main.ts 退场触发时挂 .boot-letting（唯一状态类），CSS 后代选择器驱动
-         各层错峰退场；app 侧 AppLayout 三拍入场（标题栏 t=0 / 侧栏 t=150 /
-         消息区 t=300）与 veil 透明同步——透过渐透明的底看见布局逐块生长。
-         时间表（ms，与 main.ts remove 定时器 / AppLayout 延迟三处对齐）：
+         各层错峰退场；app 侧 AppLayout 骨架分阶段入场（标题栏 mount 即显 /
+         侧栏 +150 / 消息区 +300，入口在 icepaw:splash-out）与 veil 透明同步——
+         透过渐透明的底看见布局逐块生长（无感衔接，2026-10-29 演进）。
+         时间表（ms，与 main.ts SPLASH_HANDOFF_MS/remove 定时器 / AppLayout 延迟三处对齐）：
            t=0    中央演出收束（400ms，缩放+上浮+淡出）
-           t=150  容器底色透明（450ms）+ 侧栏生长（AppLayout 350ms）
-           t=300  消息区生长（AppLayout 350ms）
+           t=150  容器底色透明（450ms）
            t=350  氛围层淡出（角标/角部小字/暗角/噪点，450ms）
+           t=550  SPLASH_HANDOFF_MS：派发 icepaw:splash-out → 侧栏 t=700 / 消息区 t=850 起跑
            t=950  节点移除（main.ts） */
       .boot-letting {
         background-color: transparent;
