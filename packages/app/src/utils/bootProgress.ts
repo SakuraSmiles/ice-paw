@@ -103,6 +103,20 @@ let settleTimer = 0;    // 中心收尾定时器（clear+reschedule，最终落�
 let rosterDoneCb: (() => void) | null = null; // 名册演完回调（Sidebar 借此推迟「就绪」100% 上报）
 let rosterDoneTimer = 0; // 名册演完回调定时器（clear+reschedule，与 settleTimer 同落在最后一组演完时刻）
 
+// 首帧可见门状态：null = 门已过（正常路径零开销）；非 null = 待 flush 队列
+let rosterGate: Array<[string, readonly string[]]> | null = [];
+(() => {
+  const flush = () => {
+    const pending = rosterGate;
+    rosterGate = null;
+    if (pending) for (const [g, l] of pending) rosterAppendNow(g, l);
+  };
+  // 双 rAF：首帧提交后的下一帧 = 已真实可见；单 rAF 在首帧前回调不足以证明上屏
+  requestAnimationFrame(() => requestAnimationFrame(flush));
+  // 兜底：页面后台/最小化启动时 rAF 恒不触发——3s 放行防演出卡死
+  setTimeout(flush, 3000);
+})();
+
 /** 注册「名册全部演完」回调——Sidebar 用它把「就绪」100% 上报推迟到名册最后一组
  *  真正演完（而非三组数据刚注入时），避免中心「就绪/欢迎」在名册仍演出时提前出现
  *  （总/子先后关系颠倒）。单槽赋值（重复注册只保留最后一次，Sidebar 挂载即一次）。 */
@@ -111,6 +125,21 @@ export function onRosterDone(cb: () => void): void {
 }
 
 export function rosterAppend(groupId: string, labels: readonly string[]): void {
+  // 首帧可见门（0.9.12 生产实案「名册出来一半才继续演绎」根治，2026-10-29）：
+  // GPU 合成器冷启动阻塞期间（清缓存首启黑窗期）JS 定时器照常走墙钟——名册在
+  // 「没人看得见」的窗口里照演，合成器就绪上屏时已演到中段 = 用户看到快进。
+  // 双 rAF = 首帧已提交后的下一帧（可见性代理信号：合成器未就绪时 rAF 不触发）；
+  // 门前的 append 请求排队保序，flush 后从 agents 组从头开演。3s 兜底放行防
+  // 异常态（页面后台启动 rAF 恒不来）卡死演出——超 3s 的极端冷启动仍会快进，
+  // 交由 14s 总兜底收口。
+  if (rosterGate !== null) {
+    rosterGate.push([groupId, labels]);
+    return;
+  }
+  rosterAppendNow(groupId, labels);
+}
+
+function rosterAppendNow(groupId: string, labels: readonly string[]): void {
   const splash = document.getElementById("boot-splash");
   const host = splash?.querySelector<HTMLElement>(`#roster-${groupId}`);
   if (!splash || !host) return;
