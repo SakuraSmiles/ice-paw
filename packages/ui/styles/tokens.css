@@ -199,6 +199,9 @@
   --ip-ease-in:         cubic-bezier(0.4, 0.0, 1, 1);
   --ip-ease-in-out:     cubic-bezier(0.4, 0.0, 0.2, 1);
   --ip-ease-emphasized: cubic-bezier(0.2, 0.0, 0.0, 1);
+  /* 回弹着陆：快速启动 + 轻微过冲回落（滑动指示条展开/弹出类动效；y1>1 使曲线
+     先冲到目标之上再回稳，与 --ip-ease-out 相比更有「速度变化」与弹簧手感） */
+  --ip-ease-spring:     cubic-bezier(0.34, 1.15, 0.64, 1);
 
   /* 复合过渡（§7.4 全局微交互 — 组件可整体引用） */
   --ip-transition-colors:
@@ -402,6 +405,12 @@
   --ip-accent-agent-text:  #5B4BBD;
   --ip-accent-agent-bg:    #ECE9FB;
 
+  /* 身份层点缀色：DSH 冷青（工业制图语言框架标识，2026-10-29）——设置页 DSH 框架
+     标签用（导航英文副标 / 内容页英文副标 / 套准框四角 L 角标 / 档案行标签），
+     与 --ip-accent-agent 紫平行、不进交互层。⚠️ 与 agent 紫的「三主题恒值」不同，
+     本族随明暗切换（浅深、暗亮双锚点），三区必须分别赋值同步。 */
+  --ip-accent-dsh:         #2E7A96;
+
   /* ------------------- 10. 语义层 token（组件引用的统一入口） ------------------- */
 
   /* 背景层次（§1.1.4） */
@@ -512,6 +521,9 @@
   --ip-accent-agent:       #7C6BD6;
   --ip-accent-agent-text:  #5B4BBD;
   --ip-accent-agent-bg:    #ECE9FB;
+
+  /* DSH 冷青（真源 :root 区；随明暗切换，暗色取亮档） */
+  --ip-accent-dsh:         #82BFD2;
 
   /* 语义层重映射 */
   --ip-color-bg-primary:      var(--ip-gray-900);
@@ -655,6 +667,9 @@
     --ip-accent-agent:       #7C6BD6;
     --ip-accent-agent-text:  #5B4BBD;
     --ip-accent-agent-bg:    #ECE9FB;
+
+    /* DSH 冷青（真源 :root 区；随明暗切换，暗色取亮档） */
+    --ip-accent-dsh:         #82BFD2;
 
     --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
 

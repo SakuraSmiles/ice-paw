@@ -675,7 +675,10 @@ onActivated(async () => {
 <template>
   <div class="settings-content-inner">
     <div class="content-header">
-      <h2 class="content-title">模型</h2>
+      <div class="content-heading">
+        <h2 class="content-title">模型</h2>
+        <span class="content-en">MODELS</span>
+      </div>
       <span v-if="savedTip" class="save-tip">已保存</span>
     </div>
 
@@ -963,13 +966,37 @@ onActivated(async () => {
   gap: var(--ip-spacing-1_5);
   padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
   flex-shrink: 0;
-  height: 56px;
+  height: 72px;
+  border-bottom: 1px solid var(--ip-color-border-default);
 }
 .content-title {
+  position: relative;
   font-size: var(--ip-text-h3-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
   margin: 0;
+}
+
+/* 标题下方分割线左端异色粗线段：宽=标题文字宽（自适应字数） */
+.content-title::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -13px;
+  width: 100%;
+  height: 3px;
+  background: var(--ip-accent-dsh);
+}
+.content-heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ip-spacing-3);
+}
+.content-en {
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-micro-size);
+  letter-spacing: 0.2em;
+  color: var(--ip-accent-dsh);
 }
 .save-tip {
   font-size: var(--ip-text-caption-size);
@@ -990,7 +1017,7 @@ onActivated(async () => {
 .profile-list {
   flex: 1;
   overflow-y: auto;
-  padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) var(--ip-spacing-6);
   display: flex;
   flex-direction: column;
   gap: var(--ip-spacing-2);
