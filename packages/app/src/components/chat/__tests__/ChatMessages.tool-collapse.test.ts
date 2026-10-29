@@ -11,7 +11,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
-import { nextTick } from "vue";
 import ChatMessages from "../ChatMessages.vue";
 import { useChatStore } from "../../../stores/chat";
 import type { Message } from "../../../types";
