@@ -235,12 +235,13 @@ describe("③ 组级工具折叠", () => {
     chat.ensureStream("c1").sending = false; // chat:done 收尾（clearTurnAnchors 同步清锚点）
     chat.ensureStream("c1").turnFirstIdx = null;
     // 分桶投影（sending = activeStream.sending 二级 computed）在慢机上的重渲染
-    // 竞态：双 nextTick 确保 DOM 沉淀完成（CI 复现实案 33b15aa）
+    // 竞态：固定双 tick 在慢 runner 上不够（CI 复现实案 33b15aa + 0.9.11 再现
+    // 同一 flake）——改 vi.waitFor 轮询至条件成立（确定性等待，机器速度无关）
     await flushPromises();
-    await nextTick();
-    await nextTick();
+    await vi.waitFor(() => {
+      expect(plainToolRows(w).length).toBe(0); // 回合结束沉淀为折叠
+    });
 
-    expect(plainToolRows(w).length).toBe(0); // 回合结束沉淀为折叠
     expect(w.findAll(".tool-group-summary").length).toBe(1);
   });
 
