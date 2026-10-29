@@ -744,8 +744,28 @@ pub fn run() {
     // 日志 + 明确退出码。（release profile panic=unwind 已开，catch_unwind 有效；
     // build 阶段失败走 Err 分支，同样兜住。）
     let identifier = context.config().identifier.clone();
-    let run_result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.run(context)));
+    // 退出时机缓存清理挂点（prune_boot_check 的 deferred 执行侧）：RunEvent::Exit
+    // 时 WebView2 进程已关、缓存文件无锁，判定+rename 都在此刻做（启动路径零阻塞）。
+    #[cfg(windows)]
+    let prune_root = std::env::var("LOCALAPPDATA")
+        .ok()
+        .map(|la| std::path::PathBuf::from(la).join(&identifier).join("EBWebView"));
+    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), tauri::Error> {
+        let app = builder.build(context)?;
+        #[cfg(windows)]
+        let root_for_exit = prune_root.clone();
+        #[cfg(windows)]
+        app.run(move |_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(root) = root_for_exit.as_deref() {
+                    prune_on_exit(root, 2000);
+                }
+            }
+        });
+        #[cfg(not(windows))]
+        app.run(|_handle, _event| {});
+        Ok(())
+    }));
     match run_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -913,33 +933,65 @@ fn prune_webview_cache_on_version_change(context: &tauri::Context) {
     let root: PathBuf = PathBuf::from(local_app)
         .join(&context.config().identifier)
         .join("EBWebView");
-    prune_impl(&root, &version);
+    prune_boot_check(&root, &version);
 }
 
-/// 内核与路径解耦：`root` = EBWebView 目录（测试注入 tmp 目录缩样布局）。
+/// 启动路径（同步段，必须亚毫秒）：版本变化时**只登记待清理**（写 pending +
+/// 更新 marker），判定与清理全部推迟到退出时机（WebView2 已关、缓存文件无锁）。
+/// 另 spawn 后台线程收编历史 .old-* 残留目录（WebView2 不认识这些名字，无锁可删）。
+/// ——历史形态「窗口创建前同步判定+rename+删」是 0.9.11/12 生产实案启动卡顿的
+/// 组成源；「必须跑在 WebView2 前」的旧约束只对**删除**（unlink 需
+/// FILE_SHARE_DELETE）成立，rename 与退出时机组合解除该约束（2026-10-29）。
 #[cfg(windows)]
-fn prune_impl(root: &std::path::Path, version: &str) {
-    // 生产 hint：50MB 常态 ≈ 几百直接子项，巨型 profile（0.6.15 实案 606MB）数千+
-    prune_impl_with_hint(root, version, 2000);
-}
-
-#[cfg(windows)]
-fn prune_impl_with_hint(root: &std::path::Path, version: &str, entry_hint: usize) {
+fn prune_boot_check(root: &std::path::Path, version: &str) {
     let marker = root.join(".webview-cache-gen");
+    let pending = root.join(".webview-cache-prune-pending");
 
-    // 同版本快路径：不动（一次读小标记文件，<1ms）
     if std::fs::read_to_string(&marker).ok().as_deref() == Some(version) {
+        return; // 同版本且已处理：亚毫秒快路径
+    }
+    eprintln!("[ice_paw] 版本变化（{version}），登记缓存清理（退出时机执行，本次启动零阻塞）");
+    let _ = std::fs::write(&pending, version);
+    let _ = std::fs::write(&marker, version);
+
+    // 收编历史 .old-* 残留（上次退出时 rename 出的目录，删除被 detach 线程/
+    // 崩溃打断）——无锁目录，后台线程删不阻塞任何路径。
+    let profile = root.join("Default");
+    let mut stale: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&profile) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("Cache.old-") || name.starts_with("Code Cache.old-") {
+                stale.push(e.path());
+            }
+        }
+    }
+    if !stale.is_empty() {
+        std::thread::spawn(move || {
+            for p in stale {
+                if let Err(e) = std::fs::remove_dir_all(&p) {
+                    eprintln!("[ice_paw] WebView2 缓存残留删除失败（{}）: {e}", p.display());
+                }
+            }
+        });
+    }
+}
+
+/// 退出时机清理（WebView2 已关，无文件锁）：pending 在场才干活——两级判定
+///（浅层子项数 → 超阈递归精算）确认膨胀（>256MB）才 rename 让位（同盘改名
+/// 毫秒级；真删交下次启动的后台收编线程）。未超阈 = 保留热启动：Code Cache
+/// 是编译缓存（性能资产，vendor 分包跨版本命中），0.6.15 的 606MB 巨型 profile
+/// 防线由阈值兜住（--disk-cache-size=50MB 封顶 HTTP 缓存后膨胀本已罕见）。
+#[cfg(windows)]
+fn prune_on_exit(root: &std::path::Path, entry_hint: usize) {
+    let pending = root.join(".webview-cache-prune-pending");
+    if !pending.is_file() {
         return;
     }
+    let _ = std::fs::remove_file(&pending);
 
     let profile = root.join("Default");
-
-    // 尺寸阈值闸（0.9.12 生产实案「升级首启卡顿」治本，2026-10-29）：0.6.15 的
-    // 606MB 巨型 profile 事故后已加 --disk-cache-size=50MB 封顶，**无条件**清缓存
-    // 变成冗余自残——Code Cache 是编译缓存（性能资产：vendor 分包跨版本命中即
-    // 免冷编译），每次版本升级抹掉它 = 强制全量冷启动。两级判定防膨胀复发又不
-    // 阻塞启动：一级 = 直接子项数浅判（readdir 亚毫秒）；二级 = 超阈才递归精算
-    // 字节数（此时膨胀已近实锤，遍历成本可接受）。
     const PRUNE_THRESHOLD: u64 = 256 * 1024 * 1024;
     let mut top_entries = 0usize;
     for sub in ["Cache", "Code Cache"] {
@@ -947,79 +999,44 @@ fn prune_impl_with_hint(root: &std::path::Path, version: &str, entry_hint: usize
             top_entries += rd.count();
         }
     }
-    let total: u64 = if top_entries >= entry_hint {
-        let mut t = 0;
+    let mut total: u64 = 0;
+    if top_entries >= entry_hint {
         for sub in ["Cache", "Code Cache"] {
-            t += dir_size_on_disk(&profile.join(sub));
+            total += dir_size_on_disk(&profile.join(sub));
         }
-        t
-    } else {
-        0
-    };
+    }
     if top_entries < entry_hint || total < PRUNE_THRESHOLD {
         eprintln!(
-            "[ice_paw] 版本变化（{version}），缓存未超膨胀阈（一级子项 {top_entries} / {} MB）——保留热启动（Code Cache 编译缓存）",
+            "[ice_paw] 退出清理：缓存未超膨胀阈（一级子项 {top_entries} / {} MB）——保留热启动",
             total / (1024 * 1024)
         );
-        let _ = std::fs::write(&marker, version);
         return;
     }
 
-    // rename-then-background-delete（0.9.11 生产实案「首启白窗长时间未响应」主源
-    // 修复，2026-10-29）：旧形态同步 remove_dir_all 几十万小文件——慢机上 5~20s，
-    // 且发生在窗口创建**之前**＝用户对着空桌面/白窗干等。同盘 rename 瞬时，
-    // WebView2 对缺席的 Cache/Code Cache 目录自动重建；真删挪后台线程，不阻塞
-    // 启动链。旧实例崩溃残留的 .old-{ts} 目录顺带一并后台清。
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let mut renamed: Vec<std::path::PathBuf> = Vec::new();
+    let mut renamed = 0usize;
     for sub in ["Cache", "Code Cache"] {
         let dir = profile.join(sub);
         if !dir.is_dir() {
             continue;
         }
-        let old = profile.join(format!("{sub}.old-{stamp}"));
-        match std::fs::rename(&dir, &old) {
-            Ok(()) => renamed.push(old),
+        match std::fs::rename(&dir, profile.join(format!("{sub}.old-{stamp}"))) {
+            Ok(()) => renamed += 1,
             Err(e) => {
-                // rename 失败（罕见：残留占用）退回同步删——保住「缓存确已清理」
-                // 的原语义；删不掉由 disk-cache-size 上限兜底，与旧形态一致
-                eprintln!("[ice_paw] WebView2 缓存 rename 失败（{sub}），退回同步删: {e}");
-                let _ = std::fs::remove_dir_all(&dir);
+                // 退出时机理论无锁；失败（杀毒/句柄残留）仅记日志——膨胀防线交
+                // 下次退出重试（pending 已删，但下个版本变化会再登记；真膨胀
+                // 场景 disk-cache-size 上限仍在兜底增长）
+                eprintln!("[ice_paw] 退出清理 rename 失败（{sub}）: {e}");
             }
         }
     }
-    // 残留的旧后台删目录（上次崩溃没删完）一并收编
-    if let Ok(rd) = std::fs::read_dir(&profile) {
-        for e in rd.flatten() {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            if (name.starts_with("Cache.old-") || name.starts_with("Code Cache.old-"))
-                && !renamed.iter().any(|p| p == &e.path())
-            {
-                renamed.push(e.path());
-            }
-        }
-    }
-    if !renamed.is_empty() {
-        eprintln!(
-            "[ice_paw] 版本变化（{version}），缓存合计 {} MB 超阈值，WebView2 缓存已让位（{} 个目录），后台删除中",
-            total / (1024 * 1024),
-            renamed.len()
-        );
-        std::thread::spawn(move || {
-            for p in renamed {
-                if let Err(e) = std::fs::remove_dir_all(&p) {
-                    eprintln!("[ice_paw] WebView2 缓存后台删除失败（{}）: {e}", p.display());
-                }
-            }
-        });
-    }
-    // 尽力而为语义：无论成败都落标记（失败常为暂时性文件占用，但每次启动重删
-    // 几百 MB 同样拖启动；真删不掉由 disk-cache-size 上限兜住增长）
-    let _ = std::fs::write(&marker, version);
+    eprintln!(
+        "[ice_paw] 退出清理：缓存合计 {} MB 超阈，{renamed} 个目录已让位（删除由下次启动后台收编）",
+        total / (1024 * 1024)
+    );
 }
 
 /// 目录磁盘占用（递归求和；缺失目录 = 0）。浅遍历求和只为阈值判定，容错优先。
@@ -1051,14 +1068,15 @@ mod tests {
         assert_eq!(super::panic_payload_to_string(p.as_ref()), "code 42");
     }
 
-    // prune 的目录副作用在 tmp 目录验证（真实 EBWebView 布局缩样）——两分支：
-    // 未超膨胀阈（hint 大）= 保留热启动；超阈（hint 小）= rename 让位清缓存
+    // prune 三段式（boot_check 登记 / on_exit 两分支判定清理）在 tmp 目录验证
+    //（真实 EBWebView 布局缩样）：启动路径只登记零清理；退出时未超阈保留热启动、
+    // 超阈 rename 让位。
     #[cfg(windows)]
     #[test]
-    fn prune_threshold_keeps_small_cache_and_clears_bloated_on_version_change() {
+    fn prune_boot_registers_and_exit_threshold_decides() {
         use std::fs;
         let root = std::env::temp_dir().join(format!("icepaw_prune_{}", uuid::Uuid::new_v4()));
-        // prune_impl 的 root 语义 = EBWebView 目录本身；tmp 下缩样真实布局
+        // root 语义 = EBWebView 目录本身；tmp 下缩样真实布局
         let webview = root.join("EBWebView");
         let profile = webview.join("Default");
         fs::create_dir_all(profile.join("Cache/Cache_Data")).unwrap();
@@ -1069,25 +1087,30 @@ mod tests {
         fs::write(profile.join("Cookies"), b"user-data").unwrap();
 
         let marker = webview.join(".webview-cache-gen");
-        // 版本 v1 + 未超阈（hint 极大）→ 保留热启动：两缓存目录原样在场 + 落标记
-        super::prune_impl_with_hint(&webview, "1.0.0", usize::MAX);
-        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "未超阈不得清（热启动）");
-        assert!(profile.join("Code Cache/Code Cache/abc").exists());
-        assert!(profile.join("Cookies").exists(), "用户数据不得被清");
+        let pending = webview.join(".webview-cache-prune-pending");
+
+        // 1) 启动：版本变化 → 只登记（pending + marker），缓存零动作
+        super::prune_boot_check(&webview, "1.0.0");
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "启动路径不得动缓存");
+        assert!(pending.exists(), "版本变化须登记 pending");
         assert_eq!(fs::read_to_string(&marker).unwrap(), "1.0.0");
 
-        // 同版本再跑 → 快路径不动（缓存条目保留）
-        super::prune_impl_with_hint(&webview, "1.0.0", 1);
-        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "同版本不得重删");
+        // 2) 退出（未超阈：一级子项少）→ 保留热启动 + pending 消费
+        super::prune_on_exit(&webview, usize::MAX);
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "未超阈不得清（热启动）");
+        assert!(profile.join("Cookies").exists(), "用户数据不得被清");
+        assert!(!pending.exists(), "退出后 pending 须消费");
 
-        // 版本 v2 + 超阈（hint 小触发精算，但字节数 < 256MB → 仍保留）
-        super::prune_impl_with_hint(&webview, "2.0.0", 1);
-        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "字节未超 256MB 阈值不得清");
+        // 3) 退出无 pending → no-op（缓存条目保留）
+        super::prune_on_exit(&webview, 1);
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "无 pending 不得动");
 
-        // 版本 v3 + 超阈且超字节（写 >256MB 稀疏内容太重——改判据：直接验超字节
-        // 路径的让位语义，写 257MB 零填充成本过高，用 f_000002 大文件方案同样重。
-        // 现实折中：阈值分支的字节级路径由 PRUNE_THRESHOLD 常量逻辑保证，此处
-        // 验证「超阈+超字节」的让位语义用truncate 稀疏文件（逻辑大小 257MB，零盘占用）
+        // 4) 再登记 + 退出超阈但字节未超（hint=1 触发精算，内容 < 256MB）→ 保留
+        super::prune_boot_check(&webview, "2.0.0");
+        super::prune_on_exit(&webview, 1);
+        assert!(profile.join("Cache/Cache_Data/f_000001").exists(), "字节未超 256MB 不得清");
+
+        // 5) 超阈且超字节（稀疏文件：逻辑大小 257MB，零盘占用）→ rename 让位
         fs::write(profile.join("Cache/Cache_Data/f_000002"), b"").unwrap();
         let f = fs::File::options()
             .write(true)
@@ -1095,10 +1118,17 @@ mod tests {
             .unwrap();
         f.set_len(257 * 1024 * 1024).unwrap();
         drop(f);
-        super::prune_impl_with_hint(&webview, "3.0.0", 1);
-        assert!(!profile.join("Cache").exists(), "超阈超字节 → 让位清理");
+        super::prune_boot_check(&webview, "3.0.0");
+        super::prune_on_exit(&webview, 1);
+        assert!(!profile.join("Cache").exists(), "超阈超字节 → 让位");
         assert!(!profile.join("Code Cache").exists());
         assert!(profile.join("Cookies").exists(), "用户数据不得被清");
+        // 让位出的 .old-* 目录在场（删除由下次启动的后台收编线程负责）
+        let olds = fs::read_dir(&profile).unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".old-"))
+            .count();
+        assert!(olds >= 1, "rename 让位目录须在场");
         assert_eq!(fs::read_to_string(&marker).unwrap(), "3.0.0");
 
         let _ = fs::remove_dir_all(&root);
