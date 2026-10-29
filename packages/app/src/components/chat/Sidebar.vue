@@ -116,7 +116,7 @@ const {
   width: sidebarWidth,
   startDrag: startSidebarDrag,
   reset: resetSidebarWidth,
-} = useResizablePanel({ key: "sidebar", default: 320, min: 240, max: 480, dir: 1 });
+} = useResizablePanel({ key: "sidebar", default: 320, min: 280, max: 380, dir: 1 });
 
 // =========================================================================
 // 收起/展开（rail 模式，2026-09-01）：56px 单列图标行动栏。
