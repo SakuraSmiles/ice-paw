@@ -587,9 +587,14 @@ const liveShowImages = computed(() => {
 /** 该 item 的汇报图统一出口（历史优先，live 兜底）——模板单图直显 / 多图叠压
  *  两态共用（多张汇报图竖排会大量占用聊天区空间，0.9.11 生产实案：与用户发多图
  *  同款叠压形态，点击预览器翻张看全量）。 */
-function showImagesFor(item: { msg: { id: string; content_blocks?: string } }): { data: string; mediaType: string }[] {
+function showImagesFor(item: GroupedItem): { data: string; mediaType: string }[] {
   const hist = showImagesOfItem(item);
-  return hist.length ? hist : liveShowImages.value;
+  if (hist.length) return hist;
+  // live 兜底只属于当前流式 assistant item——其它 item 历史无图就是无图，不能
+  // 共享全局 liveShowImages（否则生成 show_image 期间全列表每条消息都渲染同一组
+  // 图 = 多处重复渲染，2026-10-29 他机生产实案）。落库后历史渲染接管、live 分支
+  // 消失，正是「一部分完成后回归正常」的因果。
+  return isLiveAssistant(item) ? liveShowImages.value : [];
 }
 
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
