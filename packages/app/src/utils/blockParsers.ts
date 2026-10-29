@@ -18,6 +18,20 @@ export interface ToolResultEntry {
   images: { data: string; mediaType: string }[];
 }
 
+/** 行内是否含 tool_result 块（= 工具回执数据行）。用户媒体判定用它排除：
+ *  工具行的 Image 块归工具归属（→ assistant 侧图片卡），误当用户媒体会把
+ *  agent 汇报图渲染成右侧「用户发出」气泡（2026-10-29 他机生产实案）。 */
+export const rowHasToolResult = memoized((contentBlocks: string): boolean => {
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    return Array.isArray(blocks) && blocks.some(
+      (b) => typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_result',
+    );
+  } catch {
+    return false;
+  }
+});
+
 /** 行级 tool_result 解析（memo 按行 contentBlocks 字符串缓存——同串零重 parse）。
  *  行内顺序扫描原始 blocks：tool_result 与其后的 Image 块（工具返图：
  *  view_image/show_image/UE5 提取）按序归属到最近的 tool_result，图随条目携带。 */

@@ -658,3 +658,62 @@ fn test_helper_imports_compile() {
         conversation::create as *const () as usize,
     );
 }
+
+/// tool_result 行「外置→水合」往返（2026-10-29 他机生产实案回归）：
+/// update_content_blocks 落 [ToolResult, Image(内联 base64)]——写侧 offload 把
+/// data 置空串 + image_file 指针；读侧 list* 必须 hydrate 还原非空 data。
+/// 若读侧漏水合（data:"" 直过），前端 parseResultRow 的 rec.data 判空即静默
+/// 跳过——图片卡不渲染且无任何可见标记（实案病征：日志称已落库、界面零图）。
+#[tokio::test]
+async fn tool_result_image_offload_hydrate_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("icepaw_imgstore_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    ice_paw_lib::infra::image_store::init(&dir);
+
+    let pool = fresh_pool().await;
+    let conv_id = seed_agent_and_conv(&pool).await;
+    let msg_id = format!("msg-{}", uuid::Uuid::new_v4());
+    message::create(
+        &pool,
+        &msg_id,
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: String::new(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // 1×1 PNG 真实 base64（offload 解码写文件、按内容哈希命名）
+    let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let blocks = format!(
+        r#"[{{"type":"tool_result","tool_use_id":"call_1","content":"{{\"path\":\"x.png\"}}"}},{{"type":"image","data":"{png_b64}","media_type":"image/png"}}]"#
+    );
+    message::update_content_blocks(&pool, &msg_id, &blocks)
+        .await
+        .unwrap();
+
+    // 写侧已外置：行内 data 空串 + image_file 指针（裸 SQL 验原始形态）
+    let raw: (String,) = sqlx::query_as("SELECT content_blocks FROM messages WHERE id = ?")
+        .bind(&msg_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(raw.0.contains("image_file"), "写侧应外置为指针：{}", raw.0);
+    assert!(!raw.0.contains(png_b64), "写侧不应保留内联 base64");
+
+    // 读侧水合：list 路径必须还原非空 data（前端展示数据源）
+    let rows = message::list_by_conversation(&pool, &conv_id, None, None)
+        .await
+        .unwrap();
+    let row = rows.iter().find(|r| r.id == msg_id).expect("row 在场");
+    assert!(
+        row.content_blocks.contains(png_b64),
+        "读侧水合必须还原内联 data——空串直过 = 前端图片卡静默消失：{}",
+        row.content_blocks
+    );
+}

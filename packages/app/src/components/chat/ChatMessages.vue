@@ -37,7 +37,7 @@ import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/re
 import type { ParsedRef } from "../../utils/refs";
 import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
-import { buildToolResultIndex } from "../../utils/blockParsers";
+import { buildToolResultIndex, rowHasToolResult } from "../../utils/blockParsers";
 import { phaseLabel } from "../../utils/phaseMachine";
 import { usePhaseClock } from "../../composables/usePhaseClock";
 import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
@@ -419,9 +419,13 @@ function kindLabel(kind: string): string {
   return KIND_LABELS[kind.toLowerCase()] ?? kind.toUpperCase();
 }
 
-/** 用户消息是否含图片或附件块（纯附件无文本时仍需显示气泡） */
+/** 用户消息是否含图片或附件块（纯附件无文本时仍需显示气泡）。
+ *  ⚠️ tool_result 数据行不算用户媒体（2026-10-29 他机实案）：0.9.9 起工具回执
+ *  行落库携带 Image 块（前端展示数据源），其图归工具归属 → assistant 侧
+ *  图片卡渲染；此处误判会把 agent 汇报图渲染成右侧「用户发出」气泡。 */
 function hasUserMedia(msg: { content_blocks?: string }): boolean {
   if (!msg.content_blocks || msg.content_blocks === '[]') return false;
+  if (rowHasToolResult(msg.content_blocks)) return false;
   return parseImageBlocks(msg.content_blocks).length > 0
     || parseAttachmentBlocks(msg.content_blocks).length > 0;
 }
@@ -1230,12 +1234,16 @@ function isProcessNarrativeItem(g: MessageGroup, item: GroupedItem): boolean {
   return s != null && item.idx !== s.lastContentIdx;
 }
 
-/** 折叠态下该 item 是否已无任何可见内容（空壳）。可见性四路：流式通道（live
+/** 折叠态下该 item 是否已无任何可见内容（空壳）。可见性五路：流式通道（live
  *  item 恒在场）/ 正文（非过程收纳段）/ 思考（组未聚合且本 item 有思考块，或
- *  刚结束驻留块）/ 工具（未折叠或含豁免卡）。三收纳在生成中组全不生效，
- *  生成中组天然全可见；「刚结束」驻留思考块也保 item 在场（其载体在本 item）。 */
+ *  刚结束驻留块）/ 工具（未折叠或含豁免卡）/ **show_image 图卡（2026-10-29
+ *  他机实案修正：图片是对话内容非过程噪音——item 带 show_image 图时恒在场，
+ *  工具行照常可折叠、图片卡独立可见，不再随胶囊收纳连图一起消失）**。三收纳
+ *  在生成中组全不生效，生成中组天然全可见；「刚结束」驻留思考块也保 item
+ *  在场（其载体在本 item）。 */
 function itemCollapsedAway(g: MessageGroup, item: GroupedItem): boolean {
   if (isLiveAssistant(item)) return false;
+  if (showImagesOfItem(item).length > 0) return false; // 图片卡豁免（见上）
   if (item.msg.content && !isProcessNarrativeItem(g, item)) return false;
   const thinkVisible =
     !thinkingAggregateEligible(g) &&
