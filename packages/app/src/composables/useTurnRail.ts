@@ -26,7 +26,7 @@ export interface TurnTick {
 }
 
 /** 窗口切片结果：可见 tick + 全局位置指示 */
-export interface TurnWindow {
+interface TurnWindow {
   ticks: TurnTick[];
   /** 窗口首格的全局轮号（1-based） */
   from: number;

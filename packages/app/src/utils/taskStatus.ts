@@ -13,7 +13,7 @@
  *   诚实不伪造（boot sweep 也不补 spawn 前失败的零事件会话）
  */
 
-export type TaskStatus = "running" | "done" | "failed" | "ended-other" | "interrupted";
+type TaskStatus = "running" | "done" | "failed" | "ended-other" | "interrupted";
 
 /** 任务终态（台账行 + 流式 overlay） */
 export function taskStatus(

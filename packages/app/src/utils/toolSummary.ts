@@ -46,7 +46,7 @@ export function dirnameOf(p: string): string {
 }
 
 /** docx 投影档 → 中文（词表外裸透原值，与 toolLabels 同口径） */
-export const DOCX_PROJECTION_LABELS: Record<string, string> = {
+const DOCX_PROJECTION_LABELS: Record<string, string> = {
   outline: "大纲",
   text: "文本",
   format: "格式",

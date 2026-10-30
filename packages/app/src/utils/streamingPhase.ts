@@ -23,7 +23,7 @@ export const PHASE_LABELS = [
   "准备中",
 ] as const;
 
-export type StreamingPhase = (typeof PHASE_LABELS)[number];
+type StreamingPhase = (typeof PHASE_LABELS)[number];
 
 /** phaseOf 的最小输入结构。streamingToolCalls 用迭代器承载（Map 传 .values()），
  *  值只读 ended/result 两字段——避免与 store 内部 ToolCallState 耦合。 */

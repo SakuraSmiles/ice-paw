@@ -454,7 +454,7 @@ const filteredBuiltinGroups = computed(() => {
 
         <!-- 展开态 -->
         <div v-if="expandedEditId === s.id" class="expand-panel" @click.stop>
-          <McpForm :server="s as any" @saved="onSaved" @cancel="onCancel" @delete="onDelete" />
+          <McpForm :server="s" @saved="onSaved" @cancel="onCancel" @delete="onDelete" />
 
           <div class="region">
             <div v-if="s.status === 'failed'" class="probe-error-bar">

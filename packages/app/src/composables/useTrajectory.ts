@@ -48,9 +48,9 @@ import type {
 // =========================================================================
 
 /** 行 kind：日志 kind 的 UI 投影（徽章文案 + 颜色语义） */
-export type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "switch" | "cross" | "aux";
+type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "switch" | "cross" | "aux";
 
-export const ROW_KIND_LABELS: Record<RowKind, string> = {
+const ROW_KIND_LABELS: Record<RowKind, string> = {
   user: "USER",
   assistant: "ASSISTANT",
   tool: "TOOL",
@@ -169,7 +169,7 @@ export function saveHiddenKinds(hidden: ReadonlySet<FilterKey>): void {
 /** 轮外段标记：不是对话轮的事件组——不占轮号、标签特殊化、无终止徽与「N 条回复」统计。
  *  仅剩跨会话来件（cross:）与统筹位变更两类轮外事实；频道链（chain:/election:）
  *  已归父进轮内（⑯：logicalTurnKey 剥前缀——接力/选举是轮内日志） */
-export type SpecialTurn = "cross" | "coordinator";
+type SpecialTurn = "cross" | "coordinator";
 
 /** turn 分割头（较粗分割线 + 摘要：轮次号 · 终止原因 · 耗时 · 用量；点击折叠/展开） */
 export interface TurnHeaderRow {
@@ -240,7 +240,7 @@ export interface EventRow {
 /** 折叠态 = 只渲染 turn 头（头自带 统计/终止/用量，无需额外摘要行） */
 export type TrajectoryRow = TurnHeaderRow | EventRow;
 
-export interface BuildRowsOptions {
+interface BuildRowsOptions {
   /** 已折叠的 turn key 集合（搜索时忽略——强制展开以呈现命中） */
   collapsedTurns: Set<string>;
   /** 隐藏的事件类型（细筛键集合；默认集 = 三类辅助事件，见 DEFAULT_HIDDEN） */
@@ -779,7 +779,7 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
 // =========================================================================
 
 /** 每页事件数（大会话数据层：先载最新一页，「加载更早」向前翻） */
-export const TRAJECTORY_PAGE_SIZE = 1000;
+const TRAJECTORY_PAGE_SIZE = 1000;
 
 /**
  * 轨迹回放视图 composable：尾部优先分页拉事件，暴露响应式状态。

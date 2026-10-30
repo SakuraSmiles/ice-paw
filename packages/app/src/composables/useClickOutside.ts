@@ -20,7 +20,7 @@
 
 import { onScopeDispose, watch, type Ref } from "vue";
 
-export interface ClickOutsideOptions {
+interface ClickOutsideOptions {
   /** 监听事件（默认 click；输入框类浮层用 mousedown——失焦/点击生效前先收） */
   event?: "click" | "mousedown";
   /** 捕获阶段监听（默认 false）。浮层处在带 @click.stop 的容器内时须 true：
@@ -29,7 +29,7 @@ export interface ClickOutsideOptions {
 }
 
 /** 低阶：无条件绑定外点监听，返回解绑函数（生命周期自理，组件内请用包装版）。 */
-export function bindClickOutside(
+function bindClickOutside(
   target: Ref<HTMLElement | null | undefined>,
   handler: () => void,
   options: ClickOutsideOptions = {},

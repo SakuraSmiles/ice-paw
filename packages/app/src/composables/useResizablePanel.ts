@@ -13,7 +13,7 @@
 import { ref, onBeforeUnmount } from "vue";
 
 /** 面板配置（全 px） */
-export interface ResizablePanelOptions {
+interface ResizablePanelOptions {
   /** 持久化 key 后缀（完整 key = `icepaw-panel-{key}`） */
   key: string;
   /** 默认宽度（双击把手重置到此值） */

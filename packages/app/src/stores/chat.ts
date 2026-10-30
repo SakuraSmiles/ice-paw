@@ -41,7 +41,7 @@ import { useProjectStore } from "./project";
 export const TOOL_AUTH_TIMEOUT_MS = 120_000;
 
 /** @ 引用条目（输入框 chip；发送时映射为 ContentBlock reference 块） */
-export interface PendingRef {
+interface PendingRef {
   refKind: "conversation" | "agent" | "message";
   targetId: string;
   /** 展示名（`名称#短码`；短码由 utils/refs.ts shortCode 生成，纯装饰） */

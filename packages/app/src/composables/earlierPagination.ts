@@ -10,7 +10,7 @@
 // 差异足够大，不强行合并）。
 import { ref, type Ref } from "vue";
 
-export interface EarlierPaginationOptions<T> {
+interface EarlierPaginationOptions<T> {
   /** 当前会话/项目锚（null = 未载入）。loadEarlier 起始捕获一次 id，
    *  跨 await 后用于竞态守卫——A→B 切换的旧页不得前插进新视图。 */
   currentId: () => string | null;
@@ -24,7 +24,7 @@ export interface EarlierPaginationOptions<T> {
   onPage?: () => void;
 }
 
-export interface EarlierPagination<T> {
+interface EarlierPagination<T> {
   loadingEarlier: Ref<boolean>;
   hasMore: Ref<boolean>;
   error: Ref<string | null>;

@@ -53,7 +53,7 @@ export function loadLastSession(): LastSessionState | null {
   }
 }
 
-export interface RestorePlan {
+interface RestorePlan {
   /** 恢复的会话 id；null = 欢迎态 */
   convId: string | null;
   /** 恢复后的侧栏 scope 项目 id；null = 散落 */

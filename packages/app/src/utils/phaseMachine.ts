@@ -29,7 +29,7 @@ export type Phase =
   | "done";              // 回合终态
 
 /** 相位附加上下文（reducer 状态的载荷部分）。 */
-export interface PhaseContext {
+interface PhaseContext {
   /** tool_calling/tool_waiting 的最近工具名（用户语言展示） */
   toolName?: string;
   /** 一轮并行工具数（tool_calling 聚合展示「N 个工具」） */

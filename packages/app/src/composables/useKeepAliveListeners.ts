@@ -12,7 +12,7 @@
 // - 非 keep-alive 环境两钩子不触发、flag 恒 true，行为与旧版一致
 import { onActivated, onBeforeUnmount, onDeactivated } from "vue";
 
-export interface KeepAliveListeners {
+interface KeepAliveListeners {
   /** 当前是否 live（onDeactivated 后 false、onActivated 恢复；非 keep-alive 恒 true） */
   isLive: () => boolean;
   /** 登记一个 Tauri 监听器（`register(await listen(...))`），卸载时统一拆卸 */
