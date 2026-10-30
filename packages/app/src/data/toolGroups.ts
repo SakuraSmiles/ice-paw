@@ -14,6 +14,7 @@ export const TOOL_GROUP_LABELS: Record<string, string> = {
   docx: "Word 文档",
   config: "配置与计划",
   tasks: "定时任务",
+  memory: "思考与记忆",
   screen: "屏幕读写",
   other: "其他",
 };
@@ -27,6 +28,7 @@ export const TOOL_GROUP_ORDER: string[] = [
   "docx",
   "config",
   "tasks",
+  "memory",
   "screen",
   "other",
 ];

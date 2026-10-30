@@ -601,7 +601,7 @@ pub fn run() {
             handle.manage(sql_model_profile_cmd);
 
             // 5) Phase 2: 种子默认 MCP Server + 启动已启用的外部 MCP Server
-            // 注入 McpServerManager（携带 AppHandle —— bundled 运行时解析 resource_dir 需要）。
+            // 注入 McpServerManager（携带 AppHandle —— spawn 前从 Stronghold 水合凭据需要）。
             handle.manage(Arc::new(harness::mcp::McpServerManager::new_with_handle(handle.clone())));
             let mcp_registry: Arc<McpRegistry> = handle.state::<Arc<McpRegistry>>().inner().clone();
             let mcp_manager: Arc<harness::mcp::McpServerManager> =

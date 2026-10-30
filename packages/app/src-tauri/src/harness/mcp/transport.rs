@@ -29,7 +29,7 @@ use super::types::{
 
 /// streamable HTTP 传输的 MCP 协议版本。
 ///
-/// 注：stdio（`ExternalMcpServer`）仍用 `"0.1.0"`（现有 bundled server 兼容，不动）；
+/// 注：stdio（`ExternalMcpServer`）仍用 `"0.1.0"`（兼容现有 stdio server，不动）；
 /// 远程 streamable HTTP 用新版本。两者各自管自己的版本常量，互不影响。
 const HTTP_PROTOCOL_VERSION: &str = "2025-06-18";
 

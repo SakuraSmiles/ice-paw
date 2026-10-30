@@ -198,38 +198,31 @@ impl std::str::FromStr for TrustLevel {
 
 /// MCP Server 运行时类型：控制 command 如何被解析执行。
 ///
-/// - `System`：command 走系统 PATH（npx / node / pipx 等，依赖系统 node）
-/// - `Bundled`：用 IcePaw 内置 node.exe + 打包好的 node_modules（零网络依赖、零系统 node 依赖）
-///
-/// bundled 模式下，DB 里 command 存占位 "node"、args 存「用户可配参数」
-/// （不含包名/入口），`start_server` 解析时把 command 换成内置 node.exe 绝对路径、
-/// 并把对应包的 entry script prepend 到 args 前面。
+/// 现仅 `System`：command 走系统 PATH（npx / node / pipx 等）。原 `Bundled`
+/// 变体（内置 node.exe + 预打包 node_modules）已随 0.9.x mcp-runtime 原生化
+/// 移除——sequential-thinking / memory 转为 Rust 原生内置工具。DB 列保留
+/// （migration 35 已发布不可改），历史 'bundled' 值经 `FromStr` 回落 System。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
     /// 走系统 PATH（npx/node/pipx 等）
     #[default]
     System,
-    /// IcePaw 内置 node.exe + 打包 node_modules
-    Bundled,
 }
 
 impl RuntimeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             RuntimeKind::System => "system",
-            RuntimeKind::Bundled => "bundled",
         }
     }
 }
 
 impl std::str::FromStr for RuntimeKind {
     type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "bundled" => Ok(RuntimeKind::Bundled),
-            _ => Ok(RuntimeKind::System),
-        }
+    fn from_str(_s: &str) -> Result<Self, Self::Err> {
+        // 未知值（含历史 'bundled'）回落 System——坏数据不阻断启动
+        Ok(RuntimeKind::System)
     }
 }
 
@@ -239,7 +232,7 @@ impl std::str::FromStr for RuntimeKind {
 
 /// MCP Server 传输类型：控制 server 如何被连接。
 ///
-/// - `Stdio`：本地子进程（stdio JSON-RPC），command 走系统 PATH 或 bundled node
+/// - `Stdio`：本地子进程（stdio JSON-RPC），command 走系统 PATH
 /// - `Http`：远程 streamable HTTP（POST JSON-RPC，响应可能是单 JSON 或 SSE 流）
 /// - `Sse`：远程 SSE（GET 长连接 + POST，旧式传输）
 ///
@@ -303,8 +296,8 @@ pub struct McpServerConfig {
     /// （per_agent 的 server，args 中的 {workspace} 启动时替换为 agent workspace）
     #[serde(default = "default_scope")]
     pub scope: String,
-    /// 运行时类型：system（走系统 PATH）或 bundled（内置 node + 预打包包）。
-    /// 仅在 `transport == Stdio` 时有意义。
+    /// 运行时类型：恒为 system（走系统 PATH）。仅在 `transport == Stdio` 时有意义。
+    /// 历史 'bundled' 值经 FromStr 回落 System。
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
     /// 传输类型：stdio（本地子进程）/ http（远程 streamable HTTP）/ sse（远程 SSE）。
@@ -441,8 +434,7 @@ pub struct NewMcpServer {
     pub trust_level: TrustLevel,
     #[serde(default = "default_scope")]
     pub scope: String,
-    /// 运行时类型（用户自建 server 默认 system；builtin bundled 由 seed_defaults 指定）。
-    /// 仅 transport==stdio 时有意义。
+    /// 运行时类型（恒为 system：走系统 PATH）。仅 transport==stdio 时有意义。
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
     /// 传输类型（默认 stdio）
@@ -556,19 +548,18 @@ mod tests {
     fn runtime_kind_default_and_roundtrip() {
         assert_eq!(RuntimeKind::default(), RuntimeKind::System);
         assert_eq!(
-            "bundled".parse::<RuntimeKind>().unwrap(),
-            RuntimeKind::Bundled
-        );
-        assert_eq!(
             "system".parse::<RuntimeKind>().unwrap(),
             RuntimeKind::System
         );
-        // 未知值回退到 System（容错，避免坏数据阻断启动）
+        // 历史 'bundled' / 未知值一律回退 System（容错，避免坏数据阻断启动）
+        assert_eq!(
+            "bundled".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::System
+        );
         assert_eq!(
             "unknown".parse::<RuntimeKind>().unwrap(),
             RuntimeKind::System
         );
-        assert_eq!(RuntimeKind::Bundled.as_str(), "bundled");
         assert_eq!(RuntimeKind::System.as_str(), "system");
     }
 }

@@ -80,4 +80,15 @@ export const TOOL_LABELS: Record<string, string> = {
   create_scheduled_task: "创建定时任务",
   update_scheduled_task: "修改定时任务",
   delete_scheduled_task: "删除定时任务",
+  // 思考与知识图谱记忆（原生化）
+  sequentialthinking: "深度思考",
+  create_entities: "创建实体",
+  create_relations: "创建关系",
+  add_observations: "添加观察",
+  delete_entities: "删除实体",
+  delete_observations: "删除观察",
+  delete_relations: "删除关系",
+  read_graph: "读取知识图谱",
+  search_nodes: "搜索节点",
+  open_nodes: "打开节点",
 };

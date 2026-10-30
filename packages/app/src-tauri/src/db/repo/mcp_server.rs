@@ -196,10 +196,9 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
 
 /// 默认 MCP Server 配置列表——首次启动时自动安装。
 ///
-/// 前 2 个（thinking / memory）用 **bundled 运行时**：IcePaw 内置 node.exe 与预打包
-/// node_modules，零网络依赖、零系统 node 依赖。DB 里 command 存占位 "node"、
-/// args 存「用户可配参数」（不含包名/入口），包名与 entry script 由 start_server
-/// 解析时注入（见 harness::mcp::bundled）。
+/// 原前 2 个（thinking / memory）走 bundled 运行时（内置 node.exe + 预打包
+/// node_modules），已随 0.9.x mcp-runtime 原生化转成 Rust 原生内置工具
+/// （`harness::mcp::sequential_thinking` / `memory_graph`），不再播种 server 行。
 ///
 /// playwright 仍走 **system 运行时**（npx），依赖系统 node。
 ///
@@ -208,36 +207,6 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
 /// 内置工具提供（见 harness::mcp::internal / file_tools / search），无需独立 MCP Server。
 fn default_mcp_servers() -> Vec<NewMcpServer> {
     vec![
-        NewMcpServer {
-            id: "builtin-thinking".into(),
-            name: "深度推理".into(),
-            description: "多步推理引擎，复杂问题分拆逐步思考".into(),
-            command: "node".into(),
-            args: vec![],
-            env: Some(serde_json::json!({})),
-            enabled: true,
-            trust_level: TrustLevel::Trusted,
-            scope: "per_agent".into(),
-            runtime_kind: RuntimeKind::Bundled,
-            transport: TransportKind::Stdio,
-            url: None,
-            headers: serde_json::json!({}),
-        },
-        NewMcpServer {
-            id: "builtin-memory".into(),
-            name: "知识图谱记忆".into(),
-            description: "持久化知识图谱，跨会话记忆实体和关系".into(),
-            command: "node".into(),
-            args: vec![],
-            env: Some(serde_json::json!({})),
-            enabled: true,
-            trust_level: TrustLevel::Trusted,
-            scope: "per_agent".into(),
-            runtime_kind: RuntimeKind::Bundled,
-            transport: TransportKind::Stdio,
-            url: None,
-            headers: serde_json::json!({}),
-        },
         NewMcpServer {
             id: "builtin-playwright".into(),
             name: "浏览器自动化".into(),

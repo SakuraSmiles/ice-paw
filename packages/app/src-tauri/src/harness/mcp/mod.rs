@@ -8,13 +8,14 @@
 
 pub mod attachment_image_tool;
 pub mod image_tools;
-pub mod bundled;
 pub mod client;
 pub mod external;
 pub mod internal;
 pub mod kb_tool;
 pub mod manager;
+pub mod memory_graph;
 pub mod path_suggest;
+pub mod sequential_thinking;
 pub mod read_attachment_tool;
 pub mod read_reference_tool;
 pub mod relay;

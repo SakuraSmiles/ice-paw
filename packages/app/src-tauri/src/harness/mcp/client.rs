@@ -352,6 +352,20 @@ impl McpRegistry {
         // Confirm 级（前端特判二键「开启/拒绝」），批准即通道开启+本会话附着。
         // 刻意不在 channel::SCREEN_TOOLS 集合内（不被授权短路）。
         self.register_sync(Arc::new(super::screen::session::RequestScreenSessionTool));
+        // 原生思考 + 知识图谱记忆（0.9.x 原生化：替代内置 Node runtime 的
+        // server-sequential-thinking / server-memory 两个 bundled server）。
+        // 工具名脱 namespaced 前缀成裸名（与 file_tools 原生化同款先例）；
+        // memory 数据文件 `<app_data>/mcp-memory/memory.jsonl` 与旧版逐字节兼容。
+        self.register_sync(Arc::new(super::sequential_thinking::SequentialThinkingTool::new()));
+        self.register_sync(Arc::new(super::memory_graph::CreateEntitiesTool));
+        self.register_sync(Arc::new(super::memory_graph::CreateRelationsTool));
+        self.register_sync(Arc::new(super::memory_graph::AddObservationsTool));
+        self.register_sync(Arc::new(super::memory_graph::DeleteEntitiesTool));
+        self.register_sync(Arc::new(super::memory_graph::DeleteObservationsTool));
+        self.register_sync(Arc::new(super::memory_graph::DeleteRelationsTool));
+        self.register_sync(Arc::new(super::memory_graph::ReadGraphTool));
+        self.register_sync(Arc::new(super::memory_graph::SearchNodesTool));
+        self.register_sync(Arc::new(super::memory_graph::OpenNodesTool));
         // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
         // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }

@@ -190,9 +190,8 @@ fn load_bindings() -> AppResult<Pdfium> {
         if let Some(dir) = exe.parent() {
             candidates.push(("exe 目录", dir.to_path_buf()));
             // 2.5 打包后 Tauri resources 目录：bundle.resources 文件物理位于 exe 同级的
-            //     resources/ 下（与 bundled.rs 的 RUNTIME_REL="resources/mcp-runtime" 同模式）。
-            //     pdfium.dll 经 resources/pdfium/ 打包；dev 不命中（exe 在 target/debug 无
-            //     resources/，靠下面的 dev 回退）。
+            //     resources/ 下。pdfium.dll 经 resources/pdfium/ 打包；dev 不命中
+            //     （exe 在 target/debug 无 resources/，靠下面的 dev 回退）。
             candidates.push(("exe/resources/pdfium", dir.join("resources").join("pdfium")));
         }
     }

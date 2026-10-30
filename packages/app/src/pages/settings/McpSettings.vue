@@ -269,6 +269,17 @@ const BUILTIN_TOOL_META: Record<string, string> = {
   press_key: "按键 / 组合键（需屏幕共享）",
   wait: "等待指定秒数（屏幕操作节奏）",
   request_screen_session: "请求开启屏幕共享会话",
+  // 思考与知识图谱记忆（原生化：替代内置 Node runtime 的两个 bundled server）
+  sequentialthinking: "分步推理——复杂问题逐步思考、可修订可分支",
+  create_entities: "在知识图谱中创建多个实体",
+  create_relations: "创建实体间关系（主动语态）",
+  add_observations: "给已有实体追加观察记录",
+  delete_entities: "删除实体及其关联关系（需确认）",
+  delete_observations: "删除实体的指定观察（需确认）",
+  delete_relations: "删除指定关系（需确认）",
+  read_graph: "读取整个知识图谱",
+  search_nodes: "按关键词搜索节点",
+  open_nodes: "按名称打开指定节点",
 };
 
 // 搜索 + 分组视图：按工具名 / 中文描述 / 后端原文过滤；空分组隐藏（无搜索词 = 全部分组）

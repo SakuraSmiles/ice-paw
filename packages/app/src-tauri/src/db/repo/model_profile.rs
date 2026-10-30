@@ -528,6 +528,31 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // mcp_servers 表（migration 60 起 DELETE builtin-thinking/memory 行，
+        // 伪造库须有此表，否则 60 真执行时 no such table；真实 49 库由 25 建）。
+        sqlx::query(
+            "CREATE TABLE mcp_servers (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              command TEXT NOT NULL,
+              args TEXT NOT NULL DEFAULT '[]',
+              env TEXT NOT NULL DEFAULT '{}',
+              enabled INTEGER NOT NULL DEFAULT 1,
+              trust_level TEXT NOT NULL DEFAULT 'untrusted',
+              scope TEXT NOT NULL DEFAULT 'global',
+              runtime_kind TEXT NOT NULL DEFAULT 'system',
+              transport TEXT NOT NULL DEFAULT 'stdio',
+              url TEXT,
+              headers TEXT NOT NULL DEFAULT '{}',
+              tool_index INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // 伪造「1..49 已应用」登记（checksum 乱填 = heal 自愈对象）。run() 只对
         // 未登记的 50 执行，1..48 的表不存在无妨——run 不校验 schema 只看登记。

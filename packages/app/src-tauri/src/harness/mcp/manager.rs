@@ -19,13 +19,12 @@ use tokio::sync::RwLock;
 
 use crate::error::{AppError, AppResult};
 
-use super::bundled;
 use super::client::McpRegistry;
 use super::external::{ExternalMcpServer, ExternalToolProxy};
 use super::transport::{HttpMcpTransport, McpTransport};
 use super::types::{
-    McpServerConfig, McpToolDefinition, RuntimeKind, ServerSnapshot, ServerStatusKind,
-    TransportKind, WORKSPACE_PLACEHOLDER,
+    McpServerConfig, McpToolDefinition, ServerSnapshot, ServerStatusKind, TransportKind,
+    WORKSPACE_PLACEHOLDER,
 };
 
 // =========================================================================
@@ -108,8 +107,8 @@ impl ServerEntry {
 pub struct McpServerManager {
     /// 统一 server 状态表：config_id → ServerEntry（pub(crate) 供命令层查询）
     pub(crate) entries: RwLock<HashMap<String, ServerEntry>>,
-    /// AppHandle：bundled 运行时解析 resource_dir 需要（system 运行时不用）。
-    /// 由 lib.rs setup 阶段 `new_with_handle` 注入。
+    /// AppHandle：spawn 前从 Stronghold 槽位水合 env/headers 实值需要
+    /// （server_secrets::hydrate_into）。由 lib.rs setup 阶段 `new_with_handle` 注入。
     app_handle: Option<AppHandle>,
     /// 懒重启节流表：config_id → 最近一次懒重启时刻（std Mutex 短临界区，
     /// 仿 AuthSessionRegistry）。窗口内不重复重启——server 没起来时每个失败
@@ -129,7 +128,7 @@ impl McpServerManager {
         }
     }
 
-    /// 注入 AppHandle，使 bundled 运行时 server 能解析 resource_dir。
+    /// 注入 AppHandle，使 spawn 前能从 Stronghold 槽位水合 env/headers 实值。
     /// lib.rs setup 阶段调用（builder 链上的 `new()` 此时还没 handle）。
     pub fn new_with_handle(app: AppHandle) -> Self {
         Self {
@@ -207,15 +206,10 @@ impl McpServerManager {
                 } else {
                     resolved.args.clone()
                 };
-                // bundled 运行时：command → 内置 node.exe 绝对路径，entry script prepend；
-                // system 运行时保持 DB 里的 command/args/env 不变。
-                // （command 为 node.exe 绝对路径时，spawn 的 Windows cmd /C 分支被跳过，直执行）
+                // system 运行时：command 直接走系统 PATH（npx / node 等），
+                // args/env 保持 DB 里的值不变（{workspace} 已在上一步替换完成）。
                 let (command, args, env_value): (String, Vec<String>, serde_json::Value) =
-                    if resolved.runtime_kind == RuntimeKind::Bundled {
-                        self.resolve_bundled(&resolved, args)?
-                    } else {
-                        (resolved.command.clone(), args, resolved.env.clone())
-                    };
+                    (resolved.command.clone(), args, resolved.env.clone());
                 match ExternalMcpServer::spawn(
                     resolved.id.clone(),
                     resolved.name.clone(),
@@ -351,48 +345,6 @@ impl McpServerManager {
                 last_workspace,
             },
         );
-    }
-
-    /// bundled 运行时解析：把 DB 里的占位 command="node" + 「用户参数」args 解析成
-    /// 可直接 spawn 的 (node.exe 绝对路径, [entry_script, ...args], 合并后的 env)。
-    ///
-    /// - node.exe 路径来自 resource_dir（安装包自带）。
-    /// - entry script = node_modules/<package_dir>/<entry_script>，prepend 到 args 前。
-    /// - env = bundled 模板（如 memory 的 MEMORY_FILE_PATH，已替换占位符）→ 用户 env 覆盖。
-    fn resolve_bundled(
-        &self,
-        config: &McpServerConfig,
-        mut args: Vec<String>,
-    ) -> AppResult<(String, Vec<String>, serde_json::Value)> {
-        let app = self.app_handle.as_ref().ok_or_else(|| {
-            AppError::Internal(
-                "bundled MCP server 无法启动：McpServerManager 未注入 AppHandle".into(),
-            )
-        })?;
-        let spec = bundled::spec_for(&config.id).ok_or_else(|| {
-            AppError::Internal(format!("未注册的 bundled server id: {}", config.id))
-        })?;
-        let node = bundled::node_exe(app)?;
-        let entry = bundled::entry_script(app, spec)?;
-
-        // entry script prepend 到 args（{workspace} 已在上一步替换完成）
-        let mut full_args = Vec::with_capacity(args.len() + 1);
-        full_args.push(entry.to_string_lossy().replace('\\', "/"));
-        full_args.append(&mut args);
-
-        // 合并 env：bundled 模板（渲染 {memory_data_file}）→ 用户 env 覆盖（同 key 后者胜）
-        let mut env_map = bundled::render_env_template(spec, app)?;
-        if let Some(obj) = config.env.as_object() {
-            for (k, v) in obj {
-                env_map.insert(k.clone(), v.clone());
-            }
-        }
-
-        Ok((
-            node.to_string_lossy().to_string(),
-            full_args,
-            serde_json::Value::Object(env_map),
-        ))
     }
 
     /// 关闭一个 MCP Server（从 registry 反注册工具 + 关闭子进程）
@@ -726,6 +678,7 @@ pub(crate) fn workspace_substitution_error(ws: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::types::RuntimeKind;
 
     #[test]
     fn manager_new_is_empty() {

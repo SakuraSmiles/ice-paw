@@ -13,7 +13,6 @@
     "tauri:dev": "pnpm --filter @ice-paw/app tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "pnpm --filter @ice-paw/app tauri build",
 
-    "prepare:mcp": "node scripts/prepare.mjs mcp",
     "prepare:pdfium": "node scripts/prepare.mjs pdfium",
 
     "lint": "eslint .",

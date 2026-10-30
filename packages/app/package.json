@@ -8,7 +8,6 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "prepare:mcp": "node ../../scripts/prepare.mjs mcp",
     "prepare:pdfium": "node ../../scripts/prepare.mjs pdfium",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint src --ext .ts,.vue",

@@ -1155,8 +1155,8 @@ export interface McpServer {
   enabled: boolean;
   trust_level: McpTrustLevel;
   scope: string;
-  /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
-  runtime_kind: "system" | "bundled";
+  /** 运行时类型：恒为 system（走系统 PATH） */
+  runtime_kind: "system";
   /** 传输类型：stdio / http / sse（默认 stdio）；顶层路由，runtime_kind 仅 stdio 时生效 */
   transport: McpTransport;
   /** http/sse 远程端点 URL（stdio 时为 null） */
@@ -1180,8 +1180,8 @@ export interface McpServerSnapshot {
   enabled: boolean;
   trust_level: McpTrustLevel;
   scope: string;
-  /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
-  runtime_kind: "system" | "bundled";
+  /** 运行时类型：恒为 system（走系统 PATH） */
+  runtime_kind: "system";
   /** 传输类型：stdio / http / sse */
   transport: McpTransport;
   /** http/sse 远程端点 URL（stdio 时为 null） */

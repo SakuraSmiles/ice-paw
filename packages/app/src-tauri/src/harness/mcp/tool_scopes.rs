@@ -87,6 +87,21 @@ pub const TOOL_GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "memory",
+        &[
+            "sequentialthinking",
+            "create_entities",
+            "create_relations",
+            "add_observations",
+            "delete_entities",
+            "delete_observations",
+            "delete_relations",
+            "read_graph",
+            "search_nodes",
+            "open_nodes",
+        ],
+    ),
+    (
         "screen",
         &[
             "capture_screen",

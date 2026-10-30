@@ -4,9 +4,9 @@
   "version": "0.9.13",
   "identifier": "com.icepaw.app",
   "build": {
-    "beforeDevCommand": "pnpm prepare:mcp && pnpm dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm prepare:mcp && pnpm prepare:pdfium && pnpm build",
+    "beforeBuildCommand": "pnpm prepare:pdfium && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -39,9 +39,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/mcp-runtime/node_modules/**/*"
-    ],
+    "resources": [],
     "windows": {
       "webviewInstallMode": {
         "type": "offlineInstaller"

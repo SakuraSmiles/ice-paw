@@ -54,19 +54,13 @@ jobs:
           df -h
 
       # tauri-build 在编译期校验 tauri.conf.json 声明的 bundle 资源存在：
-      # bundle.resources（node.exe + node_modules）由 prepare:mcp 下载
-      # （gitignore 不入库），真实打包走 beforeBuildCommand 自动准备。
+      # bundle.resources（pdfium.dll）由 prepare:pdfium 下载（gitignore 不入库），
+      # 真实打包走 beforeBuildCommand 自动准备。
       # CI 只验编译、不产出安装包，创建占位文件让 build script 通过即可。
       # （webviewInstallMode = offlineInstaller 无 path 字段，Tauri 打包时自动下载，
       #  编译期不校验其文件存在，故 CI 无需为 WebView2 建占位。）
-      - name: Stub bundled runtime artifacts (compile-only placeholders)
+      - name: Stub pdfium artifacts (compile-only placeholders)
         run: |
-          mkdir -p resources/mcp-runtime/node
-          touch resources/mcp-runtime/node/node.exe
-          mkdir -p resources/mcp-runtime/node_modules/_ci
-          touch resources/mcp-runtime/node_modules/_ci/marker.json
-          # pdfium.dll 同理：tauri-build 编译期校验 bundle.resources 声明的路径存在，
-          # CI 只验编译不真实打包，建占位文件通过校验即可（真实 dll 由 prepare:pdfium 准备）
           mkdir -p resources/pdfium
           touch resources/pdfium/pdfium.dll
 
