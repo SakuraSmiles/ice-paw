@@ -82,3 +82,73 @@ export function buildToolResultIndex(
   }
   return idx;
 }
+
+// —— 以下各块类型解析器自 ChatMessages.vue 抽出（2026-10-30 大文件拆分）。
+// 契约不变：contentBlocks 字符串进、typed 数组出；memo 化防热路径重 parse。
+
+/** 解析 image 块。memo 化：模板热路径每渲染每消息调用。 */
+export const parseImageBlocks = memoized((contentBlocks: string): { data: string; mediaType: string }[] => {
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter((b): b is { data: string; media_type: string; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'image'
+    ).map((b) => ({ data: b.data, mediaType: b.media_type }));
+  } catch { return []; }
+});
+
+/** 解析 attachment 块（附件元信息卡片：文件名 / 类型 / 字节数）。memo 化同上。 */
+export const parseAttachmentBlocks = memoized((contentBlocks: string): { name: string; kind: string; size: number }[] => {
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter((b): b is { name: string; kind: string; size: number; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'attachment'
+    ).map((b) => ({ name: b.name, kind: b.kind, size: b.size }));
+  } catch { return []; }
+});
+
+/** 解析 tool_use 块。memo 化：模板热路径每渲染每消息调用。 */
+export const parseToolUseBlocks = memoized((contentBlocks: string): { id: string; name: string; input: string }[] => {
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter((b): b is { id: string; name: string; input: string; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_use'
+    ).map((b) => ({ id: b.id, name: b.name, input: b.input }));
+  } catch { return []; }
+});
+
+/** 解析 thinking 块。memo 化同上。durationMs = 后端落库的思考段耗时
+ *  （旧消息无此字段 → null，label 只显示「思考」）。 */
+export const parseThinkingBlocks = memoized((contentBlocks: string): { thinking: string; durationMs: number | null }[] => {
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter((b): b is { thinking: string; duration_ms?: number; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'thinking'
+    ).map((b) => ({ thinking: b.thinking, durationMs: typeof b.duration_ms === 'number' ? b.duration_ms : null }));
+  } catch { return []; }
+});
+
+/** 用户消息是否含图片或附件块（纯附件无文本时仍需显示气泡）。
+ *  ⚠️ tool_result 数据行不算用户媒体（2026-10-29 他机实案）：0.9.9 起工具回执
+ *  行落库携带 Image 块（前端展示数据源），其图归工具归属 → assistant 侧
+ *  图片卡渲染；此处误判会把 agent 汇报图渲染成右侧「用户发出」气泡。 */
+export function hasUserMedia(msg: { content_blocks?: string }): boolean {
+  if (!msg.content_blocks || msg.content_blocks === '[]') return false;
+  if (rowHasToolResult(msg.content_blocks)) return false;
+  return parseImageBlocks(msg.content_blocks).length > 0
+    || parseAttachmentBlocks(msg.content_blocks).length > 0;
+}
+
+/** 判断 user 消息是否仅含 tool_result（无文本）。
+ *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。
+ *  ⚠️ 用 some 语义（rowHasToolResult）而非 every：0.9.9 起带图工具回执行行落库
+ *  形态 = [tool_result, image]，every 判定漏跳过该数据行 → 切断 assistant 组
+ *  连续性（同回合分裂成多个气泡 + 空用户组，批次 Z 修复）。纯 [image] 的用户
+ *  发图行不含 tool_result，不受 some 语义影响——勿回退 every 形态。 */
+export function isToolResultOnlyUser(msg: { role: string; content: string; content_blocks: string }): boolean {
+  if (msg.role !== "user" || msg.content) return false;
+  return rowHasToolResult(msg.content_blocks);
+}

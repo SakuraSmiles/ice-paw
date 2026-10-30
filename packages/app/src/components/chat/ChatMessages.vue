@@ -37,7 +37,12 @@ import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/re
 import type { ParsedRef } from "../../utils/refs";
 import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
-import { buildToolResultIndex, rowHasToolResult } from "../../utils/blockParsers";
+import {
+  buildToolResultIndex,
+  parseImageBlocks, parseAttachmentBlocks, parseToolUseBlocks, parseThinkingBlocks,
+  hasUserMedia, isToolResultOnlyUser,
+} from "../../utils/blockParsers";
+import { parseDelegateInput, parseDelegateResult, parsePlanInput } from "../../utils/cardParsers";
 import { phaseLabel } from "../../utils/phaseMachine";
 import { usePhaseClock } from "../../composables/usePhaseClock";
 import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
@@ -387,28 +392,6 @@ function openReference(r: ParsedRef) {
   }
 }
 
-/** 解析 image 块。memo 化：模板热路径每渲染每消息调用。 */
-const parseImageBlocks = memoized((contentBlocks: string): { data: string; mediaType: string }[] => {
-  try {
-    const blocks: unknown[] = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b): b is { data: string; media_type: string; type: string } =>
-      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'image'
-    ).map((b) => ({ data: b.data, mediaType: b.media_type }));
-  } catch { return []; }
-});
-
-/** 解析 attachment 块（附件元信息卡片：文件名 / 类型 / 字节数）。memo 化同上。 */
-const parseAttachmentBlocks = memoized((contentBlocks: string): { name: string; kind: string; size: number }[] => {
-  try {
-    const blocks: unknown[] = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b): b is { name: string; kind: string; size: number; type: string } =>
-      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'attachment'
-    ).map((b) => ({ name: b.name, kind: b.kind, size: b.size }));
-  } catch { return []; }
-});
-
 /** 字节数格式化已上移 utils/format（附件卡与工具行摘要共用单一真相源） */
 
 /** 扩展名 → 展示标签（卡片上的类型名） */
@@ -417,17 +400,6 @@ const KIND_LABELS: Record<string, string> = {
 };
 function kindLabel(kind: string): string {
   return KIND_LABELS[kind.toLowerCase()] ?? kind.toUpperCase();
-}
-
-/** 用户消息是否含图片或附件块（纯附件无文本时仍需显示气泡）。
- *  ⚠️ tool_result 数据行不算用户媒体（2026-10-29 他机实案）：0.9.9 起工具回执
- *  行落库携带 Image 块（前端展示数据源），其图归工具归属 → assistant 侧
- *  图片卡渲染；此处误判会把 agent 汇报图渲染成右侧「用户发出」气泡。 */
-function hasUserMedia(msg: { content_blocks?: string }): boolean {
-  if (!msg.content_blocks || msg.content_blocks === '[]') return false;
-  if (rowHasToolResult(msg.content_blocks)) return false;
-  return parseImageBlocks(msg.content_blocks).length > 0
-    || parseAttachmentBlocks(msg.content_blocks).length > 0;
 }
 
 /** 剥离旧版遗留的 `[附件 xxx]` 文本标记（新版用 Attachment 块，不再生成；此为清理旧历史） */
@@ -516,29 +488,6 @@ function openAttachmentDetail(attachments: { name: string; kind: string; size: n
   detailIndex.value = idx;
   detailTexts.value = parseExtractedTexts(contentBlocks);
 }
-
-/** 解析 tool_use 块。memo 化：模板热路径每渲染每消息调用。 */
-const parseToolUseBlocks = memoized((contentBlocks: string): { id: string; name: string; input: string }[] => {
-  try {
-    const blocks: unknown[] = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b): b is { id: string; name: string; input: string; type: string } =>
-      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_use'
-    ).map((b) => ({ id: b.id, name: b.name, input: b.input }));
-  } catch { return []; }
-});
-
-/** 解析 thinking 块。memo 化同上。durationMs = 后端落库的思考段耗时
- *  （旧消息无此字段 → null，label 只显示「思考」）。 */
-const parseThinkingBlocks = memoized((contentBlocks: string): { thinking: string; durationMs: number | null }[] => {
-  try {
-    const blocks: unknown[] = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b): b is { thinking: string; duration_ms?: number; type: string } =>
-      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'thinking'
-    ).map((b) => ({ thinking: b.thinking, durationMs: typeof b.duration_ms === 'number' ? b.duration_ms : null }));
-  } catch { return []; }
-});
 
 /** tool_result 条目类型（2026-10-26 解析器抽 utils/blockParsers，配性能基准锁）。 */
 type ToolResultEntry = import("../../utils/blockParsers").ToolResultEntry;
@@ -672,37 +621,6 @@ function revealFile(path: string) {
 }
 
 // ===== MA-1：delegate_to_agent 委派卡片（DelegationCard 的取数层）=====
-/** 解析委派工具参数（agent_id/task）。流式期间参数逐字到达，解析失败返回 null。 */
-function parseDelegateInput(input: string): { agentId: string; task: string } | null {
-  try {
-    const o = JSON.parse(input) as { agent_id?: unknown; task?: unknown };
-    if (o && typeof o.agent_id === "string") {
-      return { agentId: o.agent_id, task: typeof o.task === "string" ? o.task : "" };
-    }
-  } catch { /* 参数未接收完/非 JSON */ }
-  return null;
-}
-
-/** 解析委派 tool_result（child_conversation_id/agent_name/finish_reason/rounds）。
- *  Err 路径的 content 是错误文案非 JSON → null（状态走 isError）。 */
-function parseDelegateResult(content: string): {
-  childConvId: string | null; agentName: string | null;
-  finishReason: string | null; rounds: number | null;
-} | null {
-  try {
-    const o = JSON.parse(content) as Record<string, unknown>;
-    if (o && (typeof o.child_conversation_id === "string" || typeof o.agent_name === "string")) {
-      return {
-        childConvId: typeof o.child_conversation_id === "string" ? o.child_conversation_id : null,
-        agentName: typeof o.agent_name === "string" ? o.agent_name : null,
-        finishReason: typeof o.finish_reason === "string" ? o.finish_reason : null,
-        rounds: typeof o.rounds === "number" ? o.rounds : null,
-      };
-    }
-  } catch { /* 非委派 JSON */ }
-  return null;
-}
-
 /** 本会话当前运行中的委派子会话 id（**降级兜底**，仅旧后端/映射缺失时用）。
  *  精确路径是 store 的 delegationChildByToolUse（delegation-started 事件带
  *  tool_use_id 登记）——同轮多卡并行委派时每张卡查自己的键；本 computed 只剩
@@ -777,25 +695,6 @@ function openChildConv(childId: string) {
 }
 
 // ===== C5：update_plan 计划卡片（PlanCard 的取数层）=====
-/** 解析计划工具参数（steps → PlanItem[]）。steps 缺失/非数组 → null（流式参数
- *  未到齐）；steps: [] 合法（agent 主动清空计划）。字段宽容降级，不为展示卡死。 */
-function parsePlanInput(input: string): PlanItem[] | null {
-  try {
-    const o = JSON.parse(input) as { steps?: unknown };
-    if (o && Array.isArray(o.steps)) {
-      return o.steps
-        .filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null)
-        .map((s) => ({
-          text: typeof s.text === "string" ? s.text : "",
-          status: typeof s.status === "string" ? s.status : "pending",
-          task_conversation_id:
-            typeof s.task_conversation_id === "string" ? s.task_conversation_id : null,
-        }));
-    }
-  } catch { /* 参数未接收完/非 JSON */ }
-  return null;
-}
-
 /** 历史 tool_use 的计划卡片取数：Err（校验失败）→ null 落回通用行承载错误。 */
 function planCardFor(
   tu: { id: string; name: string; input: string },
@@ -814,17 +713,6 @@ function planStreamCard(call: {
   if (call.name !== "update_plan") return null;
   if (call.result?.isError) return null;
   return parsePlanInput(call.arguments || "{}");
-}
-
-/** 判断 user 消息是否仅含 tool_result（无文本）。
- *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。
- *  ⚠️ 用 some 语义（rowHasToolResult）而非 every：0.9.9 起带图工具回执行行落库
- *  形态 = [tool_result, image]，every 判定漏跳过该数据行 → 切断 assistant 组
- *  连续性（同回合分裂成多个气泡 + 空用户组，批次 Z 修复）。纯 [image] 的用户
- *  发图行不含 tool_result，不受 some 语义影响——勿回退 every 形态。*/
-function isToolResultOnlyUser(msg: { role: string; content: string; content_blocks: string }): boolean {
-  if (msg.role !== "user" || msg.content) return false;
-  return rowHasToolResult(msg.content_blocks);
 }
 
 // ===== 消息分组（连续同 agent 的 assistant 合并成一个气泡块）=====
