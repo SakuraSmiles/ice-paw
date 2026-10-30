@@ -2,6 +2,26 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.9.14] — 2026-10-30
+
+> 瘦身减负批一：mcp-runtime 原生化（删 124M 内置 Node 运行时）+ 大文件拆分 + 零风险清理。安装包显著减重，代码库更易维护。
+
+### 安装包减重
+
+- **mcp-runtime 原生化**：`builtin-thinking` / `builtin-memory` 两个内置 Node server 转成 Rust 原生内置工具（`sequential_thinking.rs` + `memory_graph.rs`），删除 124M 预打包 node.exe / node_modules——安装包体积显著减小，首启不再解压 Node 运行时；`runtime_kind` DB 列保留（历史 `bundled` 值回落 `System`）
+
+### 代码瘦身
+
+- **零风险清理**：18 处过度导出转模块私有、去除 McpSettings 的 `as any`、删除 vite.svg 脚手架残留
+- **大文件拆分**（行为零变化，纯重构）：
+  - `docx_edit.rs` 8456→3479 行（表格手术 / 单元测试两簇迁出）
+  - `docx_tool.rs` 3501→2383、`docx_inspect.rs` 2607→1537、`def_edit.rs` 1708→947、`event_log.rs` 2097→1230（单元测试迁出为独立 tests.rs 模块）
+  - `ChatMessages.vue` 2468→2356（块类型解析入 blockParsers、卡片解析入 cardParsers）
+
+### 验证
+
+- cargo test --lib 1626 passed / clippy --tests 0 警告 / vitest 784 / tsc+eslint 0
+
 ## [0.9.13] — 2026-10-29
 
 > 设置页落地 DSH 工业制图语言（二级菜单分割线 + 自适应冷青 accent）+ 关于页档案化 + 深链跳转选中态修复。
