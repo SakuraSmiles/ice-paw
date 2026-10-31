@@ -522,7 +522,7 @@ pub(crate) async fn run_agent_turn(
         },
     );
 
-    // --- 预算（B1 自动续期：显式=硬上限→额度 0；默认 model-aware 3×→可续期） ---
+    // --- 预算（轮数/预算两维度均纯软护栏——触顶只提醒不硬停不续期） ---
     let tool_max_rounds = agent.tool_max_rounds();
     let agent_max_tokens = agent.max_total_tokens();
     let budget_max_tokens = agent_max_tokens.unwrap_or_else(|| {
@@ -536,23 +536,17 @@ pub(crate) async fn run_agent_turn(
             .unwrap_or(128_000);
         window.saturating_mul(3)
     });
-    let budget_renewals: u32 = if agent_max_tokens.is_some() {
-        0
-    } else {
-        crate::harness::budget::DEFAULT_AUTO_RENEWALS
-    };
 
     // 回合起点披露预算构成（撞顶排障取证：0.9.x 用户报告「经常撞循环上限需
     // 人工继续」——终止文案只有数字，配置从哪来（agent 行窗口值 / 默认表 /
-    // 显式硬上限）只有这条日志能回答）
+    // 显式上限）只有这条日志能回答）。纯软护栏（2026-10-30）：预算无续期。
     tracing::info!(
         target: "ice_paw.chat",
         window_source = if agent.context_window.filter(|v| *v > 0).is_some() { "agent_row" } else { "registry_default" },
         context_window = agent.context_window.filter(|v| *v > 0).map(|v| v as usize).unwrap_or_else(|| 128_000),
         budget_cap = budget_max_tokens,
-        budget_renewals,
         tool_rounds_cap = tool_max_rounds.unwrap_or(50),
-        "回合预算配置（3× 窗口 model-aware；显式 max=硬上限额度 0）"
+        "回合预算配置（3× 窗口 model-aware；纯软护栏——预算触顶只提醒不硬停不续期）"
     );
 
     // 单轮输出上限：agent.max_tokens 与模型策展表取 max（只抬不降）。
@@ -831,7 +825,6 @@ pub(crate) async fn run_agent_turn(
         asst_model: Some(effective_model),
         tool_max_rounds,
         budget_max_tokens,
-        budget_renewals,
         auth_registry: env.auth_registry.clone(),
         // conv_id 已 move 进上方字段，这里用 conv.id（同一值）取会话记忆
         auth_session: env.auth_sessions.session_for(&conv.id),
@@ -946,7 +939,6 @@ pub(crate) struct StreamLoopInput {
     pub asst_model: Option<String>,
     pub tool_max_rounds: Option<u32>,
     pub budget_max_tokens: usize,
-    pub budget_renewals: u32,
     pub auth_registry: ToolAuthRegistry,
     /// L0：本会话的授权记忆（run_agent_turn 从 AuthSessionRegistry 取好传入——
     /// 同一 conversation 跨回合共享同表）
@@ -995,7 +987,6 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         asst_model,
         tool_max_rounds,
         budget_max_tokens,
-        budget_renewals,
         auth_registry,
         auth_session,
         tool_registry,
@@ -1025,14 +1016,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         let budget = LoopBudget {
             max_tool_rounds: tool_max_rounds.unwrap_or(LoopBudget::default().max_tool_rounds),
             max_total_tokens: budget_max_tokens,
-            // B1：预算续期额度由调用方按「显式=硬上限」策略算好传入；
-            // 轮数续期同策略——显式 tool_max_rounds → 0，默认 → DEFAULT_AUTO_RENEWALS。
-            max_budget_renewals: budget_renewals,
-            max_round_renewals: if tool_max_rounds.is_some() {
-                0
-            } else {
-                crate::harness::budget::DEFAULT_AUTO_RENEWALS
-            },
+            // 轮数/预算两维度均纯软护栏（2026-10-30）：触顶只提醒不硬停不续期，无续期字段。
             ..LoopBudget::default()
         };
 

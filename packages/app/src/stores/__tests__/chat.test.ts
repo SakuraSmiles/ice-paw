@@ -390,13 +390,16 @@ describe("chatStore", () => {
       chunkH({ payload: { conversation_id: "c1", delta: ", " } });
       chunkH({ payload: { conversation_id: "c1", delta: "World!" } });
       expect(store.streamingText).toBe("Hello, World!");
-      expect(store.messages[0].content).toBe("Hello, World!");
+      // 流式正文只进桶（不写 messages 末条）——每 chunk 整替数组元素会触发
+      // messageGroups 等 O(N) computed 全量重算，大 session 主线程饥饿。
+      expect(store.messages[0].content).toBe("");
 
-      // chat:done — 收尾
+      // chat:done — 收尾（freezeCurrentAssistant 把流式正文冻结进末条）
       const doneH = handlers.get("chat:done")!;
       doneH({ payload: { conversation_id: "c1", message_id: "asst-1", finish_reason: "stop", usage: null } });
       expect(store.sending).toBe(false);
       expect(store.streamingText).toBe("");
+      expect(store.messages[0].content).toBe("Hello, World!");
       expect(store.lastFinishReason).toBe("stop");
     });
 
@@ -481,6 +484,29 @@ describe("chatStore", () => {
       expect(lastMsg.role).toBe("assistant");
     });
 
+    it("P1-2：后台会话多轮轮边界清桶（切回不串味）", async () => {
+      const { store, handlers } = await setupStream();
+      // 切到 c2 激活，让 c1 成为后台会话（后台会话的 thinking/chunk 仍无条件写桶，
+      // 但 assistant-start 早退不清桶——修复前跨轮累积、切回时把前几轮正文串进当前轮）
+      store.activeConvId = "c2";
+
+      // 后台 c1 第 1 轮流出思考 + 正文
+      handlers.get("chat:thinking")!({ payload: { conversation_id: "c1", content: "thinking1" } });
+      handlers.get("chat:chunk")!({ payload: { conversation_id: "c1", delta: "round1 " } });
+      expect(store.streamOf("c1")!.streamingText).toBe("round1 ");
+      expect(store.streamOf("c1")!.streamingThinking).toBe("thinking1");
+
+      // 第 1 轮结束 → 第 2 轮开始的轮边界（后台：只清桶、不 freeze 不推占位）
+      handlers.get("chat:assistant-start")!({ payload: { conversation_id: "c1", message_id: "asst-r2" } });
+
+      expect(store.streamOf("c1")!.streamingText).toBe("");
+      expect(store.streamOf("c1")!.streamingThinking).toBe("");
+
+      // 第 2 轮继续流出，只含本轮正文（不叠加第 1 轮）
+      handlers.get("chat:chunk")!({ payload: { conversation_id: "c1", delta: "round2" } });
+      expect(store.streamOf("c1")!.streamingText).toBe("round2");
+    });
+
     it("批次 Z：freeze 把 result.images 冻结为 Image 块（与后端落库 [tool_result,image] 同形态）", async () => {
       // 修复前：freeze 合成的 toolresult 行不带图 + resetRoundStreaming 清空 live
       // 渲染源 → 汇报图从 UI 消失直到切会话重载（chat:done 无 loadMessages）
@@ -520,6 +546,36 @@ describe("chatStore", () => {
 
       expect(store.sending).toBe(false);
       expect(store.lastError).toBe("请求过于频繁，请稍后再试");
+    });
+
+    it("P1-1：chat:error 保留已流出的部分回答（先 freeze 再清桶）", async () => {
+      const { store, handlers } = await setupStream();
+      store.ensureStream("c1").sending = true;
+      // 已有一个 assistant 占位 + 已流出部分正文（分桶后正文只住桶、msg.content 恒空）
+      store.messages = [{
+        id: "asst-1",
+        conversation_id: "c1",
+        role: "assistant",
+        content: "",
+        content_blocks: "[]",
+        token_count: null,
+        error: null,
+        created_at: new Date().toISOString(),
+        rowid: 0,
+        model: null,
+      }];
+      store.ensureStream("c1").streamingText = "partial answer...";
+
+      const errorH = handlers.get("chat:error")!;
+      errorH({ payload: { conversation_id: "c1", message_id: "asst-1", kind: "api", message: "Rate limit exceeded" } });
+
+      const msg = store.messages[0];
+      // 修复前：resetRoundStreaming 先清桶 → msg.content 恒空 → 命中空串分支只写「错误: …」，
+      // 已流出的部分回答凭空消失。修复后先 freeze 进末条，error 走非空分支追加「生成中断」。
+      expect(msg.content).toContain("partial answer...");
+      expect(msg.content).toContain("生成中断");
+      expect(msg.error).toBe("Rate limit exceeded");
+      expect(store.sending).toBe(false);
     });
 
     it("chat:done(abort) filters empty assistant message", async () => {
@@ -960,14 +1016,11 @@ describe("chatStore", () => {
       cumulative_prompt_tokens: 120_000,
       effective_cap: 600_000,
       initial_cap: 600_000,
-      renewal_index: 0,
-      max_renewals: 2,
-      renewed: false,
       round: 3,
       ...overrides,
     });
 
-    it("常规更新：写入 budget 状态（含缓存命中两路字段），不产生续期提示", () => {
+    it("常规更新：写入 budget 状态（含缓存命中两路字段）", () => {
       const store = useChatStore();
       store.updateBudget(budgetPayload({
         cumulative_cached_tokens: 90_000, cumulative_prompt_tokens: 120_000,
@@ -975,22 +1028,6 @@ describe("chatStore", () => {
       expect(store.budget?.cumulative_tokens).toBe(120_000);
       expect(store.budget?.effective_cap).toBe(600_000);
       expect(store.budget?.cumulative_cached_tokens).toBe(90_000);
-      expect(store.renewalNotice).toBeNull();
-    });
-
-    it("续期事件（renewed=true）：置位提示 + 5s 后自动清除（fake timers）", () => {
-      vi.useFakeTimers();
-      const store = useChatStore();
-      store.updateBudget(budgetPayload({
-        renewed: true, renewal_index: 1, effective_cap: 1_200_000,
-      }));
-      expect(store.renewalNotice).toContain("1/2");
-      expect(store.renewalNotice).toContain("120万");
-      vi.advanceTimersByTime(5000);
-      expect(store.renewalNotice).toBeNull();
-      // budget 本体仍在（HUD 显示续期后上限）
-      expect(store.budget?.effective_cap).toBe(1_200_000);
-      vi.useRealTimers();
     });
 
     it("切会话 / 新回合发送：预算状态重置", async () => {
@@ -1008,57 +1045,19 @@ describe("chatStore", () => {
     });
   });
 
-  describe("轮数续期 toast（chat:rounds-renewed → updateRoundsRenewed）", () => {
-    /** 最小 rounds-renewed payload 工厂（阶段 H 触顶续期的典型值） */
-    const roundsPayload = (overrides?: Partial<import("../../types").ChatRoundsRenewedPayload>) => ({
-      conversation_id: "c1",
-      message_id: "m1",
-      round: 50,
-      renewal_index: 1,
-      max_renewals: 4,
-      initial_max_rounds: 50,
-      effective_max_rounds: 100,
-      ...overrides,
-    });
-
-    it("续期事件：置位 toast 文案（触顶轮/续期序/新上限）+ 回合标志", () => {
-      const store = useChatStore();
-      store.updateRoundsRenewed(roundsPayload());
-      expect(store.roundsNotice).toContain("50 轮");
-      expect(store.roundsNotice).toContain("1/4");
-      expect(store.roundsNotice).toContain("100 轮");
-      expect(store.turnRoundRenewals).toBe(true); // ①-2 finish_reason 文案分叉判据
-    });
-
-    it("5s 后 toast 自动清除；回合标志保留（回合事实非瞬态，供 chat:done 后文案分叉）", () => {
-      vi.useFakeTimers();
-      const store = useChatStore();
-      store.updateRoundsRenewed(roundsPayload());
-      vi.advanceTimersByTime(5000);
-      expect(store.roundsNotice).toBeNull();
-      expect(store.turnRoundRenewals).toBe(true); // 回合内 toast 已清、事实仍在
-      vi.useRealTimers();
-    });
-
-    it("切会话 / 新回合发送：三态重置（clearBudget 汇聚点）", async () => {
+  describe("lastTurnRounds（finish_reason=tool_use 提示行判据）", () => {
+    it("切会话 / 新回合发送：随 clearBudget 重置", async () => {
       mockInvoke.mockResolvedValue(undefined);
       const store = useChatStore();
       store.conversations = [fakeConv("c1"), fakeConv("c2")];
-      store.updateRoundsRenewed(roundsPayload());
       store.lastTurnRounds = 53;
 
       store.selectConversation("c2");
-      expect(store.roundsNotice).toBeNull();
       expect(store.lastTurnRounds).toBeNull();
-      expect(store.turnRoundRenewals).toBe(false);
 
-      // 新回合（sendMessage 同走 clearBudget）
-      store.updateRoundsRenewed(roundsPayload());
       store.lastTurnRounds = 53;
       await store.sendMessage("继续");
-      expect(store.roundsNotice).toBeNull();
       expect(store.lastTurnRounds).toBeNull();
-      expect(store.turnRoundRenewals).toBe(false);
     });
   });
 

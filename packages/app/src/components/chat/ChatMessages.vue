@@ -945,6 +945,16 @@ function isLiveAssistant(item: GroupedItem): boolean {
   return chat.sending && item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
 }
 
+/** 条目有效正文：live assistant 从激活桶读流式文本，历史消息读落地 content。
+ *  勿从 messages 数组读流式文本——那要求每 chunk 整替数组元素（旧 line 263），
+ *  触发 messageGroups/toolResultIndex/groupToolStats/groupThinkingStats/
+ *  groupProcessStats/renderGroups/tailInterstitials 七个 O(N) computed 全量重算，
+ *  大 session 下主线程饥饿（标题栏 hover/窗口 resize 被饿死）。思考早已走桶
+ *  （chat.streamingThinking），此处对齐。*/
+function itemText(item: GroupedItem): string {
+  return isLiveAssistant(item) ? chat.streamingText : (item.msg.content ?? "");
+}
+
 /** 该 item 是否属于当前回合（turnFirstIdx 锚点之后）——保持 MarkdownRenderer 的
  *  streaming 视图（代码块不折叠）。多轮工具回合每轮冻结时若立即折叠，代码块
  *  「展开→瞬间回到 420px 上限」会让列表高度骤缩、贴底滚动条跳一下；回合结束
@@ -1192,7 +1202,7 @@ function isProcessNarrativeItem(g: MessageGroup, item: GroupedItem): boolean {
 function itemCollapsedAway(g: MessageGroup, item: GroupedItem): boolean {
   if (isLiveAssistant(item)) return false;
   if (showImagesOfItem(item).length > 0) return false; // 图片卡豁免（见上）
-  if (item.msg.content && !isProcessNarrativeItem(g, item)) return false;
+  if (itemText(item) && !isProcessNarrativeItem(g, item)) return false;
   const thinkVisible =
     !thinkingAggregateEligible(g) &&
     (parseThinkingBlocks(item.msg.content_blocks).length > 0 ||
@@ -1219,13 +1229,13 @@ function isLastAssistant(item: GroupedItem): boolean {
 
 /** 组内所有非空文本（多轮 assistant 的 content 以空行连接，供组级复制）。*/
 function groupText(g: MessageGroup): string {
-  return g.items.map((it) => it.msg.content).filter(Boolean).join("\n\n");
+  return g.items.map((it) => itemText(it)).filter(Boolean).join("\n\n");
 }
 
 /** assistant 组 footer 是否可见：组内有文本或附属内容（工具/思考）才显示；
  *  纯流式空占位（只有三个点动画、无内容）不显示，避免时间戳/model 悬在空气泡下。*/
 function assistantGroupFooterVisible(g: MessageGroup): boolean {
-  return g.items.some((it) => it.msg.content || msgHasExtras(it.msg));
+  return g.items.some((it) => itemText(it) || msgHasExtras(it.msg));
 }
 
 /** assistant 组 token 求和（前向兼容：当前仅末轮有 token_count）。*/
@@ -1259,17 +1269,15 @@ const finishReasonLabels: Record<string, string> = {
 
 /** finish_reason 文案：budget_exceeded 在有预算数据时附具体数字
  *  （已用 X / 上限 Y），让用户知道为什么这么快烧完、还剩多少跑道。
- *  tool_use 按本回合是否发生过续期分叉（①-2）：无续期=用户配置的显式上限
- *  （指路 agent.yaml）；有续期=默认额度用尽（含自动续期，指路改配置耗额度）。 */
+ *  tool_use 附具体轮数（2026-10-30 纯软护栏后轮数/预算触顶均不再硬停，
+ *  此分支仅防御性保留）。 */
 function finishReasonLabel(reason: string): string {
   if (reason === "budget_exceeded" && chat.budget) {
     const b = chat.budget;
     return `本次 token 预算已达上限（已用 ${formatTokenCount(b.cumulative_tokens)} / 上限 ${formatTokenCount(b.effective_cap)}）`;
   }
   if (reason === "tool_use" && chat.lastTurnRounds != null) {
-    return chat.turnRoundRenewals
-      ? `已达最大轮数（${chat.lastTurnRounds} 轮，含自动续期）`
-      : `已到你配置的 ${chat.lastTurnRounds} 轮上限（可在 agent.yaml 调整）`;
+    return `已达工具调用轮数上限（${chat.lastTurnRounds} 轮，可在 agent.yaml 调整）`;
   }
   return finishReasonLabels[reason] || reason;
 }
@@ -1583,8 +1591,8 @@ const RESUMABLE_REASONS = new Set([
 
                 <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）。
                      过程收纳折叠态：非末段正文隐藏（收进顶部过程胶囊）；展开回原位 -->
-                <div v-if="item.msg.content && !isProcessNarrativeItem(group, item)" class="message-bubble">
-                  <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item) || isTurnStreaming(item)" />
+                <div v-if="itemText(item) && !isProcessNarrativeItem(group, item)" class="message-bubble">
+                  <MarkdownRenderer :content="itemText(item)" :streaming="isLiveAssistant(item) || isTurnStreaming(item)" />
                 </div>
 
                 <!-- show_image 呈现图（2026-10-22）：agent 汇报效果图作为对话内容
@@ -1877,24 +1885,10 @@ const RESUMABLE_REASONS = new Set([
     />
     </div>
 
-    <!-- 预算续期 toast（非阻塞，5s 自动消失；仿 ChatHeader undo-toast 定位模式） -->
-    <Transition name="budget-toast">
-      <div v-if="chat.renewalNotice" class="budget-renewal-toast">
-        <span class="budget-renewal-text">{{ chat.renewalNotice }}</span>
-      </div>
-    </Transition>
-
-    <!-- 降级换档 toast（非阻塞，5s 自动消失；预算续期 toast 同款定位与视觉） -->
+    <!-- 降级换档 toast（非阻塞，5s 自动消失；仿 ChatHeader undo-toast 定位模式） -->
     <Transition name="budget-toast">
       <div v-if="chat.modelSwitchNotice" class="budget-renewal-toast">
         <span class="budget-renewal-text">{{ chat.modelSwitchNotice }}</span>
-      </div>
-    </Transition>
-
-    <!-- 工具轮数续期 toast（① 自动续跑；前两个 toast 同款） -->
-    <Transition name="budget-toast">
-      <div v-if="chat.roundsNotice" class="budget-renewal-toast">
-        <span class="budget-renewal-text">{{ chat.roundsNotice }}</span>
       </div>
     </Transition>
 

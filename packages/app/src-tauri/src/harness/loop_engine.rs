@@ -59,11 +59,13 @@
 //!   检测点在外层 `for tool_round` 循环底部，不在 `stream_with_retry` 内
 //!   （重试是网络层行为，不构成"停滞"语义）。
 //!
-//! B1 自动续期：预算（max_total_tokens）与轮数（max_tool_rounds）触顶不再立即
-//!   终止——续期额度未尽时 +初始上限继续跑（合法长任务不误杀），额度用尽才真停。
-//!   失控循环由 stuck_detect 独立熔断；额度有界保证总开销封顶 = 初始 × (1+额度)。
+//! 纯软护栏（2026-10-30）：轮数（max_tool_rounds）与预算（max_total_tokens）两维度
+//!   均不再自动续期、不再硬停——≥90% 提前提醒一次（round_limit_reminder /
+//!   budget_reminder）+ 触顶注入一次收尾提醒（round_limit_warning /
+//!   budget_limit_warning），全交给 agent 自管理收尾。
+//!   失控循环由 stuck_detect / doom_detect 独立熔断——代价是成本无硬边界（用户拍板接受）。
 //!
-//! U3-5 ④（loop_engine 再拆）：`budget_exceeded_fallback` + `finalize_guard_logged`
+//! U3-5 ④（loop_engine 再拆）：`finalize_guard_logged` + 纯软护栏提醒文案
 //!   → `loop::termination`；doom_loop 阶段 E 出口扫描 → `loop::doom_detect::scan_and_nudge`。
 
 use std::collections::HashMap;
@@ -89,9 +91,7 @@ use crate::harness::r#loop::reason::retry_reason_label;
 use crate::harness::r#loop::retry_round::{stream_with_retry, RoundStreamResult};
 
 // emit_intermediate_round_state 已迁移到 crate::harness::r#loop::events
-use crate::harness::r#loop::events::{
-    emit_budget_state, emit_intermediate_round_state, emit_rounds_renewed,
-};
+use crate::harness::r#loop::events::{emit_budget_state, emit_intermediate_round_state};
 
 // ==========================================================================
 // W6.2: LoopConfig / LoopContext 已迁移到 crate::harness::r#loop::context
@@ -105,9 +105,11 @@ use crate::harness::r#loop::token_usage::synthesize_usage;
 // P10④ doom_loop 检测（同工具+同错误签名连败跟踪）
 use crate::harness::r#loop::doom_detect::{self, DoomLoopTracker};
 
-// 终止收尾辅助（budget_exceeded_fallback / finalize_guard_logged）已迁移到
+// 终止收尾辅助（finalize_guard_logged / 纯软护栏提醒文案）已迁移到
 // crate::harness::r#loop::termination（U3-5 ④ loop_engine 再拆）。
-use crate::harness::r#loop::termination::{budget_exceeded_fallback, finalize_guard_logged};
+use crate::harness::r#loop::termination::{
+    budget_limit_warning, finalize_guard_logged, round_limit_reminder, round_limit_warning,
+};
 
 /// 流式生成内部协程 — 支持指数退避重试 + 工具执行循环
 ///
@@ -253,28 +255,29 @@ async fn stream_loop_inner(
     // 不该触发该提示。正常工具流下恒 true（与改造前逐字等价）。
     let mut prev_round_had_tools = false;
 
-    // === B1 自动续期状态（预算/轮数触顶 + 仍有额度 → 抬升上限续跑）===
-    // 语义：撞上限不再是立即终态——先看续期额度，有则 +初始上限继续（合法长任务不
-    // 误杀），额度用尽才真停。失控保护不靠这里：stuck_detect（连续 stuck_threshold
-    // 轮无进展）独立触发终止；额度有界保证「看似有进展的失控循环」总开销仍封顶
-    // = 初始上限 × (1+额度)。agent.yaml 显式 max_total_tokens / tool_max_rounds →
-    // chat_cmd 置额度 0（显式硬上限不被静默突破）。
+    // === 纯软护栏状态（2026-10-30：轮数/预算两维度触顶不再续期、不再硬停）===
+    // 语义：撞上限不再是终态——≥90% 提前提醒一次（给模型留收敛跑道）+ 触顶再提醒一次
+    // （收尾 or 说明理由继续），之后每轮照常跑、全交给 agent 自管理收尾。失控保护
+    // 不靠这里：stuck_detect / doom_detect 独立触发终止。代价是总轮数/总成本无硬边界
+    // （用户拍板接受）。
     let initial_max_tokens = ctx.budget.max_total_tokens;
-    let mut effective_max_tokens = ctx.budget.max_total_tokens;
-    let mut budget_renewals: u32 = 0;
-    let initial_max_rounds = ctx.budget.max_tool_rounds;
-    let mut effective_max_rounds = ctx.budget.max_tool_rounds;
-    let mut round_renewals: u32 = 0;
+    let effective_max_tokens = ctx.budget.max_total_tokens;
+    let effective_max_rounds = ctx.budget.max_tool_rounds;
 
     // === 工具执行循环 ===
     // 标签 'tool_round 供自动续写（finish_reason=length/max_tokens）跳回循环顶，
     // 复用同一 assistant 消息无缝拼接长输出（模式 C 治本）。
-    // B1: 无限 range + 顶部硬闸——轮数上限由 effective_max_rounds 动态决定
-    //（阶段 H 续期后抬升，max_tool_rounds=0 等边界由闸兜住），不再绑死在 range 上。
-    // S8-3/S8-4 跨轮状态：reminder 只发一次、收尾轮只给一次（须在轮循环外声明）
+    // 无限 range + 纯软护栏——轮数上限只是提醒阈值（触顶不硬停），失控由 stuck/doom 兜底。
+    // S8-3 跨轮状态：预算/轮数 reminder 只发一次（须在轮循环外声明）
     let mut budget_reminder_sent = false;
-    let mut budget_wrapup_used = false;
-    let mut budget_wrapup_prompt: Option<String> = None;
+    let mut round_reminder_sent = false;
+    // 纯软护栏（2026-10-30）：轮数/预算触顶后**不再硬停**，只提醒一次
+    // 让 agent 自管理收尾（与 reminder 同款「首达阈值只提醒一次」）。失控兜底
+    // 只剩 stuck_detect / doom_detect 两个独立硬终止。
+    let mut round_limit_reminded = false;
+    let mut round_limit_prompt: Option<String> = None;
+    let mut budget_limit_reminded = false;
+    let mut budget_limit_prompt: Option<String> = None;
 
     'tool_round: for tool_round in 0u32.. {
         if ctx.cancel.is_cancelled() {
@@ -301,25 +304,12 @@ async fn stream_loop_inner(
             .await;
         }
 
-        // 【B1 轮数上限硬闸】无限 range 的等价界：正常流必在阶段 H 判定（终止或
-        // 续期抬升 effective_max_rounds 后放行），任何路径跳过阶段 H 时由此兜底。
-        // 此时上一轮 assistant 已 finalize + tool_result 已落盘，直接收尾安全。
-        if tool_round >= effective_max_rounds {
-            return finalize_success(
-                ctx.emitter.as_ref(),
-                &ctx.pool,
-                &ev,
-                &current_asst_msg_id,
-                "tool_use",
-                synthesize_usage(
-                    first_prompt_tokens,
-                    total_completion_tokens,
-                    collected_usage,
-                ),
-                first_prompt_tokens,
-                tool_round,
-            )
-            .await;
+        // 【纯软护栏】轮数上限不再是硬闸：跳过阶段 H 的路径也不硬停，只补一次提醒
+        //（正常流阶段 H 已提醒）。上一轮 assistant 已 finalize + tool_result 已落盘，
+        // 继续跑安全；失控由 stuck/doom 独立兜底。
+        if tool_round >= effective_max_rounds && !round_limit_reminded {
+            round_limit_reminded = true;
+            round_limit_prompt = Some(round_limit_warning(tool_round, effective_max_rounds));
         }
 
         let round_timer = RoundTimer::new(tool_round);
@@ -409,7 +399,7 @@ async fn stream_loop_inner(
         let budget_reminder = if effective_max_tokens != usize::MAX
             && cumulative_tokens * 10 >= effective_max_tokens * 9  // ≥90% 已用
             && cumulative_tokens <= effective_max_tokens
-        // 未触顶（触顶走终止路径）
+        // 未触顶（触顶后走预算软提醒，见下方 W4.2 预算检查）
         {
             let first = !budget_reminder_sent;
             budget_reminder_sent = true; // 首次置位；此后轮次 false
@@ -417,21 +407,44 @@ async fn stream_loop_inner(
         } else {
             false
         };
-        // S8-4：收尾指令优先并入（若有）
-        let round_injected = match (budget_wrapup_prompt.take(), round_injected, budget_reminder) {
-            (Some(wrap), hook, _) => Some(match hook {
-                Some(h) => format!("{h}\n\n{wrap}"),
-                None => wrap,
-            }),
-            (None, hook, rem) => match (hook, rem) {
-                (Some(hook), true) => Some(format!(
-                    "{hook}\n\n[System] Token 预算即将用尽（已用 {cumulative_tokens}/{effective_max_tokens}）。请尽快收敛当前任务：输出阶段性结论，或把未完成部分整理成清晰的手接点（下一步做什么、关键状态在哪），让用户可以低成本继续。"
-                )),
-                (None, true) => Some(format!(
-                    "[System] Token 预算即将用尽（已用 {cumulative_tokens}/{effective_max_tokens}）。请尽快收敛当前任务：输出阶段性结论，或把未完成部分整理成清晰的手接点（下一步做什么、关键状态在哪），让用户可以低成本继续。"
-                )),
-                (inj, _) => inj,
-            },
+        // 纯软护栏轮数提前提醒（对称预算 ≥90%）：剩余轮数 <10% 时提醒一次，让 agent
+        // 有充足轮数余量收敛——避免撞顶才措手不及。与 budget_reminder 同款「首达阈值
+        // 只提醒一次」；未触顶（触顶后走 round_limit_warning，见下方阶段 H）。
+        let round_reminder = if (tool_round + 1) * 10 >= effective_max_rounds * 9
+            && tool_round + 1 < effective_max_rounds
+        {
+            let first = !round_reminder_sent;
+            round_reminder_sent = true; // 首次置位；此后轮次 false
+            first
+        } else {
+            false
+        };
+        // S8-3 预算 reminder + 纯软护栏轮数/预算提醒，统一按序并入 round_injected
+        // 通道（钩子 → 轮数触顶 → 预算触顶 → 轮数提前 → 预算提前，各至多一条）。
+        // reminder 只在 <90% 首达那轮、round_limit/budget_limit 只在各自触顶那轮，
+        // 互不重叠，join 无重复轰炸。
+        let mut injected_parts: Vec<String> = Vec::new();
+        if let Some(h) = round_injected {
+            injected_parts.push(h);
+        }
+        if let Some(rl) = round_limit_prompt.take() {
+            injected_parts.push(rl);
+        }
+        if let Some(bl) = budget_limit_prompt.take() {
+            injected_parts.push(bl);
+        }
+        if round_reminder {
+            injected_parts.push(round_limit_reminder(tool_round + 1, effective_max_rounds));
+        }
+        if budget_reminder {
+            injected_parts.push(format!(
+                "[System] Token 预算即将用尽（已用 {cumulative_tokens}/{effective_max_tokens}）。请尽快收敛当前任务：输出阶段性结论，或把未完成部分整理成清晰的手接点（下一步做什么、关键状态在哪），让用户可以低成本继续。"
+            ));
+        }
+        let round_injected = if injected_parts.is_empty() {
+            None
+        } else {
+            Some(injected_parts.join("\n\n"))
         };
 
         // session-events：钩子注入是模型可见事实（「Model-visible means logged」），
@@ -543,7 +556,7 @@ async fn stream_loop_inner(
         let round_gen_ms = round_timer.elapsed_ms();
         observable.elapsed_ms = round_gen_ms;
         emit_intermediate_round_state(ctx.emitter.as_ref(), &ctx.conv_id, observable);
-        // 预算 HUD 数据源：本轮 usage 累计后的会话级状态（renewed=false 常规更新）；
+        // 预算 HUD 数据源：本轮 usage 累计后的会话级状态（常规更新）；
         // ③ 可观测化：常规轮携带 miss 归因（前端 BudgetPill chip）
         emit_budget_state(
             ctx.emitter.as_ref(),
@@ -554,9 +567,6 @@ async fn stream_loop_inner(
             cumulative_prompt_tokens,
             effective_max_tokens,
             initial_max_tokens,
-            budget_renewals,
-            ctx.budget.max_budget_renewals,
-            false,
             round_miss_hint.as_deref(),
         );
         // 【改】progress_text 跨轮累积，仅供停滞检测（不持久化）
@@ -644,110 +654,21 @@ async fn stream_loop_inner(
             .await;
         }
 
-        // W4.2: Token 预算终止检查（落盘前）。B1：触顶先尝试自动续期（+初始上限，
-        // 失控由 stuck_detect 独立兜底，额度有界保证总开销封顶），额度用尽才终止。
-        // fallback=Some 保证纯 tool_use / thinking-only 轮也写入终止说明，
-        // msg_id 恒有效（finalize_success 需 final_asst_msg_id 指向真实消息）。
-        if effective_max_tokens != usize::MAX && cumulative_tokens > effective_max_tokens {
-            if budget_renewals < ctx.budget.max_budget_renewals {
-                budget_renewals += 1;
-                let prev_cap = effective_max_tokens;
-                effective_max_tokens = effective_max_tokens.saturating_add(initial_max_tokens);
-                tracing::info!(
-                    target: "ice_paw.chat",
-                    "Token 预算自动续期: cumulative={} 触顶 {}，续期 {}/{} → 新上限 {}",
-                    cumulative_tokens,
-                    prev_cap,
-                    budget_renewals,
-                    ctx.budget.max_budget_renewals,
-                    effective_max_tokens,
-                );
-                // 续期 toast 数据源（renewed=true，前端非阻塞提示后继续）
-                emit_budget_state(
-                    ctx.emitter.as_ref(),
-                    &ctx.conv_id,
-                    tool_round,
-                    cumulative_tokens,
-                    cumulative_cached_tokens,
-                    cumulative_prompt_tokens,
-                    effective_max_tokens,
-                    initial_max_tokens,
-                    budget_renewals,
-                    ctx.budget.max_budget_renewals,
-                    true,
-                    None,
-                );
-            } else if !budget_wrapup_used {
-                // S8-4 触顶文本收尾（OpenCode 输入）：续期用尽时不硬停——抬一次
-                // 收尾额度（约 4K，只够输出总结），收尾轮注入收尾指令让模型交代
-                // 进展与手接点；再次触顶则真正终止（budget_wrapup_used 已置位）。
-                budget_wrapup_used = true;
-                effective_max_tokens = effective_max_tokens.saturating_add(4096);
-                tracing::info!(
-                    target: "ice_paw.chat",
-                    "S8-4 预算收尾轮: cumulative={} 超限，注入收尾指令（+4096 额度）",
-                    cumulative_tokens,
-                );
-                budget_wrapup_prompt = Some(
-                    "[System] Token 预算已用尽，这是最后一轮。请立即停止调用任何工具，用 3-6 句话输出收尾总结：已完成什么、未完成什么、用户接下来该做什么（手接点）。".to_string(),
-                );
-            } else {
-                tracing::warn!(
-                    target: "ice_paw.chat",
-                    "Token 预算已超限（续期额度用尽）: cumulative={} > budget={}",
-                    cumulative_tokens,
-                    effective_max_tokens,
-                );
-                // 终态事件：让 HUD 停在最终值（与终止提示行的数字一致）
-                emit_budget_state(
-                    ctx.emitter.as_ref(),
-                    &ctx.conv_id,
-                    tool_round,
-                    cumulative_tokens,
-                    cumulative_cached_tokens,
-                    cumulative_prompt_tokens,
-                    effective_max_tokens,
-                    initial_max_tokens,
-                    budget_renewals,
-                    ctx.budget.max_budget_renewals,
-                    false,
-                    None,
-                );
-                finalize_guard_logged(
-                    &ctx.pool,
-                    &batch_writer,
-                    &ev,
-                    &current_asst_msg_id,
-                    &msg_text,
-                    &round_blocks,
-                    round_completion_tokens,
-                    Some(&budget_exceeded_fallback(
-                        cumulative_tokens,
-                        effective_max_tokens,
-                        ctx.budget.max_budget_renewals,
-                    )),
-                    tool_round,
-                    ctx.asst_model.as_deref(),
-                    !continue_full_text.is_empty(),
-                    round_gen_ms,
-                )
-                .await;
-                return finalize_success(
-                    ctx.emitter.as_ref(),
-                    &ctx.pool,
-                    &ev,
-                    &current_asst_msg_id,
-                    "budget_exceeded",
-                    synthesize_usage(
-                        first_prompt_tokens,
-                        total_completion_tokens,
-                        collected_usage,
-                    ),
-                    first_prompt_tokens,
-                    tool_round + 1,
-                )
-                .await;
-            }
+        // W4.2: Token 预算触顶检查（落盘前）。纯软护栏（2026-10-30）：不再自动续期、
+        // 不再硬停——触顶只注入一次收尾提醒让 agent 自管理（接近完成 → 收尾；确有
+        // 大额剩余 → 说明理由继续）。失控由 stuck/doom 独立兜底，本轮 text 照常走
+        // 下方公共落盘路径。
+        if effective_max_tokens != usize::MAX
+            && cumulative_tokens > effective_max_tokens
+            && !budget_limit_reminded
+        {
+            budget_limit_reminded = true;
+            budget_limit_prompt =
+                Some(budget_limit_warning(cumulative_tokens, effective_max_tokens));
+            tracing::info!(
+                target: "ice_paw.chat",
+                "Token 预算已超限——注入收尾提醒（纯软护栏，不硬停不续期）",
+            );
         }
 
         // === M2.1: 停滞检测（落盘前）===
@@ -1194,54 +1115,16 @@ async fn stream_loop_inner(
 
         // 【阶段 H】若是最后一轮，当前 assistant（已 finalize）作为最终消息收尾；
         // 否则创建下一轮 assistant 占位 + 切 BatchWriter + emit chat:assistant-start。
-        // B1：轮数触顶先尝试自动续期（+初始轮数，判据同预算续期——失控由 stuck_detect
-        // 独立兜底，额度有界保证总轮数封顶 = 初始 × (1+额度)），额度用尽才真停。
-        if tool_round + 1 >= effective_max_rounds {
-            if round_renewals < ctx.budget.max_round_renewals {
-                round_renewals += 1;
-                effective_max_rounds = effective_max_rounds.saturating_add(initial_max_rounds);
-                tracing::info!(
-                    target: "ice_paw.chat",
-                    "工具轮数自动续期: 已达 {} 轮，续期 {}/{} → 新上限 {} 轮",
-                    tool_round + 1,
-                    round_renewals,
-                    ctx.budget.max_round_renewals,
-                    effective_max_rounds,
-                );
-                // 续期 toast（治「看不见」——生产实案 62 次撞顶用户全靠手点「继续」
-                // 才知道还在跑）；瞬态 UI 事件，事实由 turn_ended.rounds 落库承载
-                emit_rounds_renewed(
-                    ctx.emitter.as_ref(),
-                    &ctx.conv_id,
-                    &current_asst_msg_id,
-                    tool_round + 1,
-                    round_renewals,
-                    ctx.budget.max_round_renewals,
-                    initial_max_rounds,
-                    effective_max_rounds,
-                );
-            } else {
-                tracing::info!(
-                    target: "ice_paw.chat",
-                    "已达最大工具调用轮数（{}），终止对话",
-                    effective_max_rounds,
-                );
-                return finalize_success(
-                    ctx.emitter.as_ref(),
-                    &ctx.pool,
-                    &ev,
-                    &current_asst_msg_id,
-                    "tool_use",
-                    synthesize_usage(
-                        first_prompt_tokens,
-                        total_completion_tokens,
-                        collected_usage,
-                    ),
-                    first_prompt_tokens,
-                    tool_round + 1,
-                )
-                .await;
-            }
+        // 纯软护栏（2026-10-30）：轮数触顶不再续期、不再硬停——只提醒一次，让 agent
+        // 自管理收尾（接近完成 → 收尾；确有大额剩余 → 说明理由继续）。失控由 stuck/doom 兜底。
+        if tool_round + 1 >= effective_max_rounds && !round_limit_reminded {
+            round_limit_reminded = true;
+            round_limit_prompt = Some(round_limit_warning(tool_round + 1, effective_max_rounds));
+            tracing::info!(
+                target: "ice_paw.chat",
+                "工具轮数已达上限（{}）——注入收尾提醒（纯软护栏，不再硬停不再续期）",
+                effective_max_rounds,
+            );
         }
 
         let next_asst_id = Uuid::new_v4().to_string();
@@ -1298,9 +1181,10 @@ async fn stream_loop_inner(
         current_asst_finalized = false;
     }
 
-    // 兜底：逻辑上不可达（`0u32..` 无限 range 下，正常流必在阶段 H 终止分支或
-    // 顶部硬闸 return），保留以满足函数返回类型。current_asst_msg_id 此时为最后
-    // 一条有内容的 assistant。
+    // 兜底：逻辑上不可达——`0u32..` 无限 range 下所有退出路径都是 return（模型收尾
+    // stop / stuck / doom_loop / cancel / 内部错误）；纯软护栏下轮数/预算不再硬停，
+    // 循环只会更多轮。保留以满足函数返回类型（编译器要求非发散返回值），
+    // current_asst_msg_id 此时为最后一条有内容的 assistant。
     finalize_success(
         ctx.emitter.as_ref(),
         &ctx.pool,

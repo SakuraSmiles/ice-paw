@@ -39,7 +39,6 @@ import type {
   DelegationStartedPayload,
   ChatBudgetPayload,
   ChatModelSwitchedPayload,
-  ChatRoundsRenewedPayload,
 } from "../types";
 
 export async function useChatEvents(): Promise<() => void> {
@@ -166,25 +165,18 @@ export async function useChatEvents(): Promise<() => void> {
     void chat.loadConversations();
   });
 
-  // 会话级 token 预算：每轮 usage 累计后 / 触顶续期 / 终止前各发一次。
-  // 按激活会话过滤——后台会话的预算事件不触 HUD 与续期 toast。
+  // 会话级 token 预算：每轮 usage 累计后 / 触顶提醒 / 终止前各发一次。
+  // 按激活会话过滤——后台会话的预算事件不触 HUD。
   await subscribe<ChatBudgetPayload>("chat:budget", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.updateBudget(e.payload);
   });
 
   // 降级换档 toast（B2-S3）：主模型失败换备用档时告知用户「谁在继续生成」。
-  // 与 chat:budget renewed 同款——按激活会话过滤 + 5s 自动消失（store 内计时）。
+  // 按激活会话过滤 + 5s 自动消失（store 内计时）。
   await subscribe<ChatModelSwitchedPayload>("chat:model-switched", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.updateModelSwitched(e.payload);
-  });
-
-  // 工具轮数自动续期 toast（① 自动续跑）：阶段 H 触顶续期时告知「还在跑」——
-  // 不弹会让人以为卡死。与 model-switched 同款：按激活会话过滤 + 5s 自动消失。
-  await subscribe<ChatRoundsRenewedPayload>("chat:rounds-renewed", (e) => {
-    if (e.payload.conversation_id !== chat.activeConvId) return;
-    chat.updateRoundsRenewed(e.payload);
   });
 
   // 限流/网络退避（批 2 相位状态机）：chat:retrying → 桶相位 retrying（带
@@ -213,7 +205,14 @@ export async function useChatEvents(): Promise<() => void> {
     chat.advancePhase(aid, "chat:assistant-start", {});
     // 桶置位无条件（后台会话的多轮续跑同样在途；UI 部分按激活过滤）
     chat.ensureStream(aid).sending = true;
-    if (aid !== chat.activeConvId) return;
+    if (aid !== chat.activeConvId) {
+      // 后台会话多轮：上一轮已由后端落库（切回走 loadMessages 读 DB），这里只清桶的
+      // 轮级流式字段（勿 freeze——freeze 写 messages 数组只属于激活会话）。不清的话
+      // 后台会话的 streamingText/thinking/toolCalls 跨轮累积，切回时当前轮气泡会把
+      // 前几轮正文串进来（P1-2）。
+      chat.resetRoundStreaming(aid);
+      return;
+    }
     chat.resetSendTimeout();
     chat.freezeCurrentAssistant();
     chat.resetRoundStreaming();
@@ -258,10 +257,10 @@ export async function useChatEvents(): Promise<() => void> {
     // 首 token 复位「压缩中」：摘要失败的确定性折叠路径无 summary-injected 收尾，
     // 流式一旦开始即表明摘要阶段已过（纯文本回合无 assistant-start 兜底，只能靠这里）。
     s.summarizing = false;
-    const idx = chat.messages.length - 1;
-    if (idx >= 0 && chat.messages[idx].role === "assistant") {
-      chat.messages[idx] = { ...chat.messages[idx], content: s.streamingText };
-    }
+    // ⚠️ 勿把 streamingText 同步进 messages 末条（旧行为：每 chunk 整替数组元素 →
+    // 七个 O(N) computed 全量重算 + 全列表重渲染，大 session 主线程饥饿）。流式正文
+    // 由 ChatMessages 的 itemText 直读激活桶，落库/冻结路径（freezeCurrentAssistant）
+    // 不依赖此同步。
   });
 
   // ---- 工具调用事件（激活会话专属 UI 状态：后台会话的工具轮由 done 落库收尾） ----
@@ -389,7 +388,7 @@ export async function useChatEvents(): Promise<() => void> {
       ? null
       : e.payload.finish_reason;
     // 回合轮数事实（与 turn_ended.rounds 同源）：finish_reason=tool_use 提示行
-    // 文案分叉用；旧后端缺席 → null 回落通用文案
+    // 文案用；旧后端缺席 → null 回落通用文案
     chat.lastTurnRounds = e.payload.rounds ?? null;
     // 用 message_id 定位最终 assistant（freezeCurrentAssistant 可能已在末尾插入 user 消息，
     // 不能再假设末条索引），更新其 token_count
@@ -417,10 +416,14 @@ export async function useChatEvents(): Promise<() => void> {
     const es = chat.streamOf(cid);
     if (es) es.sending = false;
     chat.clearTurnAnchors();
+    // P1-1：出错先冻结已生成的部分内容（文本/思考/工具结果），再清桶——否则中途
+    // 出错会把已经流出的部分回答一并丢弃。分桶后流式正文只住桶（msg.content 恒空），
+    // 不先冻则下方 map 恒命中 content==="" 分支、只写一句「错误: …」。与停止路径
+    // （done(abort)→freeze 保留部分内容）对齐。
+    chat.freezeCurrentAssistant();
     chat.resetRoundStreaming();
     chat.lastFinishReason = null;
     chat.lastTurnRounds = null; // 错误回合无轮数语义，提示行判据同步失效
-    chat.turnRoundRenewals = false;
     // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）
     // kind 为后端单一真相源 slug（llm.auth 等），横幅据此挂「去检查配置」行动按钮
     chat.setConvError(cid, friendlyError(e.payload.message), e.payload.kind ?? "internal");

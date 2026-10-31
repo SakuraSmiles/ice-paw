@@ -161,6 +161,11 @@ describe("组级过程叙述收纳", () => {
       textMsg("a3", "末段。"),
     ], true, 0); // sending + 组与生成窗口相交
 
+    // 流式正文进桶（live 末条 itemText 直读桶——勿从 messages 数组读，防每 chunk
+    // O(N) 重算）；此处桶与末条 content 同值，生成中与沉淀后都渲染「末段。」。
+    useChatStore().ensureStream("c1").streamingText = "末段。";
+    await flushPromises();
+
     expect(w.findAll(".process-group-summary").length).toBe(0);
     expect(w.findAll(".md").length).toBe(3);
 

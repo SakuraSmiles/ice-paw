@@ -23,8 +23,8 @@
 //! - `events`：loop 事件发射
 //!   - `emit_intermediate_round_state()` — 发射中间 round-state 事件
 //! - `termination`：终止收尾辅助（U3-5 ④ loop_engine 再拆）
-//!   - `budget_exceeded_fallback()` — 预算超限终止提示文案（纯函数）
 //!   - `finalize_guard_logged()` — 终止守卫落盘 + assistant_message/message_discarded 事件镜像
+//!   - `round_limit_warning()` / `budget_limit_warning()` — 纯软护栏提醒文案（纯函数）
 //! - `doom_detect`：doom_loop 检测（P10④）
 //!   - `scan_and_nudge()` — 阶段 E 出口扫描 tool_result + 注入 nudge（返回是否终止）
 //!

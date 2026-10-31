@@ -133,7 +133,6 @@ mod tests {
             max_attempts: 4,
             stuck_threshold: 7,
             max_total_tokens: 128_000,
-            ..LoopBudget::default()
         };
         assert_eq!(budget.stuck_threshold, 7, "自定义 stuck_threshold 应被接受");
 

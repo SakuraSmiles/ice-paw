@@ -103,11 +103,12 @@ pub struct ChatRoundStatePayload {
     pub retry_count: u32,
 }
 
-/// `chat:budget` 事件 payload — 会话级 token 预算可观测（前端 HUD / 续期 toast）。
+/// `chat:budget` 事件 payload — 会话级 token 预算可观测（前端 HUD）。
 ///
 /// 与 round-state 语义不同：round-state 是单轮性能快照，本 payload 是跨轮
-/// 累计状态 + 续期变更。发射点：每轮 usage 累计后（renewed=false）+ 触顶自动
-/// 续期时（renewed=true）+ budget_exceeded 终止前（终态）。
+/// 累计状态。发射点：每轮 usage 累计后（常规更新）。纯软护栏（2026-10-30）下
+/// 预算触顶不再硬停、不再自动续期——触顶只注入一次收尾提醒（见
+/// `loop::termination::budget_limit_warning`），故本 payload 无续期字段。
 /// 不入 session-event-log（瞬态 UI 事件；静态预算快照已由 turn_context 落库）。
 #[derive(Clone, Serialize, Debug)]
 pub struct ChatBudgetPayload {
@@ -120,16 +121,10 @@ pub struct ChatBudgetPayload {
     pub cumulative_cached_tokens: u64,
     /// 累计总输入 Σ prompt_i（HUD 命中率分母；含命中部分，规范语义）
     pub cumulative_prompt_tokens: u64,
-    /// 当前生效上限（续期后已抬升；= initial × (renewal_index + 1)）
+    /// 当前生效上限（= initial_cap，纯软护栏下不再自动抬升）
     pub effective_cap: u64,
     /// 初始上限（= turn_context.budget_max_tokens）
     pub initial_cap: u64,
-    /// 已发生的自动续期次数（0 起）
-    pub renewal_index: u32,
-    /// 续期额度（0 = agent.yaml 显式硬上限，不续期）
-    pub max_renewals: u32,
-    /// 本次事件是否因触顶续期（前端 toast 触发器）
-    pub renewed: bool,
     /// 当前工具轮数（0 起，与 round-state 对齐）
     pub round: u32,
     /// 本轮缓存全 miss 的归因 slug 数组（③ 可观测化；None/空 = 本轮非全 miss
@@ -153,10 +148,9 @@ pub struct ChatRetryingPayload {
 
 /// `chat:model-switched` 事件 payload — 降级链换档成功的瞬态通知（前端 toast）。
 ///
-/// 对齐 `chat:budget` 的 renewed 先例：可回放事实走 session-event-log 的
-/// `model_switch` 事件（from/to/reason/attempt 全量），本 payload 只负责让用户
-/// **看见**正在换档——「模型已切换」不弹会让人以为回复来自原模型。
-/// 不入 session-event-log（瞬态 UI 事件）。
+/// 瞬态 UI 事件：可回放事实走 session-event-log 的 `model_switch` 事件
+/// （from/to/reason/attempt 全量），本 payload 只负责让用户**看见**正在换档——
+/// 「模型已切换」不弹会让人以为回复来自原模型。不入 session-event-log（瞬态 UI 事件）。
 #[derive(Clone, Serialize)]
 pub struct ChatModelSwitchedPayload {
     pub conversation_id: String,
@@ -171,29 +165,6 @@ pub struct ChatModelSwitchedPayload {
     /// 换档触发原因 slug：`quota`（余额/资源包）/ `rate_limited`（限流耗尽）/
     /// `network`（网络错误耗尽）——前端 toast 文案按此翻译
     pub reason: String,
-}
-
-/// `chat:rounds-renewed` 事件 payload — 工具轮数自动续期的瞬态通知（前端 toast）。
-///
-/// 对齐 `chat:model-switched` 三句式先例：瞬态 UI 事件、不入 session-event-log
-/// （轮数事实已由 turn_ended.rounds 落库）、每回合至多 max_renewals(4) 次非
-/// token 级事件（无需 DeltaAggregator）。发射点 = loop_engine 阶段 H 续期分支。
-/// 「触顶还在跑」不弹会让人以为卡死（生产实案：62 次撞顶 60 次手点「继续」）。
-#[derive(Clone, Serialize)]
-pub struct ChatRoundsRenewedPayload {
-    pub conversation_id: String,
-    /// 当前流式回合的 assistant 占位消息 id（与 chat:model-switched 同源）
-    pub message_id: String,
-    /// 触顶时的轮数（= initial_max_rounds × renewal_index）
-    pub round: u32,
-    /// 本次是第几次续期（1 起）
-    pub renewal_index: u32,
-    /// 续期额度（默认 4）
-    pub max_renewals: u32,
-    /// 初始轮数上限（每次续期 +此值）
-    pub initial_max_rounds: u32,
-    /// 续期后的新上限（前端 toast 展示「→ 新上限 N 轮」）
-    pub effective_max_rounds: u32,
 }
 
 /// `chat:processing` 事件 payload — send_message 重处理阶段心跳

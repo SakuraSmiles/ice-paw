@@ -2,6 +2,22 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.9.15] — 2026-10-31
+
+> 轮数 + 预算双维度「纯软护栏」语义统一：触顶不再硬停、不再自动续期，只注入一次性提醒让 agent 自管理收尾。
+
+### 护栏语义统一
+
+- **移除自动续期机制**：删除 `DEFAULT_AUTO_RENEWALS`（4 次）与 `LoopBudget.max_budget_renewals / max_round_renewals` 字段——预算/轮数触顶不再 +初始上限续跑
+- **触顶软提醒**：`budget_limit_warning` / `round_limit_warning` 触顶只注入一次性提醒（两个选择：接近完成 → 收尾；确有大额剩余 → 说明理由继续），不再 `budget_exceeded` / `tool_use` 硬终止
+- **轮数 ≥90% 提前提醒**：`round_limit_reminder` 在接近上限时提前注入，给模型留收敛/分段跑道（与预算维度提前提醒对称）
+- **移除续期事件全链路**：`chat:rounds-renewed` 事件 + payload + emitter + 前端 toast + store 状态（`roundsNotice` / `turnRoundRenewals`）整体摘除；`finishReasonLabel` 的 `tool_use` 分支改为提示行文案（引用 `lastTurnRounds`）
+- **失控兜底不变**：stuck_detect / doom_detect / 模型长度截断 / 手动停止仍是硬终止路径；`tool_use` / `budget_exceeded` 词表保留（仅向后兼容，不再产生）
+
+### 验证
+
+- cargo test --lib 1623 passed / clippy --tests 0 警告 / vitest 782 / tsc+eslint 0
+
 ## [0.9.14] — 2026-10-30
 
 > 瘦身减负批一：mcp-runtime 原生化（删 124M 内置 Node 运行时）+ 大文件拆分 + 零风险清理。安装包显著减重，代码库更易维护。

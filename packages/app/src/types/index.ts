@@ -696,7 +696,8 @@ export interface ContextBreakdownPayload {
   fingerprint: ContextBreakdownFingerprint;
   rounds: ContextBreakdownRound[];
 }
-/** `chat:budget` 事件 payload — 会话级 token 预算状态（HUD / 续期 toast） */
+/** `chat:budget` 事件 payload — 会话级 token 预算状态（HUD）。
+ *  纯软护栏（2026-10-30）：预算触顶不再续期不再硬停，故无续期字段。 */
 export interface ChatBudgetPayload {
   conversation_id: string;
   /** 本轮 usage 累计后的计费口径 Σ(未命中全价 + 命中 1/10 + 输出全价) */
@@ -705,23 +706,17 @@ export interface ChatBudgetPayload {
   cumulative_cached_tokens: number;
   /** 累计总输入 Σ prompt_i（命中率分母；含命中部分，规范语义） */
   cumulative_prompt_tokens: number;
-  /** 当前生效上限（续期后已抬升） */
+  /** 当前生效上限（= 初始上限，纯软护栏下不再自动抬升） */
   effective_cap: number;
   /** 初始上限（= turn_context.budget_max_tokens） */
   initial_cap: number;
-  /** 已发生的自动续期次数（0 起） */
-  renewal_index: number;
-  /** 续期额度（0 = 显式硬上限不续期） */
-  max_renewals: number;
-  /** 本次事件是否因触顶续期（toast 触发器） */
-  renewed: boolean;
   /** 当前工具轮数（0 起） */
   round: number;
   /** 本轮全 miss 的本地归因 slug 数组（③ 可观测化；词表见 utils/missHint，
    *  与后端 turn_cost::miss_slug 镜像。null = 本轮非全 miss / provider 未回 usage */
   miss_hint?: string[];
 }
-/** `chat:model-switched` 事件 payload — 降级换档 toast（对齐 chat:budget renewed 先例） */
+/** `chat:model-switched` 事件 payload — 降级换档 toast（瞬态 UI 事件，不入 session-event-log） */
 export interface ChatModelSwitchedPayload {
   conversation_id: string;
   message_id: string;
@@ -731,22 +726,6 @@ export interface ChatModelSwitchedPayload {
   to_model: string;
   /** 换档触发原因 slug（quota / rate_limited / network） */
   reason: string;
-}
-/** `chat:rounds-renewed` 事件 payload — 工具轮数自动续期 toast（model-switched 同款三句式：
- *  瞬态 UI 事件、不入 session-event-log——轮数事实由 turn_ended.rounds 落库） */
-export interface ChatRoundsRenewedPayload {
-  conversation_id: string;
-  message_id: string;
-  /** 触顶时的轮数（= initial_max_rounds × renewal_index） */
-  round: number;
-  /** 本次是第几次续期（1 起） */
-  renewal_index: number;
-  /** 续期额度（默认 4） */
-  max_renewals: number;
-  /** 初始轮数上限（每次续期 +此值） */
-  initial_max_rounds: number;
-  /** 续期后的新上限 */
-  effective_max_rounds: number;
 }
 /** `model_switch` 事件 payload — 降级链换档记录（harness::event_log::ModelSwitchPayload） */
 export interface ModelSwitchPayload {

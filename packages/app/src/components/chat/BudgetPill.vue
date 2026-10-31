@@ -5,7 +5,7 @@
 // 存活到下一次 send/切会话）。
 // 形态：环形进度（灰轨绿芯，12 点起顺时针，80% 处弱刻度点）+「已用 X / 上限 Y」
 // 数字——预算本质是比值，环的填充度一眼读出余量；用量 ≥80% 越过刻度转 warn 态
-// （芯环加深 + 字重 600），续期后上限自动抬升（环随之回落）。
+// （芯环加深 + 字重 600）。预算维度纯软护栏：触顶只提醒 agent，上限不抬升。
 // 预算诚实化：数字为计费口径（缓存命中按 1/10 折扣），命中率高时涨速
 // 显著慢于毛成本——旁挂「缓存命中 X%」chip 说明为什么（L2 状态上屏）。
 import { computed } from "vue";
@@ -38,12 +38,10 @@ const cacheHitPct = computed(() => {
  *  因；首次请求是正常态弱展示），hover title 带全因机理 + 推断披露 */
 const missChip = computed(() => shortMissHint(props.budget.miss_hint));
 const missTitle = computed(() => missHintTitle(props.budget.miss_hint));
-const title = computed(() => {
-  const base = `本回合累计 token（计费口径）：${props.budget.cumulative_tokens} / 上限 ${props.budget.effective_cap}（未命中全价 + 命中 1/10 + 输出全价）`;
-  return props.budget.max_renewals === 0
-    ? `${base}；agent.yaml 显式上限 = 硬上限，不自动续期`
-    : `${base}；可自动续期 ${props.budget.max_renewals} 次`;
-});
+const title = computed(
+  () =>
+    `本回合累计 token（计费口径）：${props.budget.cumulative_tokens} / 上限 ${props.budget.effective_cap}（未命中全价 + 命中 1/10 + 输出全价）；预算触顶只提醒 agent，不硬停不续期`,
+);
 </script>
 
 <template>
@@ -67,9 +65,6 @@ const title = computed(() => {
       缓存命中 {{ cacheHitPct }}%
     </span>
     <span v-if="missChip" class="miss" :title="missTitle">{{ missChip }}</span>
-    <span v-if="props.budget.renewal_index > 0" class="renewed">
-      （已续期 {{ props.budget.renewal_index }}/{{ props.budget.max_renewals }}）
-    </span>
   </span>
 </template>
 
@@ -108,18 +103,15 @@ const title = computed(() => {
   fill: var(--ip-color-border-default);
   opacity: 0.6;
 }
-/* 80% 水位：芯环加深 + 字重提醒（仍非错误——续期/继续都可恢复） */
+/* 80% 水位：芯环加深 + 字重提醒（仍非错误——agent 自行压缩/继续即可） */
 .budget-pill.warn { font-weight: 600; }
 .budget-pill.warn .ring-fill { stroke: var(--ip-color-primary-tint-text); }
-/* 命中率与续期计数同为次级信息，弱化视觉；miss chip 同视觉级（归因是解释性
-   信息，非错误态——不用 danger 色） */
+/* 命中率与 miss chip 同为次级信息，弱化视觉（归因是解释性信息，非错误态——
+   不用 danger 色） */
 .cached {
   opacity: 0.85;
 }
 .miss {
-  opacity: 0.85;
-}
-.renewed {
   opacity: 0.85;
 }
 </style>

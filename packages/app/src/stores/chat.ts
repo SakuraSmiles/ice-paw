@@ -11,7 +11,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { parseDbTime } from "../utils/time";
-import { formatTokenCount, formatThinkingMs } from "../utils/format";
+import { formatThinkingMs } from "../utils/format";
 import type { Conversation, Message } from "../types";
 import type {
   AuthScope,
@@ -22,7 +22,6 @@ import type {
   ConfigProposalResponse,
   ChatBudgetPayload,
   ChatModelSwitchedPayload,
-  ChatRoundsRenewedPayload,
   ChannelView,
 } from "../types";
 import { bridge } from "../api/bridge";
@@ -210,14 +209,8 @@ export const useChatStore = defineStore("chat", () => {
       pruneQueuedSteers(); // Steer「排队中」角标剪枝（每回合 assistant 出现摘最旧命中一条，FIFO 接手对齐）
       hasMore.value = page?.has_more === true;
       pageCursor.value = page?.next_before_anchor_rowid ?? null;
-      // 切回正在流式的会话时，把恢复的 streamingText 同步到末条 assistant，
-      // 否则 DB 占位为空、要等下一个 chunk 才显示
-      if (sending.value && streamingText.value) {
-        const idx = messages.value.length - 1;
-        if (idx >= 0 && messages.value[idx].role === "assistant") {
-          messages.value[idx] = { ...messages.value[idx], content: streamingText.value };
-        }
-      }
+      // 切回正在流式的会话时流式正文由 ChatMessages 的 itemText 直读激活桶，无需再
+      // 把 streamingText 同步进 messages 末条（旧同步整替数组元素会触发 O(N) 重算）。
     } catch (e) {
       console.error("加载消息列表失败:", e);
       // 只对仍激活的会话表态：过期会话的失败无界面承载（activeConvId 已易主）
@@ -403,45 +396,29 @@ export const useChatStore = defineStore("chat", () => {
   const lastFinishReason = ref<string | null>(null);
   const currentModel = ref<string | null>(null);
 
-  // ===== 会话级 token 预算（chat:budget 事件驱动；HUD / 续期 toast） =====
+  // ===== 会话级 token 预算（chat:budget 事件驱动；HUD） =====
   // 与 lastFinishReason 同为「激活会话的回合级单值」：一次 send 的累计状态，
   // 新回合（sendMessage）/切会话时重置。事件层（useChatEvents）按 convId 过滤
   // 后调用 updateBudget——后台会话的预算事件不触本会话 HUD。
+  // 纯软护栏（2026-10-30）：预算触顶不续期不硬停，故无续期 toast，只有 HUD。
   const budget = ref<ChatBudgetPayload | null>(null);
-  const renewalNotice = ref<string | null>(null);
-  let renewalTimer: ReturnType<typeof setTimeout> | null = null;
 
   function updateBudget(p: ChatBudgetPayload) {
     budget.value = p;
-    if (p.renewed) {
-      renewalNotice.value =
-        `预算已自动续期 ${p.renewal_index}/${p.max_renewals}：` +
-        `上限抬升至 ${formatTokenCount(p.effective_cap)} tokens，任务继续`;
-      if (renewalTimer) clearTimeout(renewalTimer);
-      renewalTimer = setTimeout(() => {
-        renewalNotice.value = null;
-        renewalTimer = null;
-      }, 5000);
-    }
   }
 
   function clearBudget() {
     budget.value = null;
-    renewalNotice.value = null;
-    if (renewalTimer) { clearTimeout(renewalTimer); renewalTimer = null; }
     // 换档 toast 同生命周期（回合级瞬态通知）：切会话/新回合即清，不跨回合残留
     modelSwitchNotice.value = null;
     if (modelSwitchTimer) { clearTimeout(modelSwitchTimer); modelSwitchTimer = null; }
-    // 轮数续期 toast + 回合轮数事实同生命周期（selectConversation/sendMessage/
-    // clearActiveConversation 三点都汇聚到本函数，勿散清——与 lastFinishReason 重置点对齐）
-    roundsNotice.value = null;
-    if (roundsTimer) { clearTimeout(roundsTimer); roundsTimer = null; }
+    // 回合轮数事实同生命周期（selectConversation/sendMessage/clearActiveConversation
+    // 三点都汇聚到本函数，勿散清——与 lastFinishReason 重置点对齐）
     lastTurnRounds.value = null;
-    turnRoundRenewals.value = false;
   }
 
-  // ===== 降级换档 toast（chat:model-switched 事件驱动；预算续期 toast 同款） =====
-  // 与 renewalNotice 同为回合级瞬态通知：5s 自动消失，事件层按 convId 过滤后调用
+  // ===== 降级换档 toast（chat:model-switched 事件驱动） =====
+  // 回合级瞬态通知：5s 自动消失，事件层按 convId 过滤后调用
   const modelSwitchNotice = ref<string | null>(null);
   let modelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -463,26 +440,10 @@ export const useChatStore = defineStore("chat", () => {
     }, 5000);
   }
 
-  // ===== 轮数续期 toast（chat:rounds-renewed 事件驱动；预算/换档 toast 同款第三胞胎） =====
-  // lastTurnRounds / turnRoundRenewals：finish_reason=tool_use 提示行文案分叉的判据
-  //（「是否发生过续期」标志而非 rounds 字面比较——显式 tool_max_rounds=30 的用户
-  // 上限是 30，字面 50 会显示错误文案）。回合级单值，随 clearBudget 重置。
-  const roundsNotice = ref<string | null>(null);
-  let roundsTimer: ReturnType<typeof setTimeout> | null = null;
+  // ===== 回合轮数事实（finish_reason=tool_use 提示行文案判据） =====
+  // 回合级单值，随 clearBudget 重置。2026-10-30 纯软护栏后 tool_use 不再硬停触发，
+  // 该字段仅供 finishReasonLabel 防御性分支使用。
   const lastTurnRounds = ref<number | null>(null);
-  const turnRoundRenewals = ref(false);
-
-  function updateRoundsRenewed(p: ChatRoundsRenewedPayload) {
-    turnRoundRenewals.value = true;
-    roundsNotice.value =
-      `已达 ${p.round} 轮，自动续期 ${p.renewal_index}/${p.max_renewals}` +
-      ` → 新上限 ${p.effective_max_rounds} 轮，任务继续`;
-    if (roundsTimer) clearTimeout(roundsTimer);
-    roundsTimer = setTimeout(() => {
-      roundsNotice.value = null;
-      roundsTimer = null;
-    }, 5000);
-  }
 
   // ===== 流式工具调用/思考状态（投影；真身在激活桶） =====
   const streamingToolCalls = computed(() => activeStream.value.streamingToolCalls);
@@ -677,7 +638,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   /** 频道在途插话轻提示（「当前回合结束后处理」）：插话发出即显示、5s 淡出
-   *  （renewalNotice 同款 timer 模式）——插话气泡本身经事件驱动刷新可见，
+   *  （与 modelSwitchNotice 同款 timer 模式）——插话气泡本身经事件驱动刷新可见，
    *  提示只补「何时被处理」这一层信息。*/
   const channelQueuedNotice = ref(false);
   let channelQueuedTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1300,8 +1261,7 @@ export const useChatStore = defineStore("chat", () => {
     messages, msgLoading, hasMore, loadingMore, pagedOnce, pageCursor,
     msgLoadError, loadMoreError,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
-    budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
-    roundsNotice, updateRoundsRenewed, lastTurnRounds, turnRoundRenewals,
+    budget, updateBudget, modelSwitchNotice, updateModelSwitched, lastTurnRounds,
     streamingToolCalls, streamingThinking, summarizing, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
     // sendingConvId 暴露为只读（激活桶投影）：事件层 chat:start 据此区分「用户发起
