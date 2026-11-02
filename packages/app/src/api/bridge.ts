@@ -529,6 +529,11 @@ const appInfo = {
     try { return await invoke<{ productName: string; version: string; identifier: string }>("get_app_info"); }
     catch (err) { throw wrapInvokeError("appInfo.get", err); }
   },
+  /** 用系统文件管理器打开指定路径（默认工作空间等目录打开入口） */
+  async openPath(path: string): Promise<void> {
+    try { await invoke<void>("open_path", { path }); }
+    catch (err) { throw wrapInvokeError("appInfo.openPath", err); }
+  },
 };
 
 const inbox = {

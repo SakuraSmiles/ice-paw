@@ -6,7 +6,7 @@
   读（单一真相源）。二级菜单布局归 SettingsLayout 管，本页只负责内容区。
 -->
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onActivated, nextTick } from "vue";
 import { bridge } from "../../api/bridge";
 
 interface AppInfo {
@@ -29,10 +29,40 @@ onMounted(async () => {
     loadError.value = e instanceof Error ? e.message : String(e);
   }
 });
+
+/* ===== 进场动画（DSH 档案绘制）=====
+   节奏对齐启动 splash 的「阶段推进 + 落定」：四角 L 标绘制 → 水印沉降 → 品牌字标盖章 →
+   档案行逐行落位 → 标题冷青粗线收笔。触发点用 onActivated——首挂与 keep-alive 重激活
+   都触发（SettingsLayout 的 deactivatedOnce 已实证 onActivated 首挂也会走）。退出动画
+   由 SettingsLayout 的容器淡出（is-faded）承担：keep-alive 下子组件 onDeactivated 时
+   DOM 已脱挂，子级退出动画不可见，故退出不做重动作，与菜单淡出叠加即可。 */
+const entered = ref(false);
+const prefersReduced =
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function playEnter() {
+  if (prefersReduced) {
+    entered.value = true;
+    return;
+  }
+  entered.value = false;
+  void nextTick(() => {
+    if (typeof requestAnimationFrame !== "function") {
+      entered.value = true;
+      return;
+    }
+    // 双 rAF：先让浏览器把隐藏态提交一帧，再切到落定态，transition 才能被触发
+    requestAnimationFrame(() => requestAnimationFrame(() => (entered.value = true)));
+  });
+}
+
+onActivated(playEnter);
 </script>
 
 <template>
-  <div class="settings-content-inner">
+  <div class="settings-content-inner" :class="{ 'is-entering': !entered }">
     <div class="content-header">
       <div class="content-heading">
         <h2 class="content-title">关于</h2>
@@ -252,7 +282,7 @@ onMounted(async () => {
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   letter-spacing: 0.08em;
-  color: var(--ip-accent-dsh);
+  color: var(--ip-color-text-secondary);
   flex-shrink: 0;
   width: 72px;
 }
@@ -293,5 +323,93 @@ onMounted(async () => {
   margin-top: var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-danger-text);
+}
+
+/* ===== 进场动画（DSH 档案绘制）=====
+   全部走 transform/opacity（零布局位移）。两段式：基态定义落定过渡 + 逐行错落延迟；
+   .is-entering 定义隐藏初始态且 transition:none——复位瞬时无过渡（重激活不会先倒放
+   一遍），落定态才按 delay 错落过渡。缓动用令牌（spring 回弹只给四角 L 标），
+   choreography 时长用字面量（精细时序非布局间距）。 */
+
+/* —— 落定过渡 + 错落延迟（基态）—— */
+.reg {
+  transition: transform 200ms var(--ip-ease-spring), opacity 200ms var(--ip-ease-out);
+}
+.reg.tl { transform-origin: top left; transition-delay: 0ms; }
+.reg.tr { transform-origin: top right; transition-delay: 60ms; }
+.reg.bl { transform-origin: bottom left; transition-delay: 120ms; }
+.reg.br { transform-origin: bottom right; transition-delay: 180ms; }
+
+.bg-word {
+  transition: transform 400ms var(--ip-ease-out), opacity 400ms var(--ip-ease-out);
+}
+
+.brand-name {
+  transition: transform 240ms var(--ip-ease-out), opacity 240ms var(--ip-ease-out);
+  transition-delay: 120ms;
+}
+.brand-sub {
+  transition: transform 200ms var(--ip-ease-out), opacity 200ms var(--ip-ease-out);
+  transition-delay: 180ms;
+}
+.brand-sub-en {
+  transition: transform 200ms var(--ip-ease-out), opacity 200ms var(--ip-ease-out);
+  transition-delay: 220ms;
+}
+.spec-head {
+  transition: transform 200ms var(--ip-ease-out), opacity 200ms var(--ip-ease-out);
+  transition-delay: 260ms;
+}
+.spec-head-line {
+  transition: transform 280ms var(--ip-ease-out);
+  transform-origin: left center;
+  transition-delay: 320ms;
+}
+.meta-row {
+  transition: transform 200ms var(--ip-ease-out), opacity 200ms var(--ip-ease-out);
+}
+.meta-row:nth-child(1) { transition-delay: 320ms; }
+.meta-row:nth-child(2) { transition-delay: 360ms; }
+.meta-row:nth-child(3) { transition-delay: 400ms; }
+.meta-row:nth-child(4) { transition-delay: 440ms; }
+.about-foot {
+  transition: transform 200ms var(--ip-ease-out), opacity 200ms var(--ip-ease-out);
+  transition-delay: 480ms;
+}
+
+.content-title::after {
+  transform-origin: left center;
+  transition: transform 300ms var(--ip-ease-out);
+  transition-delay: 300ms;
+}
+
+/* —— 进场初始态（transition:none 瞬时复位，无倒放）—— */
+.settings-content-inner.is-entering .reg {
+  opacity: 0;
+  transform: scale(0.4);
+  transition: none;
+}
+.settings-content-inner.is-entering .bg-word {
+  opacity: 0;
+  transform: translateY(-50%) translateX(40px);
+  transition: none;
+}
+.settings-content-inner.is-entering .brand-name,
+.settings-content-inner.is-entering .brand-sub,
+.settings-content-inner.is-entering .brand-sub-en,
+.settings-content-inner.is-entering .spec-head,
+.settings-content-inner.is-entering .meta-row,
+.settings-content-inner.is-entering .about-foot {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: none;
+}
+.settings-content-inner.is-entering .spec-head-line {
+  transform: scaleX(0);
+  transition: none;
+}
+.settings-content-inner.is-entering .content-title::after {
+  transform: scaleX(0);
+  transition: none;
 }
 </style>

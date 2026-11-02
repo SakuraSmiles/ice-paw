@@ -1,8 +1,8 @@
-// GeneralSettings.test.ts — 通用设置页锁定：三卡显式保存契约（草稿 + 保存/取消）
-// + 视觉读取（profile 引用链）+ 语义检索（单引用 + 切换重建 overlay 三步流，
-// 保存时触发）。实体在「设置-模型」维护，本页管引用（vision_profile_ids /
-// embedding_profile_id 的 Some=权威语义）。Combobox 交互按仓内惯例从组件
-// emit 驱动（AgentForm.providers 同款）。
+// GeneralSettings.test.ts — 通用设置页锁定：三分区即时生效（平摊表格属性 = 改了就存，
+// 原子性为单组件）+ 视觉读取（profile 引用链）+ 语义检索（单引用 + 切换重建 overlay
+// 三步流，选新引用即弹）。实体在「设置-模型」维护，本页管引用（vision_profile_ids /
+// embedding_profile_id 的 Some=权威语义）。Combobox 交互按仓内惯例从组件 emit 驱动
+// （AgentForm.providers 同款）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { invoke } from "@tauri-apps/api/core";
@@ -54,19 +54,19 @@ async function mountPage() {
   return w;
 }
 
-/** 三卡按序返回 [卡1 本地环境, 卡2 视觉读取, 卡3 语义检索] */
+/** 三分区按序返回 [本地环境, 视觉读取, 语义检索] */
 function cards(w: ReturnType<typeof mount>) {
-  const list = w.findAll("section.settings-card");
+  const list = w.findAll("section.ds-section");
   expect(list).toHaveLength(3);
   return list;
 }
 
-/** 卡内按文案找按钮 */
+/** 分区内按文案找按钮 */
 function btn(card: ReturnType<typeof cards>[number], text: string) {
   return card.findAll("button").find((b) => b.text() === text)!;
 }
 
-describe("GeneralSettings 通用设置页（三卡显式保存）", () => {
+describe("GeneralSettings 通用设置页（三分区即时生效）", () => {
   beforeEach(async () => {
     mockInvoke.mockReset();
     prefs = {};
@@ -89,16 +89,11 @@ describe("GeneralSettings 通用设置页（三卡显式保存）", () => {
     expect((c.findComponent(Combobox).vm.$props as { modelValue: string }).modelValue).toBe("mp-2");
   });
 
-  it("语义检索未启用：选择只进草稿，点「保存」才落库（无 overlay、无重建）", async () => {
+  it("语义检索未启用：选择即落库（无 overlay、无重建）", async () => {
     prefs = {}; // 未启用（无旧向量，无需重建）
     const w = await mountPage();
     const card = cards(w)[2];
     card.findComponent(Combobox).vm.$emit("update:modelValue", "mp-1");
-    await flushPromises();
-
-    // 选完 = 草稿（零写入）
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
-    await btn(card, "保存").trigger("click");
     await flushPromises();
 
     expect(mockInvoke).toHaveBeenCalledWith("set_preference", { key: "embedding_profile_id", value: '"mp-1"' });
@@ -106,18 +101,13 @@ describe("GeneralSettings 通用设置页（三卡显式保存）", () => {
     expect(w.findComponent(EmbedSwitchOverlay).exists()).toBe(false);
   });
 
-  it("已启用换引用：点「保存」弹 overlay → test → save → rebuild 三步流", async () => {
+  it("已启用换引用：选新引用即弹 overlay → test → save → rebuild 三步流", async () => {
     prefs = { embedding_profile_id: "mp-2" };
     const w = await mountPage();
     const card = cards(w)[2];
     card.findComponent(Combobox).vm.$emit("update:modelValue", "mp-1");
     await flushPromises();
-    // 选完不弹（草稿）；点保存才弹
-    expect(w.findComponent(EmbedSwitchOverlay).exists()).toBe(false);
-    await btn(card, "保存").trigger("click");
-    await flushPromises();
-
-    // 确认前零写入
+    // 选完即弹（无保存按钮这道闸）
     expect(w.findComponent(EmbedSwitchOverlay).exists()).toBe(true);
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
 
@@ -146,8 +136,6 @@ describe("GeneralSettings 通用设置页（三卡显式保存）", () => {
     const card = cards(w)[2];
     card.findComponent(Combobox).vm.$emit("update:modelValue", "mp-1");
     await flushPromises();
-    await btn(card, "保存").trigger("click");
-    await flushPromises();
     await w.findAll("button").find((b) => b.text() === "确认并重建")!.trigger("click");
     await flushPromises();
 
@@ -156,48 +144,56 @@ describe("GeneralSettings 通用设置页（三卡显式保存）", () => {
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
   });
 
-  it("视觉链操作：上移只动草稿，点「保存」落新序；添加降级为本地占位不落库", async () => {
+  it("切换取消：回滚乐观回显，不落库不重建", async () => {
+    prefs = { embedding_profile_id: "mp-2" };
+    const w = await mountPage();
+    const card = cards(w)[2];
+    card.findComponent(Combobox).vm.$emit("update:modelValue", "mp-1");
+    await flushPromises();
+    expect(w.findComponent(EmbedSwitchOverlay).exists()).toBe(true);
+
+    await w.findAll("button").find((b) => b.text() === "取消")!.trigger("click");
+    await flushPromises();
+
+    expect(w.findComponent(EmbedSwitchOverlay).exists()).toBe(false);
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "rebuild_all_embeddings")).toBe(false);
+    // 回显回滚到原引用
+    expect((card.findComponent(Combobox).vm.$props as { modelValue: string }).modelValue).toBe("mp-2");
+  });
+
+  it("视觉链操作：拖拽把手就位、上移/下移按钮已移除；添加降级为本地占位不落库", async () => {
     prefs = { vision_profile_ids: ["mp-1", "mp-2"] };
     const w = await mountPage();
     const b = cards(w)[1];
     mockInvoke.mockClear();
 
-    // 上移降级条目（ChevronUp = 每 entry 第一个 chain-ops 按钮）——只动草稿
-    await b.findAll(".vision-entry")[1].findAll("button")[0].trigger("click");
-    await flushPromises();
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
+    // 上下换位按钮已被长按拖拽把手取代（jsdom 测不了原生 DnD，顺序语义靠键盘用例覆盖）
+    const entries = b.findAll(".vision-entry");
+    expect(entries).toHaveLength(2);
+    expect(entries[0].find(".vision-drag").exists()).toBe(true);
+    expect(b.findAll('button[title="上移"]')).toHaveLength(0);
+    expect(b.findAll('button[title="下移"]')).toHaveLength(0);
 
-    await btn(b, "保存").trigger("click");
-    await flushPromises();
-    expect(mockInvoke).toHaveBeenCalledWith("set_preference", {
-      key: "vision_profile_ids", value: '["mp-2","mp-1"]',
-    });
-
-    // 添加降级 = 本地空占位（保存过滤、不落库）
-    mockInvoke.mockClear();
+    // 添加降级 = 本地空占位（选值后即时落库；空引用不落库）
     await b.findAll("button").find((x) => x.text().includes("添加降级模型"))!.trigger("click");
     await flushPromises();
     expect(b.findAll(".vision-entry")).toHaveLength(3);
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
   });
 
-  it("显式保存契约：无变更保存禁用；改草稿后取消 → 回滚不落库且草稿复原", async () => {
-    prefs = { vision_profile_ids: ["mp-1"] };
+  it("视觉链移除：即落库（条目即时减少）", async () => {
+    prefs = { vision_profile_ids: ["mp-1", "mp-2"] };
     const w = await mountPage();
     const b = cards(w)[1];
-    expect((btn(b, "保存").element as HTMLButtonElement).disabled).toBe(true); // 无变更 → 禁用
+    mockInvoke.mockClear();
 
-    // 移除唯一条目（草稿）→ 保存可点 → 取消回滚
     await b.find('button[title="移除此引用"]').trigger("click");
     await flushPromises();
-    expect((btn(b, "保存").element as HTMLButtonElement).disabled).toBe(false);
-
-    mockInvoke.mockClear();
-    await btn(b, "取消").trigger("click");
-    await flushPromises();
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
-    expect(b.findAll(".vision-entry")).toHaveLength(1); // 草稿复原
-    expect((btn(b, "保存").element as HTMLButtonElement).disabled).toBe(true); // 回到无变更
+    expect(mockInvoke).toHaveBeenCalledWith("set_preference", {
+      key: "vision_profile_ids", value: '["mp-2"]',
+    });
+    expect(b.findAll(".vision-entry")).toHaveLength(1);
   });
 
   it("空链也有添加入口（「添加视觉模型」= 第一条主模型）", async () => {
@@ -212,34 +208,25 @@ describe("GeneralSettings 通用设置页（三卡显式保存）", () => {
     expect(b.findAll(".vision-tag")[0].text()).toBe("主模型");
   });
 
-  it("停用语义检索：草稿置空 → 保存提交空串（显式清空，保留向量无重建）", async () => {
+  it("停用语义检索：点击停用即提交空串（显式清空，保留向量无重建）", async () => {
     prefs = { embedding_profile_id: "mp-2" };
     const w = await mountPage();
     const card = cards(w)[2];
 
     await btn(card, "停用").trigger("click");
     await flushPromises();
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false); // 只动草稿
-
-    await btn(card, "保存").trigger("click");
-    await flushPromises();
     expect(mockInvoke).toHaveBeenCalledWith("set_preference", { key: "embedding_profile_id", value: '""' });
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "rebuild_all_embeddings")).toBe(false);
   });
 
-  it("本地环境卡：时区检测只填草稿，点「保存」才落库", async () => {
+  it("本地环境：时区检测即时落库", async () => {
     prefs = {};
     const w = await mountPage();
     const a = cards(w)[0];
 
     await a.find('button[title="自动检测时区"]').trigger("click");
     await flushPromises();
-    // 检测 = 草稿（tz-status 已显示，零写入）
-    expect(a.find(".tz-status.on").exists()).toBe(true);
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_preference")).toBe(false);
-
-    await btn(a, "保存").trigger("click");
-    await flushPromises();
+    // 检测即落库（无保存按钮）
     expect(mockInvoke).toHaveBeenCalledWith("set_preference", { key: "timezone", value: expect.any(String) });
   });
 });

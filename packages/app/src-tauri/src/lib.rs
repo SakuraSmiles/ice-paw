@@ -254,6 +254,7 @@ pub fn run() {
             commands::log_cmd::get_data_dir,
             commands::log_cmd::open_data_dir,
             commands::app_cmd::get_app_info,
+            commands::app_cmd::open_path,
             commands::provider_cmd::list_providers,
             commands::provider_cmd::test_provider_connection,
             commands::provider_cmd::test_agent_model_chain,

@@ -437,11 +437,15 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 960px;
   margin: 0 auto;
-  /* 内容淡出（收缩期）/ 淡入（展开期）共用；耗时与收缩/展开一致（200ms） */
-  transition: opacity var(--ip-duration-message) var(--ip-ease-out);
+  /* 内容淡出（收缩期）/ 淡入（展开期）共用；耗时与收缩/展开一致（200ms）。
+     退出叠加 6px 微下沉 = 「反向定稿」短动作，淡入时自下回正（所有二级页统一） */
+  transition:
+    opacity var(--ip-duration-message) var(--ip-ease-out),
+    transform var(--ip-duration-message) var(--ip-ease-out);
 }
 
 .settings-content.is-faded {
   opacity: 0;
+  transform: translateY(6px);
 }
 </style>

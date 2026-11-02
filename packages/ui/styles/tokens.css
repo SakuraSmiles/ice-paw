@@ -80,6 +80,9 @@
   /* 展示字体（Hero / 大标题） */
   --ip-font-display: 'Instrument Serif', 'LXGW WenKai TC', 'LXGW WenKai', 'Source Han Serif SC', 'Songti SC', serif;
 
+  /* 宽体几何数字（分组标题背景大字——Oxanium 800，2026-10-31） */
+  --ip-font-num: 'Oxanium', 'Barlow Condensed', var(--ip-font-sans);
+
   /* 字号梯度（v1.0.1 §1.2.2） */
   --ip-text-display-size:  40px; --ip-text-display-lh: 44px;
   --ip-text-h1-size:       28px; --ip-text-h1-lh:      34px;

@@ -25,6 +25,12 @@
 /* ---- 拉丁：Orbitron（可变字重，启动页字标用——偏宽体几何科幻风，2026-10-28） ---- */
 @import '@fontsource-variable/orbitron/wght.css';
 
+/* ---- 拉丁：Barlow Condensed（700 制图序号——窄体几何，EVA 式数字，2026-10-31） ---- */
+@import '@fontsource/barlow-condensed/700.css';
+
+/* ---- 拉丁：Oxanium（800 宽体几何数字——分组标题背景大字，2026-10-31） ---- */
+@import '@fontsource/oxanium/800.css';
+
 /* ---- 中文：Noto Sans SC（正文，简中子集） ---- */
 @font-face {
   font-family: 'Noto Sans SC';
