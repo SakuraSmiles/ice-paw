@@ -661,6 +661,8 @@ async fn context_breakdown_round_trip() {
                     tools_hash: "aaaabbbbcccc".into(),
                     injected: false,
                     model_switched: false,
+                    model: None,
+                    completion: 0,
                 },
                 ContextBreakdownRound {
                     prompt: 6_100,
@@ -668,6 +670,8 @@ async fn context_breakdown_round_trip() {
                     tools_hash: "aaaabbbbcccd".into(),
                     injected: true,
                     model_switched: true,
+                    model: None,
+                    completion: 0,
                 },
             ],
         },

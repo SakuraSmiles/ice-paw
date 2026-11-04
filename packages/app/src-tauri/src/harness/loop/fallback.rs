@@ -53,13 +53,19 @@ pub(crate) trait FallbackResolver: Send + Sync {
 pub(crate) struct FallbackPlan {
     /// 备用 profile id 有序链（JSON 数组列解析产物；去重/排除主档在写入侧保证）
     pub chain: Vec<String>,
-    /// 下一个待尝试的链下标（单调前进：失败的档本回合不再回头）
+    /// 下一个待尝试的链下标（单调前进：失败的档本回合不再回头——**回探例外**：
+    /// 主档冷却期满后经 [`ProbeState`] 重试，见模块尾「回探」节）
     pub cursor: usize,
     /// 解析器（生产 ProfileFallbackResolver / e2e MapResolver；None = 无链）
     pub resolver: Option<Arc<dyn FallbackResolver>>,
     /// 当前激活档位对应的 profile id（主档引用时 = model_profile_id；legacy
     /// 手动主档 = None——健康记录 no-op）。换档成功后指向新档。
     pub active_profile_id: Option<String>,
+    /// 回合起跑时的主档引用（回探目标；legacy 手动主档 = None → 回探结构性
+    /// 不可能，行为与旧版逐字节一致）。
+    pub initial_profile_id: Option<String>,
+    /// 回探状态（首次换档离开主档时创建；None = 从未换档 / legacy / 回探成功后清除）
+    pub probe: Option<ProbeState>,
     /// resolve 参数一：agent 行 `max_tokens` **原值**（非主档有效值——主档的
     /// 策展抬升随主模型，跨档累积会把旧档的策展值强加给新档）。换档后
     /// `effective_output_cap` 以它为新基准重算。
@@ -67,6 +73,66 @@ pub(crate) struct FallbackPlan {
     /// resolve 参数二：与主档一致的 cache_prompt（传给 create_provider——
     /// 前缀缓存开关是 agent 级偏好，不随档位变）。
     pub cache_prompt: bool,
+    /// 回探冷却覆盖（**e2e 专用**——生产 None 走原因驱动默认表；压缩冷却让
+    /// 「换档 → 下一轮回探」全链路在测试里秒级可驱动）。
+    pub probe_cooldown_override: Option<std::time::Duration>,
+}
+
+/// 主档回探状态（换档后不回头原则的**瞬态例外**，2026-11-04）。
+///
+/// 生产实案：GLM Coding 端点在套餐配额/并发压力下返回 429+1113（分类 quota →
+/// 零退避即时换档），而委派子任务 = 一个数十轮的长回合——一次瞬态 1113 把整个
+/// 下午的全部工作量静默转移到降档模型（DeepSeek 余额烧穿）。quota/rate_limited/
+/// network 三类触发都可能自愈，按冷却窗口回探主档：成功即切回（事件 reason=
+/// `recovered`），失败还原到换出档并按 ×2 退避拉长冷却；不可恢复类（Auth 等）
+/// 本回合不再回探。
+pub(crate) struct ProbeState {
+    /// 下次回探时刻（None = 本回合不再回探：不可恢复类失败，或主档解析失败循环）
+    pub next_at: Option<tokio::time::Instant>,
+    /// 当前回探冷却间隔（失败 ×2 增长到 cap）
+    pub backoff: std::time::Duration,
+    /// 冷却上限（按首次换档触发原因定档）
+    pub cap: std::time::Duration,
+    /// 回探目标：主档的完整档位（resolve 产物——切回时直接换入五字段）
+    pub primary: Option<ResolvedModel>,
+    /// 回退目标：换出档的完整快照（回探失败时直接还原，不靠 cursor 重走链——
+    /// 链走法可能落进更深的死档，直接还原保证回到已知可用档）
+    pub last_good: Option<ResolvedModel>,
+    /// 还原后的 cursor 恢复位（换出档在链中下标 +1）
+    pub restore_cursor: usize,
+    /// 本轮正在回探主档（stream_with_retry 失败路径的分流依据）
+    pub live: bool,
+}
+
+/// 按首次换档触发原因定回探冷却初值：quota（含 GLM 1113——套餐窗口/并发类
+/// 多为分钟级自愈）短冷却快回；rate_limited（如 DeepSeek 1308 五小时窗）长冷却。
+fn initial_probe_backoff(trigger: &str) -> std::time::Duration {
+    match trigger {
+        "quota" => std::time::Duration::from_secs(60),
+        "rate_limited" => std::time::Duration::from_secs(600),
+        _ => std::time::Duration::from_secs(300),
+    }
+}
+
+/// 冷却上限（同上按原因定档）。
+fn probe_backoff_cap(trigger: &str) -> std::time::Duration {
+    match trigger {
+        "quota" => std::time::Duration::from_secs(900),
+        "rate_limited" => std::time::Duration::from_secs(3600),
+        _ => std::time::Duration::from_secs(1800),
+    }
+}
+
+/// 回探失败后的冷却推进（纯函数）：可恢复类 ×2 增长到 cap；不可恢复类返回
+/// None（本回合不再回探）。
+fn probe_cooldown_after_failure(
+    backoff: std::time::Duration,
+    cap: std::time::Duration,
+    kind: crate::error::LlmErrorKind,
+) -> Option<std::time::Duration> {
+    // fallback_trigger 覆盖的触发面 = 可能自愈的错误族；其余（Auth/Forbidden/
+    // ContextTooLong/Sensitive/Unknown）换档也解决不了，主档同理不再试（None）
+    fallback_trigger(kind).map(|_| backoff.saturating_mul(2).min(cap))
 }
 
 impl FallbackPlan {
@@ -77,8 +143,11 @@ impl FallbackPlan {
             cursor: 0,
             resolver: None,
             active_profile_id: None,
+            initial_profile_id: None,
+            probe: None,
             agent_max_tokens: 0,
             cache_prompt: false,
+            probe_cooldown_override: None,
         }
     }
 
@@ -94,10 +163,21 @@ impl FallbackPlan {
             chain,
             cursor: 0,
             resolver: Some(resolver),
-            active_profile_id,
+            active_profile_id: active_profile_id.clone(),
+            // 回探目标 = 回合起跑档（首次换档前它就是主档）
+            initial_profile_id: active_profile_id,
+            probe: None,
             agent_max_tokens,
             cache_prompt,
+            probe_cooldown_override: None,
         }
+    }
+
+    /// e2e 专用：压缩回探冷却（生产勿用——默认表按触发原因驱动；仅测试构建可见）。
+    #[cfg(test)]
+    pub(crate) fn with_probe_cooldown(mut self, d: std::time::Duration) -> Self {
+        self.probe_cooldown_override = Some(d);
+        self
     }
 
     /// 还有可尝试的备用档吗（链未尽且 resolver 在位）。
@@ -212,6 +292,15 @@ pub(crate) async fn try_switch_model(
                 let to_alias = resolved.alias.clone();
                 let to_model = resolved.model.clone();
                 let to_profile_id = resolved.profile_id.clone();
+                // 换出档完整快照（回探回退目标）：五字段此刻还是换出档的值
+                let from_tier = ResolvedModel {
+                    profile_id: from_profile_id.clone().unwrap_or_default(),
+                    alias: String::new(),
+                    provider: ctx.provider.clone(),
+                    api_key: ctx.api_key.clone(),
+                    model: from_model.clone(),
+                    max_tokens: ctx.max_tokens,
+                };
 
                 // swap 五字段（决策 8）：asst_model 跟随新档位 model——会话级
                 // model_override 是针对原模型的意图，跨档失效；预算 cap 不重置
@@ -224,6 +313,9 @@ pub(crate) async fn try_switch_model(
                 ctx.fallback.active_profile_id = Some(to_profile_id.clone());
                 ctx.fallback.cursor += 1;
 
+                // 回探登记：离开主档后按触发原因起冷却窗口（瞬态失败——尤其
+                // GLM 1113 的套餐窗口/并发语义——不再把整个长回合钉死在降档）
+                register_probe(ctx, trigger, from_tier);
                 tracing::info!(target: "ice_paw.fallback",
                     conv = %ctx.conv_id,
                     attempt = switch_attempt,
@@ -271,6 +363,254 @@ pub(crate) async fn try_switch_model(
         reason = trigger,
         "降级链已尽，走原终态路径");
     false
+}
+
+// ============================================================================
+// 主档回探（2026-11-04）：换档「不回头」原则的瞬态例外
+// ============================================================================
+
+/// 换档成功后登记/更新回探状态（[`try_switch_model`] 成功臂调用）。
+///
+/// - 首次离开主档：按触发原因建 `ProbeState`（冷却初值 + 上限 + 回退目标）；
+/// - 已在回探循环（回探失败后经链换向更深档）：只更新回退目标与 cursor 恢复位；
+/// - legacy 主档（`initial_profile_id` None）：结构性不可能回探，零登记。
+fn register_probe(ctx: &mut LoopContext, trigger: &str, from_tier: ResolvedModel) {
+    let Some(initial) = ctx.fallback.initial_profile_id.clone() else {
+        return;
+    };
+    let to_profile_id = ctx.fallback.active_profile_id.clone().unwrap_or_default();
+    if initial == to_profile_id {
+        // 换向主档本身：仅 probe 专用路径之外不该发生；防御性清除回探状态
+        ctx.fallback.probe = None;
+        return;
+    }
+    let restore_cursor = ctx.fallback.cursor;
+    match ctx.fallback.probe.as_mut() {
+        None => {
+            let backoff = ctx
+                .fallback
+                .probe_cooldown_override
+                .unwrap_or_else(|| initial_probe_backoff(trigger));
+            ctx.fallback.probe = Some(ProbeState {
+                next_at: Some(tokio::time::Instant::now() + backoff),
+                backoff,
+                cap: probe_backoff_cap(trigger).max(backoff),
+                primary: None,
+                last_good: Some(from_tier),
+                restore_cursor,
+                live: false,
+            });
+        }
+        Some(p) => {
+            // 回探失败后走链换向更深档：回退目标跟到新档（回探失败时还原到
+            // 「最近已知可用档」，不是当初第一次换出的那个）
+            p.last_good = Some(from_tier);
+            p.restore_cursor = restore_cursor;
+        }
+    }
+}
+
+/// 本轮是否正在回探主档（retry_round 失败路径分流依据）。
+pub(crate) fn probe_live(ctx: &LoopContext) -> bool {
+    ctx.fallback
+        .probe
+        .as_ref()
+        .is_some_and(|p| p.live && p.primary.is_some())
+}
+
+/// 冷却期满则起一次回探：resolve 主档 → 快照当前档为回退目标 → 换入主档。
+/// resolve 失败 = 顺延冷却（主档配置坏了不该每轮都去撞）。
+/// [`stream_with_retry`] 每轮顶部调用。
+pub(crate) async fn maybe_start_probe(ctx: &mut LoopContext) {
+    // 门槛短路（序：无状态 → 在途 → 已熄灭 → 未到期）
+    {
+        let Some(p) = ctx.fallback.probe.as_ref() else {
+            return;
+        };
+        if p.live {
+            return;
+        }
+        let Some(next_at) = p.next_at else {
+            return; // 本回合不再回探（不可恢复类）
+        };
+        if next_at > tokio::time::Instant::now() {
+            return;
+        }
+    }
+    let Some(primary_id) = ctx.fallback.initial_profile_id.clone() else {
+        return;
+    };
+    // 主档已是激活档（回探成功的后续轮次）：清除回探状态（防御路径）
+    if ctx.fallback.active_profile_id.as_deref() == Some(primary_id.as_str()) {
+        ctx.fallback.probe = None;
+        return;
+    }
+    let Some(resolver) = ctx.fallback.resolver.clone() else {
+        return;
+    };
+    match resolver
+        .resolve(
+            &primary_id,
+            ctx.fallback.agent_max_tokens,
+            ctx.fallback.cache_prompt,
+        )
+        .await
+    {
+        Ok(primary) => {
+            // 当前档完整快照 = 回退目标（五字段此刻是换出档的值）
+            let last_good = ResolvedModel {
+                profile_id: ctx.fallback.active_profile_id.clone().unwrap_or_default(),
+                alias: String::new(),
+                provider: ctx.provider.clone(),
+                api_key: ctx.api_key.clone(),
+                model: ctx.model.clone().unwrap_or_default(),
+                max_tokens: ctx.max_tokens,
+            };
+            let restore_cursor = ctx.fallback.cursor;
+            let to_model = primary.model.clone();
+            let to_profile_id = primary.profile_id.clone();
+
+            ctx.provider = primary.provider.clone();
+            ctx.api_key = primary.api_key.clone();
+            ctx.model = Some(primary.model.clone());
+            ctx.asst_model = Some(primary.model.clone());
+            ctx.max_tokens = primary.max_tokens;
+            ctx.fallback.active_profile_id = Some(primary.profile_id.clone());
+            // cursor 归零：回探若失败走链重换，从链头重新起跑（对齐回合起跑语义）
+            ctx.fallback.cursor = 0;
+
+            if let Some(p) = ctx.fallback.probe.as_mut() {
+                p.primary = Some(primary);
+                p.last_good = Some(last_good);
+                p.restore_cursor = restore_cursor;
+                p.live = true;
+            }
+            // 回探也是缓存命名空间切换（usage 归因的 model_switched 位）
+            ctx.turn_cost.mark_model_switched();
+            tracing::info!(target: "ice_paw.fallback",
+                conv = %ctx.conv_id,
+                "冷却期满，回探主档 {to_profile_id}（{to_model}）——成功即切回，失败还原");
+        }
+        Err(e) => {
+            if let Some(p) = ctx.fallback.probe.as_mut() {
+                if let Some(next_at) = p.next_at {
+                    p.next_at = Some(next_at + p.backoff);
+                }
+            }
+            tracing::warn!(target: "ice_paw.fallback",
+                conv = %ctx.conv_id,
+                "回探主档解析失败（顺延冷却）: {e}");
+        }
+    }
+}
+
+/// 回探失败：还原到回退目标（最近已知可用档）+ 冷却推进。
+/// 可恢复类 ×2 增长到 cap；不可恢复类 `next_at = None`（本回合不再回探）。
+/// 回退目标缺失（防御）= 仅结束回探态，保持当前档（走原终态语义）。
+/// 返回 true = 已还原可继续本轮（调用方 continue）；false = 无法还原。
+pub(crate) fn abort_probe(
+    ctx: &mut LoopContext,
+    retry_state: &mut crate::harness::retry::RetryState,
+    error_text: &str,
+) -> bool {
+    let Some(mut probe) = ctx.fallback.probe.take() else {
+        return false;
+    };
+    if !probe.live {
+        ctx.fallback.probe = Some(probe);
+        return false;
+    }
+    let kind = crate::error::classify_llm_error(error_text);
+    let restored_model = probe
+        .last_good
+        .as_ref()
+        .map(|lg| lg.model.clone())
+        .unwrap_or_default();
+    // 还原五字段 + cursor
+    if let Some(lg) = probe.last_good.take() {
+        ctx.provider = lg.provider;
+        ctx.api_key = lg.api_key;
+        ctx.model = Some(lg.model.clone());
+        ctx.asst_model = Some(lg.model);
+        ctx.max_tokens = lg.max_tokens;
+        ctx.fallback.active_profile_id = Some(lg.profile_id);
+        ctx.fallback.cursor = probe.restore_cursor;
+    }
+    // 冷却推进（不可恢复类熄灭回探）
+    match probe_cooldown_after_failure(probe.backoff, probe.cap, kind) {
+        Some(grown) => {
+            probe.backoff = grown;
+            probe.next_at = Some(tokio::time::Instant::now() + grown);
+        }
+        None => probe.next_at = None,
+    }
+    probe.live = false;
+    probe.primary = None;
+    ctx.fallback.probe = Some(probe);
+    // 回探尝试不计入退避预算（还原后等效全新一轮）
+    *retry_state = crate::harness::retry::RetryState::new();
+    // 还原也是缓存命名空间切换
+    ctx.turn_cost.mark_model_switched();
+    tracing::info!(target: "ice_paw.fallback",
+        conv = %ctx.conv_id,
+        kind = ?kind,
+        "回探主档失败，还原 {restored_model}；下次回探冷却已推进");
+    true
+}
+
+/// 回探成功（本轮在主档上产出内容）：清除回探状态 + 落 `recovered` 换档事件
+/// + emit toast（用户可见「已切回主模型」）。[`stream_with_retry`] Ok 臂调用。
+pub(crate) async fn probe_succeeded(ctx: &mut LoopContext, current_asst_msg_id: &str) {
+    let Some(probe) = ctx.fallback.probe.take() else {
+        return;
+    };
+    if !probe.live {
+        ctx.fallback.probe = Some(probe);
+        return;
+    }
+    let Some(primary) = probe.primary else {
+        return;
+    };
+    let Some(last_good) = probe.last_good else {
+        return;
+    };
+    let from_model = last_good.model.clone();
+    let from_profile_id = last_good.profile_id.clone();
+    let to_alias = primary.alias.clone();
+    let to_model = primary.model.clone();
+    let to_profile_id = primary.profile_id.clone();
+    tracing::info!(target: "ice_paw.fallback",
+        conv = %ctx.conv_id,
+        "回探主档成功 → {to_profile_id}（{to_model}），已切回");
+    let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
+    log_model_switch(
+        &ctx.pool,
+        &ev,
+        &ModelSwitchPayload {
+            v: 1,
+            from_profile_id: Some(from_profile_id),
+            from_model: from_model.clone(),
+            to_profile_id,
+            to_alias: to_alias.clone(),
+            to_model: to_model.clone(),
+            reason: "recovered".to_string(),
+            attempt: 0,
+            error: None,
+        },
+    )
+    .await;
+    super::emitter::emit_ser(
+        ctx.emitter.as_ref(),
+        "chat:model-switched",
+        &ChatModelSwitchedPayload {
+            conversation_id: ctx.conv_id.clone(),
+            message_id: current_asst_msg_id.to_string(),
+            from_model,
+            to_alias,
+            to_model,
+            reason: "recovered".to_string(),
+        },
+    );
 }
 
 #[cfg(test)]
@@ -354,5 +694,35 @@ mod tests {
         // 策展值更高 → 抬到策展（断言只抬不降的语义，不锁具体策展值——表会演进）
         assert!(effective_output_cap(1_000, "glm", "glm-5.3") > 1_000);
         assert_eq!(effective_output_cap(1_000, "totally-unknown", "m"), 16_384);
+    }
+
+    /// 回探冷却表：quota 短冷却快回（GLM 1113 的套餐窗口/并发多为分钟级自愈）；
+    /// rate_limited 长冷却（DeepSeek 1308 类五小时窗）；cap 同序。
+    #[test]
+    fn probe_backoff_table_by_trigger() {
+        assert_eq!(initial_probe_backoff("quota"), std::time::Duration::from_secs(60));
+        assert_eq!(initial_probe_backoff("rate_limited"), std::time::Duration::from_secs(600));
+        assert_eq!(initial_probe_backoff("network"), std::time::Duration::from_secs(300));
+        assert_eq!(probe_backoff_cap("quota"), std::time::Duration::from_secs(900));
+        assert_eq!(probe_backoff_cap("rate_limited"), std::time::Duration::from_secs(3600));
+    }
+
+    /// 回探失败冷却推进：可恢复类 ×2 封顶；不可恢复类（Auth 等）熄灭回探。
+    #[test]
+    fn probe_cooldown_grows_and_extinguishes() {
+        use crate::error::LlmErrorKind as K;
+        use std::time::Duration;
+        // quota 60s → 120s → 240s → … cap 900s
+        let cap = probe_backoff_cap("quota");
+        let mut b = initial_probe_backoff("quota");
+        b = probe_cooldown_after_failure(b, cap, K::RateLimited).unwrap();
+        assert_eq!(b, Duration::from_secs(120));
+        b = probe_cooldown_after_failure(b, cap, K::GlmResourcePack).unwrap();
+        assert_eq!(b, Duration::from_secs(240));
+        b = probe_cooldown_after_failure(Duration::from_secs(600), cap, K::Network).unwrap();
+        assert_eq!(b, Duration::from_secs(900), "封顶不越界");
+        // 不可恢复类 → None（本回合不再回探）
+        assert!(probe_cooldown_after_failure(b, cap, K::Auth).is_none());
+        assert!(probe_cooldown_after_failure(b, cap, K::ContextTooLong).is_none());
     }
 }

@@ -321,6 +321,11 @@ export const useChatStore = defineStore("chat", () => {
     /** 进程感（chat:round-state 驱动，批 2）：当前轮号 / 回合累计时长。 */
     round: number;
     elapsedMs: number;
+    /** 换档诚实化（2026-11-04）：本回合当前实际档位（null = 主档）。
+     *  chat:model-switched 置位 / recovered 清空；回合结束与新回合清空。
+     *  头部模型位、cursor-bar 换档胶囊的常驻数据源（状态上屏——治「换档了
+     *  页面还显示主模型」的诚实性问题）。 */
+    switchedTo: { alias: string; model: string; reason: string } | null;
   }
   function newStream(): SessionStream {
     return {
@@ -335,6 +340,7 @@ export const useChatStore = defineStore("chat", () => {
       phase: initialPhaseOf(),
       round: 0,
       elapsedMs: 0,
+      switchedTo: null,
     };
   }
   /** 相位推进（桶内，事件层调用）：聚合桶内工具统计喂 reducer。 */
@@ -427,12 +433,30 @@ export const useChatStore = defineStore("chat", () => {
     quota: "额度耗尽",
     rate_limited: "限流重试耗尽",
     network: "端点不可达",
+    recovered: "已恢复",
   };
 
-  function updateModelSwitched(p: ChatModelSwitchedPayload) {
-    const reason = SWITCH_REASON_LABELS[p.reason] ?? p.reason;
-    modelSwitchNotice.value =
-      `模型已切换：${p.to_alias}（${p.to_model}）——主模型${reason}，继续生成`;
+  /** 换档诚实化（2026-11-04）：桶内常驻档位（switchedTo）+ 头部模型位随实际
+   *  档位走（currentModel——headerModel 流式期读它）。后台会话同样写桶（切回
+   *  会话时状态在场）；toast 只在激活会话弹。 */
+  function updateModelSwitched(cid: string, p: ChatModelSwitchedPayload) {
+    const bucket = ensureStream(cid);
+    if (p.reason === "recovered") {
+      // 主档回探成功切回：档位回主档
+      bucket.switchedTo = null;
+    } else {
+      bucket.switchedTo = { alias: p.to_alias, model: p.to_model, reason: p.reason };
+    }
+    if (cid === activeConvId.value) currentModel.value = p.to_model;
+    else return; // 后台会话：桶内照写，不弹激活会话的 toast
+    if (p.reason === "recovered") {
+      modelSwitchNotice.value =
+        `已切回主模型：${p.to_alias || p.to_model}（${p.to_model}）`;
+    } else {
+      const reason = SWITCH_REASON_LABELS[p.reason] ?? p.reason;
+      modelSwitchNotice.value =
+        `模型已切换：${p.to_alias}（${p.to_model}）——主模型${reason}，继续生成`;
+    }
     if (modelSwitchTimer) clearTimeout(modelSwitchTimer);
     modelSwitchTimer = setTimeout(() => {
       modelSwitchNotice.value = null;
@@ -448,6 +472,8 @@ export const useChatStore = defineStore("chat", () => {
   // ===== 流式工具调用/思考状态（投影；真身在激活桶） =====
   const streamingToolCalls = computed(() => activeStream.value.streamingToolCalls);
   const streamingThinking = computed(() => activeStream.value.streamingThinking);
+  /** 换档诚实化：激活会话当前实际档位（null = 主档）——cursor-bar 胶囊数据源。 */
+  const switchedTo = computed(() => activeStream.value.switchedTo);
   /** 摘要压缩进行中（chat:summary-started 置位 / summary-injected·首 token 复位）。
    *  0.9 阶段提示：气泡 footer「压缩历史消息中」的驱动信号。回合级瞬态，
    *  随 resetRoundStreaming 复位（防失败路径残留）。 */
@@ -778,6 +804,8 @@ export const useChatStore = defineStore("chat", () => {
     const conv = activeConversation.value;
     const agent = conv ? agentStore.getById(conv.agent_id) : null;
     currentModel.value = agent?.model ?? null;
+    // 新回合从主档起跑：清上一回合遗留的换档档位（防 sending 置位瞬间闪旧胶囊）
+    ensureStream(activeConvId.value).switchedTo = null;
 
     const blocks = contentBlocks ?? [];
     const files = collectSendAttachments(blocks);
@@ -1261,7 +1289,7 @@ export const useChatStore = defineStore("chat", () => {
     messages, msgLoading, hasMore, loadingMore, pagedOnce, pageCursor,
     msgLoadError, loadMoreError,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
-    budget, updateBudget, modelSwitchNotice, updateModelSwitched, lastTurnRounds,
+    budget, updateBudget, modelSwitchNotice, updateModelSwitched, lastTurnRounds, switchedTo,
     streamingToolCalls, streamingThinking, summarizing, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
     // sendingConvId 暴露为只读（激活桶投影）：事件层 chat:start 据此区分「用户发起

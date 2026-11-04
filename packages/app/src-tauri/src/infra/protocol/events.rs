@@ -36,6 +36,10 @@ pub struct ChatStartPayload {
 pub struct ChatAssistantStartPayload {
     pub conversation_id: String,
     pub message_id: String,
+    /// 本轮实际使用的模型（降级链换档后 ≠ agent 主模型；None = legacy 无值，
+    /// 前端回落 currentModel）。诚实显示的数据源——占位行的 model 徽章随它走。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// `chat:delegation-started` 事件 payload（MA-1 UX：运行中即可达）

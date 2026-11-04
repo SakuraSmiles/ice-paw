@@ -169,3 +169,51 @@ describe("MarkdownRenderer XSS 锁定", () => {
     expect(anchor.attributes("href")).toBe("https://example.com");
   });
 });
+
+// ===== 主线程纪律（2026-11-04 线程饥饿根治批）=====
+// ① 流式期未闭合尾 fence 不着色（增长中的代码块反复 hljs 是每 tick 最贵一档；
+//    完成时一次性着色）；已完成块（含流式态下的先前块）照常着色。
+// ② 页面不可见冻结（liveRenderFrozen）：冻结期跳过重渲染、解冻统一补一次。
+describe("MarkdownRenderer 主线程纪律", () => {
+  it("流式期未闭合尾 fence 纯文本不着色（data-uncolored）；完成后着色", async () => {
+    const growing = "```rust\nfn a() {}\nfn b() {"; // 未闭合（增长中）
+    const live = mount(MarkdownRenderer, { props: { content: growing, streaming: true } });
+    const tail = live.find(".md-code-block");
+    expect(tail.attributes("data-uncolored")).toBe("1");
+    expect(tail.find("code").html()).not.toContain("hljs-keyword");
+
+    // 完成（闭合 + streaming=false）→ 一次性着色
+    await live.setProps({ content: growing + "\n}\n```", streaming: false });
+    const done = live.find(".md-code-block");
+    expect(done.attributes("data-uncolored")).toBeUndefined();
+    expect(done.find("code").html()).toContain("hljs-keyword");
+  });
+
+  it("流式期先前已完成的代码块照常着色（只有尾块跳过）", () => {
+    const content = "```ts\nconst a = 1;\n```\n\n正文段落\n\n```rust\nfn grow";
+    const w = mount(MarkdownRenderer, { props: { content, streaming: true } });
+    const blocks = w.findAll(".md-code-block");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].attributes("data-uncolored")).toBeUndefined();
+    expect(blocks[0].find("code").html()).toContain("hljs-keyword");
+    expect(blocks[1].attributes("data-uncolored")).toBe("1");
+  });
+
+  it("冻结期跳过重渲染，解冻统一补一次（隐藏页不再隐形烧主线程）", async () => {
+    const { liveRenderFrozen } = await import("../../../utils/liveFreeze");
+    liveRenderFrozen.value = false;
+    const w = mount(MarkdownRenderer, { props: { content: "初始" } });
+    expect(w.find(".markdown-body").text()).toBe("初始");
+
+    liveRenderFrozen.value = true;
+    await w.setProps({ content: "冻结期间的更新" });
+    // 冻结：不重渲染（旧内容保持——隐藏页本来也没人看）
+    expect(w.find(".markdown-body").text()).toBe("初始");
+
+    liveRenderFrozen.value = false;
+    await Promise.resolve();
+    // 解冻：一次性补上最新内容
+    expect(w.find(".markdown-body").text()).toBe("冻结期间的更新");
+    liveRenderFrozen.value = false;
+  });
+});

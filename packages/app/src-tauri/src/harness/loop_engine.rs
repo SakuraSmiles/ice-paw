@@ -510,7 +510,9 @@ async fn stream_loop_inner(
                     round_miss_hint = ctx.turn_cost.record_usage(
                         u.prompt_tokens as u64,
                         u.cached_tokens as u64,
+                        u.completion_tokens as u64,
                         round_injected_flag,
+                        ctx.asst_model.as_deref(),
                     );
                     collected_usage = Some(u);
                 }
@@ -747,6 +749,7 @@ async fn stream_loop_inner(
             &msg_text,
             &round_blocks,
             round_completion_tokens,
+            ctx.asst_model.as_deref(),
         )
         .await;
         // 权威快照事件（与上面落库的 content/blocks 同值；supersede：续写链同
@@ -1174,6 +1177,8 @@ async fn stream_loop_inner(
             &ChatAssistantStartPayload {
                 conversation_id: ctx.conv_id.clone(),
                 message_id: next_asst_id.clone(),
+                // 诚实显示：换档后新占位行带实际模型（前端徽章不再恒显主模型）
+                model: ctx.asst_model.clone(),
             },
         );
         current_asst_msg_id = next_asst_id;

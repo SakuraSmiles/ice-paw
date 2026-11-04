@@ -93,6 +93,24 @@ function roundToolsChanged(i: number): boolean {
   const rs = breakdown.value?.rounds ?? [];
   return i > 0 && i < rs.length && rs[i].tools_hash !== rs[i - 1].tools_hash;
 }
+/** 分模型 token 统计（换档诚实化 2026-11-04）：按 rounds.model 聚合计费口径
+ *  （未命中全价 + 命中 1/10 + 输出全价——与预算口径同源）。>1 个模型才呈现
+ *  （单模型回合 = 常态无信息量）；旧事件 rounds 无 model 字段 → 空数组不显。 */
+const modelSplit = computed<{ model: string; billed: number; rounds: number }[]>(() => {
+  const rs = breakdown.value?.rounds ?? [];
+  const agg = new Map<string, { billed: number; rounds: number }>();
+  for (const r of rs) {
+    if (!r.model) continue;
+    const billed = (r.prompt - r.cached) + Math.round(r.cached / 10) + (r.completion ?? 0);
+    const cur = agg.get(r.model) ?? { billed: 0, rounds: 0 };
+    cur.billed += billed;
+    cur.rounds += 1;
+    agg.set(r.model, cur);
+  }
+  return [...agg.entries()]
+    .map(([model, v]) => ({ model, ...v }))
+    .sort((a, b) => b.billed - a.billed);
+});
 
 type ThinkingBlock = Extract<ContentBlock, { type: "thinking" }>;
 type ImageBlock = Extract<ContentBlock, { type: "image" }>;
@@ -338,6 +356,13 @@ async function copyPayload() {
               <span>合计</span>
               <b>估算 {{ formatTokenCount(header.breakdown.est_total) }} tok<template v-if="header.breakdown.actual_prompt_tokens != null"> · 实际首轮输入 {{ formatTokenCount(header.breakdown.actual_prompt_tokens) }} tok<template v-if="deviationText">（{{ deviationText }}）</template></template></b>
             </div>
+            <div v-if="modelSplit.length > 1" class="isub">分模型计费</div>
+            <template v-if="modelSplit.length > 1">
+              <div v-for="m in modelSplit" :key="`ms-${m.model}`" class="ibd-round">
+                <span class="ibd-rlabel">{{ m.model }}</span>
+                <span class="ibd-num">{{ formatTokenCount(m.billed) }} tok · {{ m.rounds }} 轮</span>
+              </div>
+            </template>
             <div v-if="header.breakdown.rounds.length" class="isub">逐轮命中</div>
             <div v-for="(r, i) in header.breakdown.rounds" :key="`bd-r${i}`" class="ibd-round">
               <span class="ibd-rlabel">轮 {{ i + 1 }}</span>

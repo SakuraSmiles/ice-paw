@@ -676,6 +676,13 @@ pub struct ContextBreakdownRound {
     pub injected: bool,
     /// 本轮是否发生过降级链换档（缓存命名空间切换）
     pub model_switched: bool,
+    /// 本轮实际使用的模型名（换档诚实化 2026-11-04：分模型 token 统计的数据源；
+    /// 旧事件缺席 = 未记录）。serde default 保旧事件可读。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// 本轮 completion_tokens 真值（分模型统计的输出口径；旧事件缺席按 0）
+    #[serde(default)]
+    pub completion: u64,
 }
 
 // =========================================================================

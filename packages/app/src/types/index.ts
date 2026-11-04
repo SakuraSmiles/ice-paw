@@ -397,6 +397,8 @@ export interface ChatStartPayload {
 export interface ChatAssistantStartPayload {
   conversation_id: string;
   message_id: string;
+  /** 本轮实际模型（换档后 ≠ 主模型；缺席回落 currentModel——旧后端兼容） */
+  model?: string | null;
 }
 
 /** 委派子会话创建成功即 emit（运行中卡片/任务胶囊可达；前端据此刷新会话列表） */
@@ -683,6 +685,10 @@ export interface ContextBreakdownRound {
   injected: boolean;
   /** 本轮是否发生过降级链换档（缓存命名空间切换） */
   model_switched: boolean;
+  /** 本轮实际使用的模型名（换档诚实化 2026-11-04；旧事件缺席） */
+  model?: string;
+  /** 本轮 completion_tokens（旧事件缺席按 0） */
+  completion?: number;
 }
 
 /** `context_breakdown`——一条事件装整回合的上下文组成 + 指纹 + 逐轮 usage 序列 */

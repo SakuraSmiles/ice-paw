@@ -1147,6 +1147,93 @@ async fn quota_first_attempt_switches_and_completes() {
     );
 }
 
+/// 用例 E：主档回探（2026-11-04）——quota 即时换档后，冷却期满的下一轮先用
+/// 主档试一次；主档已恢复即切回（reason=recovered），整回合零错误终态。
+/// 生产实案：GLM Coding 端点瞬态 1113 把整个长回合钉死在降档（DeepSeek 烧穿）。
+#[tokio::test]
+async fn probe_returns_to_primary_after_cooldown() {
+    let pool = seeded_pool("{}").await;
+    seed_profile(&pool, "mp-main").await;
+    seed_profile(&pool, "mp-b").await;
+
+    // 主档：第 1 次 quota 失败（1113 措辞 → GlmResourcePack）→ 第 2 次（回探）正常文本
+    let main = Arc::new(MockProvider::new(
+        "glm-main",
+        MockScenario::FailNTimesThenNormal {
+            error_message:
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）".into(),
+            times: 1,
+        },
+    ));
+    // 备用档：第 1 次（换档接手轮）产出 tool_use 撑出第二轮；第 2 次文本不会到达
+    let backup = Arc::new(MockProvider::new(
+        "glm-backup",
+        MockScenario::ToolCallThenText {
+            tool_name: "echo".into(),
+            arguments: r#"{"msg":"hi"}"#.into(),
+        },
+    ));
+    let mut entries = std::collections::HashMap::new();
+    entries.insert("mp-b".to_string(), ("备用档".to_string(), backup.clone()));
+    // 主档也要进 resolver：回探经 resolver resolve 主档（生产同构——ProfileFallbackResolver
+    // 对任意 profile id 可解析；漏了就是 NotFound 顺延冷却，回探不发生）
+    entries.insert("mp-main".to_string(), ("主档".to_string(), main.clone()));
+    let mut map = std::collections::HashMap::new();
+    map.insert("echo".to_string(), Arc::new(EchoTool) as Arc<dyn McpClient>);
+
+    let mut fx = run_turn_core(
+        pool,
+        main.clone(),
+        map,
+        FallbackPlan::new(
+            vec!["mp-b".into()],
+            Arc::new(MapResolver { entries }),
+            Some("mp-main".into()),
+            1024,
+            false,
+        )
+        .with_probe_cooldown(Duration::from_secs(0)),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    // 回合成功收尾，终稿来自主档（FailNTimesThenNormal 第 2 次的正常文本）
+    assert_eq!(summary.finish_reason, "stop");
+    assert_eq!(summary.final_text, "Hello from MockProvider");
+    assert_eq!(summary.rounds, 2, "备用档工具轮 + 主档回探收尾轮");
+    // 主档被调两次：轮 0 quota 失败 + 轮 1 回探成功
+    assert_eq!(main.call_count(), 2, "回探真的回了主档");
+    // 备用档被调一次：轮 0 换档接手产出 tool_use（之后不再被调 = 已切回）
+    assert_eq!(backup.call_count(), 1, "切回后备用档不再接手");
+
+    // 事件序：两条 model_switch（quota 换出 + recovered 切回）
+    let events = event_rows(&fx.pool).await;
+    let switches: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "model_switch")
+        .collect();
+    assert_eq!(switches.len(), 2, "换出 + 切回两事件: {:#?}", kinds(&events));
+    let sw2: crate::harness::event_log::ModelSwitchPayload =
+        serde_json::from_str(&switches[1].payload).expect("recovered payload");
+    assert_eq!(sw2.reason, "recovered");
+    assert_eq!(sw2.from_profile_id.as_deref(), Some("mp-b"));
+    assert_eq!(sw2.to_profile_id, "mp-main");
+    assert_eq!(sw2.to_model, "glm-main");
+    assert_event_invariants(&events, &fx.user_msg_id);
+
+    // 消息行 model 列诚实化（finalize 回写）：轮 0 行（备用档产出）= glm-backup；
+    // 轮 1 终答行（主档产出）= glm-main
+    let rows = message_rows(&fx.pool).await;
+    let asst_rows: Vec<_> = rows.iter().filter(|r| r.role == "assistant").collect();
+    assert_eq!(asst_rows.len(), 2, "两轮 assistant 行");
+    assert_eq!(
+        asst_rows[0].model.as_deref(),
+        Some("glm-backup"),
+        "换档轮的行写实际生成模型（出生主档值被 finalize 回写纠正）"
+    );
+    assert_eq!(asst_rows[1].model.as_deref(), Some("glm-main"));
+}
+
 /// 用例 B：限流退避耗尽后换档（拦截点③）——4 次尝试（MAX_ATTEMPTS=4）+
 /// 1+2+4=7s 退避后链接手；期间 chat:retrying 逐次可见（真等 7s smoke，
 /// finish 30s 护栏内）。

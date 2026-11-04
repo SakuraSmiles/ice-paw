@@ -211,11 +211,14 @@ impl TurnCostRecorder {
     }
 
     /// provider 回传 usage 后调用。返回 miss 归因 slug 数组（非全 miss 返回 None）。
+    /// `model` = 本轮实际模型（换档诚实化：分模型统计）。
     pub(crate) fn record_usage(
         &mut self,
         prompt: u64,
         cached: u64,
+        completion: u64,
         injected: bool,
+        model: Option<&str>,
     ) -> Option<Vec<String>> {
         let switched = self.pending_switch;
         self.pending_switch = false;
@@ -244,6 +247,8 @@ impl TurnCostRecorder {
             tools_hash: self.cur_tools_hash.clone(),
             injected,
             model_switched: switched,
+            model: model.map(str::to_string),
+            completion,
         });
         // 基线推进为「本请求快照」：下一轮（或下回合轮 0 若这是末轮）与之比对
         self.prev_round = Some(PrevBaseline {
@@ -446,13 +451,13 @@ mod tests {
         });
         rec.begin_round(Some(&defs));
         // 轮 0 全 miss（prompt 达门槛）→ 无变化 → no_detectable_change
-        let hint = rec.record_usage(4_096, 0, false).unwrap();
+        let hint = rec.record_usage(4_096, 0, 0, false, None).unwrap();
         assert_eq!(hint, vec![miss_slug::NO_DETECTABLE_CHANGE.to_string()]);
 
         // 轮 1：换档 + 工具子集变化 + 注入翻转 → 三 slug
         rec.mark_model_switched();
         rec.begin_round(Some(&defs[..1]));
-        let hint = rec.record_usage(6_000, 0, true).unwrap();
+        let hint = rec.record_usage(6_000, 0, 0, true, None).unwrap();
         assert_eq!(
             hint,
             vec![
@@ -464,9 +469,9 @@ mod tests {
 
         // 部分 miss（cached>0）→ None（门槛：全 miss 才出 hint）
         rec.begin_round(Some(&defs[..1]));
-        assert!(rec.record_usage(8_000, 6_000, false).is_none());
+        assert!(rec.record_usage(8_000, 6_000, 0, false, None).is_none());
         // prompt 低于门槛 → None
-        assert!(rec.record_usage(512, 0, false).is_none());
+        assert!(rec.record_usage(512, 0, 0, false, None).is_none());
 
         let p = rec.into_payload().unwrap();
         assert_eq!(p.segments.len(), 2, "anatomy 段 + tool_defs 段");
@@ -494,11 +499,11 @@ mod tests {
             prev: None,
         });
         rec.begin_round(None);
-        let hint = rec.record_usage(2_000, 0, false).unwrap();
+        let hint = rec.record_usage(2_000, 0, 0, false, None).unwrap();
         assert_eq!(hint, vec![miss_slug::FIRST_REQUEST.to_string()]);
         // 轮 1 同输入 → 与上一轮快照比对 → no_detectable_change
         rec.begin_round(None);
-        let hint = rec.record_usage(2_000, 0, false).unwrap();
+        let hint = rec.record_usage(2_000, 0, 0, false, None).unwrap();
         assert_eq!(hint, vec![miss_slug::NO_DETECTABLE_CHANGE.to_string()]);
     }
 

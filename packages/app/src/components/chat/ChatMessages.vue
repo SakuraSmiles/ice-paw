@@ -108,6 +108,17 @@ const activePhaseLabel = computed(() => {
   return streamingPhase.value; // 兜底：推断档
 });
 
+// 换档胶囊的原因短词（title 悬停全句用；与 store SWITCH_REASON_LABELS 同词根）
+const SWITCH_CHIP_REASONS: Record<string, string> = {
+  quota: "额度受限",
+  rate_limited: "限流",
+  network: "网络异常",
+  recovered: "已恢复",
+};
+const switchReasonLabel = computed(
+  () => SWITCH_CHIP_REASONS[chat.switchedTo?.reason ?? ""] ?? chat.switchedTo?.reason ?? "",
+);
+
 // 滚动跟随 + 分页 + 阅读位置记忆（逻辑抽到 composable：自动贴底 / 上滚暂停 /
 // 顶部触发分页 / 每会话滚动锚点——切走再回来按意图贴底或原位恢复）
 const { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConversation } = useScrollFollow(listRef);
@@ -1866,6 +1877,13 @@ const RESUMABLE_REASONS = new Set([
       <div class="cursor-track">
         <StatusGlyph status="running" /><span class="cursor-label">{{ activePhaseLabel }}</span>
       </div>
+      <!-- 换档诚实化（2026-11-04）：回合内换档的常驻可见档位（L2 状态上屏——
+           治「换档了页面还显示主模型」；toast 5s 即逝不是状态呈现） -->
+      <span
+        v-if="chat.switchedTo"
+        class="switch-chip"
+        :title="`主模型${switchReasonLabel}，已切换到 ${chat.switchedTo.alias || chat.switchedTo.model}（${chat.switchedTo.model}）继续生成`"
+      >已切换 · {{ chat.switchedTo.alias || chat.switchedTo.model }}</span>
     </div>
 
     <!-- 全屏图片预览（多图可翻页） -->
@@ -2231,6 +2249,20 @@ const RESUMABLE_REASONS = new Set([
 .phase-dots { display:flex; align-items:center; gap:4px; min-height:22px; }
 .cursor-track { display:flex; align-items:center; gap: var(--ip-spacing-2); padding:4px 0; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }
+/* 换档档位胶囊（2026-11-04 诚实化）：warning 语义软底（换档是需被看见的降级
+   事实，不是品牌蓝信息位）；字号 caption 档（micro 之下无小字规则内） */
+.switch-chip {
+  display:inline-flex; align-items:center; gap:4px;
+  padding: 1px var(--ip-spacing-2);
+  border-radius: 999px;
+  font-size: var(--ip-text-caption-size);
+  line-height: 1.5;
+  color: var(--ip-warning-text);
+  background: var(--ip-warning-bg);
+  border: 1px solid var(--ip-warning-border);
+  white-space: nowrap;
+  cursor: default;
+}
 /* 生成指示的脉冲点已由 StatusGlyph running 像素格取代（2026-09-04 语系统一）；
    .state-dot 死样式（模板零引用）与 cursor-pulse 一并清除 */
 

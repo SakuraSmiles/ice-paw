@@ -8,7 +8,7 @@
 // - 双 pane visibility 叠放：chat DOM 常驻 → 流式/滚动状态不因切 tab 中断
 //   （display:none 会销毁布局破坏此承诺，见 .pane-hidden 注释）；
 // - 切换会话 → tab 重置回「对话」；无激活会话（欢迎态）→ 标签条隐藏。
-import { ref, watch } from "vue";
+import { ref, watch, onActivated, onDeactivated, onMounted, onUnmounted } from "vue";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import ChatMessages from "../components/chat/ChatMessages.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
@@ -19,6 +19,7 @@ import TaskPanel from "../components/chat/TaskPanel.vue";
 import TrajectoryView from "../components/trajectory/TrajectoryView.vue";
 import { useChatStore } from "../stores/chat";
 import { useTablist } from "../composables/useTablist";
+import { liveRenderFrozen } from "../utils/liveFreeze";
 
 const chat = useChatStore();
 
@@ -31,6 +32,27 @@ const { onKeydown: onTabKeydown } = useTablist(
   () => activeTab.value,
   (t) => { activeTab.value = t; },
 );
+
+// 流式 live 渲染冻结（2026-11-04 线程饥饿根治批）：keep-alive 隐藏页与隐藏 pane
+// 的组件 effect 仍活——切到设置页（页面 deactivated）或轨迹 tab（聊天 pane
+// visibility:hidden）后，live 气泡照常每 tick 全量重解析 markdown（隐形主线程
+// 源）。冻结 = 页面不可见 ∨ 窗口隐藏 ∨ 轨迹 tab；解冻统一补渲一次。
+const pageHidden = ref(false);
+function syncFrozen() {
+  liveRenderFrozen.value = pageHidden.value || activeTab.value === "trajectory";
+}
+onActivated(() => { pageHidden.value = false; syncFrozen(); });
+onDeactivated(() => { pageHidden.value = true; syncFrozen(); });
+watch(activeTab, syncFrozen);
+function onVisChange() {
+  pageHidden.value = document.hidden;
+  syncFrozen();
+}
+onMounted(() => document.addEventListener("visibilitychange", onVisChange));
+onUnmounted(() => {
+  document.removeEventListener("visibilitychange", onVisChange);
+  liveRenderFrozen.value = false;
+});
 
 // 切会话 → 回到「对话」标签（轨迹视图自身会按新 conversationId 重载）。
 // 例外：openConversationAtTrajectory 置了标志（委派卡片/项目任务列表入口）→

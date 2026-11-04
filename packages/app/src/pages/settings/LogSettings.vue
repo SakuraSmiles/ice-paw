@@ -7,6 +7,9 @@ import { formatTime } from "../../utils/time";
 import Switch from "../../components/common/Switch.vue";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import { msgOf, stripInvokePrefix } from "../../utils/errors";
+import { usePerfProbeStore } from "../../stores/perfProbe";
+
+const perf = usePerfProbeStore();
 
 const AUTO_INTERVAL_MS = 5000;
 
@@ -158,6 +161,23 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- 主线程长任务探针（2026-11-04 线程饥饿根治批）：≥100ms 任务环形 50 条。
+         诊断「卡顿的主线程源」与修复前后对比——与上方后端日志时间戳对照定位。 -->
+    <div v-if="perf.records.length" class="perf-card">
+      <div class="perf-head">
+        <span class="perf-title">主线程长任务（本次会话 ≥100ms）</span>
+        <button type="button" class="refresh-btn" @click="perf.clear()">清空</button>
+      </div>
+      <div class="perf-body">
+        <div v-for="r in perf.records" :key="r.id" class="perf-line">
+          <span class="log-time">{{ r.at.slice(11, 23) }}</span>
+          <span class="perf-dur">{{ r.durationMs }} ms</span>
+          <span class="perf-name">{{ r.name || "（无归因）" }}</span>
+        </div>
+      </div>
+      <div class="perf-foot">最近 {{ perf.records.length }} 条（常驻观察，观察者近零成本；时间为本地时刻）</div>
+    </div>
+
     <div class="log-area">
       <div class="log-card">
         <!-- 加载中 -->
@@ -294,6 +314,40 @@ onUnmounted(() => {
 @keyframes log-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ===== 主线程长任务探针区（2026-11-04：≥100ms 任务环形 50 条） ===== */
+.perf-card {
+  margin: var(--ip-spacing-4) var(--ip-spacing-7) 0;
+  border: 1px solid var(--ip-color-border);
+  border-radius: var(--ip-radius-md, 8px);
+  background-color: var(--ip-color-bg-secondary);
+  padding: var(--ip-spacing-3) var(--ip-spacing-4);
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-caption-size);
+}
+.perf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--ip-spacing-2);
+  color: var(--ip-color-text-secondary);
+}
+.perf-title { font-weight: 600; }
+.perf-body { max-height: 180px; overflow-y: auto; line-height: 1.75; }
+.perf-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ip-spacing-3);
+  color: var(--ip-color-text-secondary);
+}
+.perf-dur {
+  flex-shrink: 0;
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ip-warning-text);
+}
+.perf-name { color: var(--ip-color-text-tertiary); word-break: break-all; }
+.perf-foot { margin-top: var(--ip-spacing-2); color: var(--ip-color-text-tertiary); }
 
 /* ===== 日志区域（卡片容器，与 MCP 卡片同语言） ===== */
 .log-area {

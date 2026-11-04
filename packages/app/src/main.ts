@@ -10,6 +10,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import router from "./router";
 import pinia from "./stores";
+import { usePerfProbeStore } from "./stores/perfProbe";
 import { reportBootProgress, bootReady, rosterRemainingMs } from "./utils/bootProgress";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -33,6 +34,10 @@ app.use(pinia);
 app.use(router);
 app.mount("#app");
 reportBootProgress(50, "初始化界面");
+
+// 主线程长任务探针（2026-11-04 线程饥饿根治批）：≥100ms 任务进设置-日志页
+// 「主线程长任务」区——装机即可取证卡顿源（PerformanceObserver 近零成本）。
+usePerfProbeStore().start();
 
 // 主窗 visible:true + backgroundColor=splash 深底（2026-10-27 启动时序第一步）：
 // 窗口创建即刻出现（品牌底色），splash 由 webview 并行加载尽早落位。此处 show

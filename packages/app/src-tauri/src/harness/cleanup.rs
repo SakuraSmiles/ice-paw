@@ -36,6 +36,7 @@ pub(crate) async fn finalize_assistant_message(
     text: &str,
     blocks: &[ContentBlock],
     completion_tokens: Option<u32>,
+    model: Option<&str>,
 ) {
     let blocks_json = serde_json::to_string(blocks).unwrap_or_else(|e| {
         tracing::error!(target: "ice_paw.cleanup", "ContentBlock 序列化失败 (msg_id={}): {}", asst_msg_id, e);
@@ -48,12 +49,17 @@ pub(crate) async fn finalize_assistant_message(
     let token_count = completion_tokens
         .map(|t| t.max(1) as i32)
         .unwrap_or(MIN_TOKEN_COUNT);
+    // model 列回写（换档诚实化）：占位行出生时写的是当时档位，轮内换档后实际
+    // 生成模型已变——finalize 是「本轮实际用谁」的权威收口，不回写 = 换档那一
+    // 轮的行永远显示旧模型。COALESCE：None 保持出生值（调用方无模型语境时
+    // 不把已有值抹成 NULL）。
     if let Err(e) = sqlx::query(
-        "UPDATE messages SET content = ?, content_blocks = ?, token_count = ? WHERE id = ?",
+        "UPDATE messages SET content = ?, content_blocks = ?, token_count = ?, model = COALESCE(?, model) WHERE id = ?",
     )
     .bind(text)
     .bind(&blocks_json)
     .bind(token_count)
+    .bind(model)
     .bind(asst_msg_id)
     .execute(pool)
     .await
@@ -128,6 +134,7 @@ pub(crate) enum PersistOutcome {
 ///   恒有效（finalize_success 的 final_asst_msg_id 需指向真实存在的消息）；有 Text 时
 ///   忽略 fallback，保留模型真实文本。
 /// - `fallback_text = None`（cancel / 错误）：无 Text 时删占位行。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn finalize_assistant_without_tool_use(
     pool: &SqlitePool,
     batch_writer: &crate::harness::batch_writer::BatchWriter,
@@ -136,6 +143,7 @@ pub(crate) async fn finalize_assistant_without_tool_use(
     round_blocks: &[ContentBlock],
     completion_tokens: Option<u32>,
     fallback_text: Option<&str>,
+    model: Option<&str>,
 ) -> PersistOutcome {
     match classify_termination_blocks(round_blocks, fallback_text.is_some()) {
         TerminationDecision::PersistFiltered => {
@@ -145,8 +153,15 @@ pub(crate) async fn finalize_assistant_without_tool_use(
                 .cloned()
                 .collect();
             batch_writer.flush_now().await;
-            finalize_assistant_message(pool, asst_msg_id, round_text, &filtered, completion_tokens)
-                .await;
+            finalize_assistant_message(
+                pool,
+                asst_msg_id,
+                round_text,
+                &filtered,
+                completion_tokens,
+                model,
+            )
+            .await;
             PersistOutcome::Persisted {
                 content: round_text.to_string(),
                 blocks: filtered,
@@ -158,7 +173,8 @@ pub(crate) async fn finalize_assistant_without_tool_use(
                 text: fb.to_string(),
             }];
             batch_writer.flush_now().await;
-            finalize_assistant_message(pool, asst_msg_id, fb, &blocks, completion_tokens).await;
+            finalize_assistant_message(pool, asst_msg_id, fb, &blocks, completion_tokens, model)
+                .await;
             PersistOutcome::Persisted {
                 content: fb.to_string(),
                 blocks,

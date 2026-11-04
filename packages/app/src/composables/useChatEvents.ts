@@ -172,11 +172,10 @@ export async function useChatEvents(): Promise<() => void> {
     chat.updateBudget(e.payload);
   });
 
-  // 降级换档 toast（B2-S3）：主模型失败换备用档时告知用户「谁在继续生成」。
-  // 按激活会话过滤 + 5s 自动消失（store 内计时）。
+  // 降级换档（B2-S3 + 2026-11-04 诚实化）：toast 之外，桶内常驻当前档位
+  // （头部模型位 / cursor-bar 胶囊读它）——后台会话同样写桶（toast 只弹激活的）。
   await subscribe<ChatModelSwitchedPayload>("chat:model-switched", (e) => {
-    if (e.payload.conversation_id !== chat.activeConvId) return;
-    chat.updateModelSwitched(e.payload);
+    chat.updateModelSwitched(e.payload.conversation_id, e.payload);
   });
 
   // 限流/网络退避（批 2 相位状态机）：chat:retrying → 桶相位 retrying（带
@@ -235,7 +234,9 @@ export async function useChatEvents(): Promise<() => void> {
       error: null,
       created_at: new Date().toISOString(),
       rowid: 0,
-      model: chat.currentModel,
+      // 换档诚实化：轮 ≥1 的占位带后端实际模型（payload.model；缺席回落
+      // currentModel——轮 0 恒主档，两者等价）
+      model: e.payload.model ?? chat.currentModel,
       sender_agent_id: prevChannelSender,
     });
   });
@@ -338,7 +339,10 @@ export async function useChatEvents(): Promise<() => void> {
       recentErrorConvs.delete(cid);
       chat.clearSendTimeout();
       const s0 = chat.streamOf(cid);
-      if (s0) s0.sending = false;
+      if (s0) {
+        s0.sending = false;
+        s0.switchedTo = null;
+      }
       chat.clearTurnAnchors();
       chat.resetRoundStreaming();
       return;
@@ -346,6 +350,11 @@ export async function useChatEvents(): Promise<() => void> {
     chat.clearSendTimeout();
     chat.clearTurnAnchors(); // 回合结束：streaming 视图（代码块折叠）一次性沉淀
     chat.lastFailedSend = null; // 成功完成 → 失败重发依据失效
+    // 换档诚实化：回合结束清档位胶囊（下回合从主档起跑——头部随之回实配值）
+    {
+      const sw = chat.streamOf(cid);
+      if (sw) sw.switchedTo = null;
+    }
 
     // 记录思考耗时与内容（formatThinkingMs 与 freezeCurrentAssistant 共用同一
     // 格式化真相源；freeze 里也 set 过同 id——此处按后端权威 message_id 双写，幂等）

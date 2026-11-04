@@ -79,6 +79,7 @@ pub(crate) async fn finalize_guard_logged(
         round_blocks,
         completion_tokens,
         fallback_text,
+        model,
     )
     .await;
     match &outcome {

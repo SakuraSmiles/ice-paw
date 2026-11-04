@@ -1045,6 +1045,65 @@ describe("chatStore", () => {
     });
   });
 
+  describe("换档诚实化（chat:model-switched → updateModelSwitched，2026-11-04）", () => {
+    /** model-switched payload 工厂 */
+    const switchPayload = (overrides?: Partial<import("../../types").ChatModelSwitchedPayload>) => ({
+      conversation_id: "c1",
+      message_id: "m1",
+      from_model: "glm-5.3",
+      to_alias: "DeepSeek 备档",
+      to_model: "deepseek-v4-pro",
+      reason: "quota",
+      ...overrides,
+    });
+
+    it("换档：桶内常驻档位 + currentModel 随实际档位走 + toast 文案", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.selectConversation("c1");
+      store.currentModel = "glm-5.3";
+      store.updateModelSwitched("c1", switchPayload());
+      expect(store.switchedTo).toEqual({ alias: "DeepSeek 备档", model: "deepseek-v4-pro", reason: "quota" });
+      expect(store.currentModel).toBe("deepseek-v4-pro");
+      expect(store.modelSwitchNotice).toContain("DeepSeek 备档");
+    });
+
+    it("回探切回（recovered）：档位清空回主档 + currentModel 跟随", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.selectConversation("c1");
+      store.updateModelSwitched("c1", switchPayload());
+      store.updateModelSwitched("c1", switchPayload({
+        from_model: "deepseek-v4-pro",
+        to_alias: "智谱主力",
+        to_model: "glm-5.3",
+        reason: "recovered",
+      }));
+      expect(store.switchedTo).toBeNull();
+      expect(store.currentModel).toBe("glm-5.3");
+      expect(store.modelSwitchNotice).toContain("已切回主模型");
+    });
+
+    it("后台会话换档：桶内照写（切回时状态在场）、不弹激活会话 toast", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.selectConversation("c1");
+      store.updateModelSwitched("c2", switchPayload({ conversation_id: "c2" }));
+      expect(store.streamOf("c2")?.switchedTo?.model).toBe("deepseek-v4-pro");
+      expect(store.modelSwitchNotice).toBeNull();
+    });
+
+    it("新回合发送：清上一回合遗留档位（防 sending 置位瞬间闪旧胶囊）", async () => {
+      mockInvoke.mockResolvedValue(undefined);
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.selectConversation("c1");
+      store.updateModelSwitched("c1", switchPayload());
+      await store.sendMessage("继续");
+      expect(store.streamOf("c1")?.switchedTo).toBeNull();
+    });
+  });
+
   describe("lastTurnRounds（finish_reason=tool_use 提示行判据）", () => {
     it("切会话 / 新回合发送：随 clearBudget 重置", async () => {
       mockInvoke.mockResolvedValue(undefined);

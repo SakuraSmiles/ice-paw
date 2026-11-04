@@ -29,7 +29,10 @@ use crate::harness::stream_consumer::{consume_stream, StreamResult};
 use crate::infra::protocol::{ChatMessage, ChatRetryingPayload, ToolDef};
 
 use super::context::LoopContext;
-use super::fallback::{fallback_trigger, try_switch_model};
+use super::fallback::{
+    abort_probe, fallback_trigger, maybe_start_probe, probe_live, probe_succeeded,
+    try_switch_model,
+};
 use super::reason::classify_retry_reason;
 
 /// 三拦截点共用：错误文本重分类 → 换档 → 成功则重置退避并清失败原因残留。
@@ -110,6 +113,10 @@ pub(crate) async fn stream_with_retry(
     let mut switch_attempt: u32 = 0;
     // session-events（Phase 0）：message_error 事件上下文（conv/turn/agent）。
     let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
+
+    // 主档回探（2026-11-04）：冷却期满则本轮先用主档试一次（快速失败即还原，
+    // 不退避白等）——瞬态 1113/限流不再把整个长回合钉死在降档上。
+    maybe_start_probe(ctx).await;
 
     loop {
         if !retry_state.can_retry() {
@@ -207,9 +214,21 @@ pub(crate) async fn stream_with_retry(
                             ctx.fallback.active_profile_id.as_deref(),
                         )
                         .await;
+                        // 回探成功：清除回探状态 + recovered 换档事件/toast（用户
+                        // 可见「已切回主模型」；非回探轮次此调用 no-op）
+                        probe_succeeded(ctx, current_asst_msg_id).await;
                         return RoundStreamResult::Ok(sr);
                     }
                     Err(e) => {
+                        // 回探轮次的任何失败（首个请求即 429/网络断/鉴权错）：
+                        // 不退避、不 emit、不计重试预算——直接还原回退目标继续本轮
+                        if probe_live(ctx)
+                            && abort_probe(ctx, &mut retry_state, &e.to_string())
+                        {
+                            last_error_text.clear();
+                            last_retry_reason.clear();
+                            continue;
+                        }
                         if e.is_retryable() {
                             last_retry_reason = classify_retry_reason(&e);
                             last_error_text = e.to_string();
@@ -258,6 +277,12 @@ pub(crate) async fn stream_with_retry(
                 }
             }
             Err(e) => {
+                // 回探轮次失败：同 consume_stream 臂——还原回退目标，不消耗预算
+                if probe_live(ctx) && abort_probe(ctx, &mut retry_state, &e.to_string()) {
+                    last_error_text.clear();
+                    last_retry_reason.clear();
+                    continue;
+                }
                 if e.is_retryable() {
                     last_retry_reason = classify_retry_reason(&e);
                     last_error_text = e.to_string();
