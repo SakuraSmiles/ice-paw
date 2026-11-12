@@ -15,8 +15,9 @@ import StatusGlyph from "./StatusGlyph.vue";
 
 const props = defineProps<{
   /** 卡变体（批 P1-5）：delegate=委派存量专家（默认）；worker=临时工作者
-   *  （spawn_worker 复用本卡——标题与语义切换，状态/跳转体系共用） */
-  cardKind?: "delegate" | "worker";
+   *  （spawn_worker 复用本卡——标题与语义切换，状态/跳转体系共用）；
+   *  async=异步委派（批 P2-1b——状态由子会话在途桶驱动，不随回执秒变完成） */
+  cardKind?: "delegate" | "worker" | "async";
   /** 目标 agent 显示名（参数里的 agent_id 原样兜底；worker=引擎生成的工作者名） */
   agentName: string;
   /** 目标 agent id（可解析时用于头像；流式参数未到齐为 null → 走名字渐变兜底） */
@@ -68,7 +69,8 @@ const FINISH_LABEL: Record<string, string> = {
         size="sm"
       />
       <span class="dlg-title">
-        {{ cardKind === "worker" ? `临时工作者 ${agentName}` : `委派给 ${agentName}` }}
+        {{ cardKind === "worker" ? `临时工作者 ${agentName}`
+           : cardKind === "async" ? `异步委派给 ${agentName}` : `委派给 ${agentName}` }}
       </span>
       <span class="dlg-status">
         <StatusGlyph :status="status" />
@@ -79,8 +81,11 @@ const FINISH_LABEL: Record<string, string> = {
     <div class="dlg-foot">
       <span v-if="status !== 'running'" class="dlg-meta">
         <template v-if="status === 'done'">
-          {{ finishReason === 'stop' ? FINISH_LABEL.stop : (finishReason ? `${FINISH_LABEL[finishReason] ?? finishReason}（${finishReason}）` : '') }}
-          <template v-if="rounds != null"> · {{ rounds }} 轮</template>
+          <template v-if="cardKind === 'async'">任务已完成 · 汇报已回到对话</template>
+          <template v-else>
+            {{ finishReason === 'stop' ? FINISH_LABEL.stop : (finishReason ? `${FINISH_LABEL[finishReason] ?? finishReason}（${finishReason}）` : '') }}
+            <template v-if="rounds != null"> · {{ rounds }} 轮</template>
+          </template>
         </template>
         <template v-else>调用失败，详见展开的原始结果</template>
       </span>

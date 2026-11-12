@@ -63,7 +63,13 @@ const tasks = computed<TaskRow[]>(() => {
   const pid = chat.activeConvId;
   if (!pid) return [];
   return chat.conversations
-    .filter((c) => c.kind === "delegation" && c.parent_conversation_id === pid)
+    // 批 P2-1b：worker 任务（kind='worker'）同入索引——与项目台账口径一致
+    //（spawn_worker 的任务此前只有消息流卡片/台账两个入口，胶囊索引漏了它）
+    .filter(
+      (c) =>
+        (c.kind === "delegation" || c.kind === "worker") &&
+        c.parent_conversation_id === pid,
+    )
     .map((c) => ({
       id: c.id,
       title: delegationTitle(c.title || "委派任务"),

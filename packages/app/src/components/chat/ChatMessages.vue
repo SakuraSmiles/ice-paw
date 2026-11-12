@@ -22,6 +22,7 @@ import MarkdownRenderer from "./MarkdownRenderer.vue";
 import MessageGroupCapsules from "./MessageGroupCapsules.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
 import DelegationCard from "./DelegationCard.vue";
+import TaskReportCard from "./TaskReportCard.vue";
 import PlanCard from "./PlanCard.vue";
 import StatusGlyph from "./StatusGlyph.vue";
 import ImagePreview from "./ImagePreview.vue";
@@ -35,7 +36,7 @@ import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
 import { formatTokenCount, formatThinkingMs, formatFileSize } from "../../utils/format";
 import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/refs";
 import type { ParsedRef } from "../../utils/refs";
-import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
+import { incomingInfoOf, parseIncomingText, isTaskReport, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
 import {
   buildToolResultIndex,
@@ -436,6 +437,19 @@ function incomingMsgOf(msg: Message): IncomingInfo | null {
   return incomingOf(msg.content ?? '');
 }
 
+/** 批 P2-1b 方案 A：来件是本会话子会话的回投 → 任务汇报卡（TaskReportCard）；
+ *  MA-3 人/agent 直投（无父子关系）不受影响，走原 incoming 用户气泡。 */
+function taskReportOf(msg: Message): IncomingInfo | null {
+  const inc = incomingMsgOf(msg);
+  if (!inc) return null;
+  return isTaskReport(inc, chat.activeConvId, chat.conversations) ? inc : null;
+}
+
+/** 汇报卡头像取数：来源子会话行 → 执行 agent id */
+function convAgentIdOf(convId: string): string | null {
+  return chat.conversations.find((c) => c.id === convId)?.agent_id ?? null;
+}
+
 /** 扁平文本解析（memo 化兜底路径：字符串参数即缓存键） */
 const incomingOf = memoized((content: string): IncomingInfo | null => parseIncomingText(content));
 
@@ -653,63 +667,92 @@ const runningDelegationChildId = computed(() => {
 });
 
 /** 历史 tool_use 的委派卡片取数：跨消息配对 tool_result，无结果=进行中。
- *  spawn_worker 同卡复用（批 P1-5）：参数/结果字段族不同名，取数分支在此分野。 */
+ *  spawn_worker 同卡复用（批 P1-5）：参数/结果字段族不同名，取数分支在此分野。
+ *  start_delegate（批 P2-1b）：tool_result 是**受理回执**不是任务结果——卡状态
+ *  不得因回执到达判完成，改由子会话在途桶驱动（streaming=running；回执已有
+ *  child id 且不在桶=真完成）。finishReason/rounds 不显示（终态详情进子会话）。 */
 function delegateCardFor(
   tu: { id: string; name: string; input: string },
 ): {
-  cardKind: "delegate" | "worker";
+  cardKind: "delegate" | "worker" | "async";
   agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null; hasError: boolean;
 } | null {
-  if (tu.name !== "delegate_to_agent" && tu.name !== "spawn_worker") return null;
+  if (tu.name !== "delegate_to_agent" && tu.name !== "spawn_worker" && tu.name !== "start_delegate") return null;
   const isWorker = tu.name === "spawn_worker";
+  const isAsync = tu.name === "start_delegate";
   const input = isWorker ? null : parseDelegateInput(tu.input);
   const wInput = isWorker ? parseSpawnWorkerInput(tu.input) : null;
   const tr = findToolResult(tu.id);
   const dr = tr && !tr.isError ? parseDelegateResult(tr.content) : null;
   const wr = tr && !tr.isError ? parseSpawnWorkerResult(tr.content) : null;
-  const status = !tr ? "running" : tr.isError ? "error" : "done";
+  // 异步受理回执字段（status=accepted + child_conversation_id + agent_name）与
+  // delegate 字段族同名兼容——parseDelegateResult 直接命中
+  let status: "running" | "done" | "error";
+  if (isAsync) {
+    if (!tr) status = "running";
+    else if (tr.isError) status = "error";
+    else {
+      const cid = dr?.childConvId ?? null;
+      status = cid && !chat.streamingConvIds.has(cid) ? "done" : "running";
+    }
+  } else {
+    status = !tr ? "running" : tr.isError ? "error" : "done";
+  }
+  const childConvId = (isWorker ? wr?.childConvId : dr?.childConvId)
+    ?? (status === "running"
+      ? (chat.delegationChildByToolUse.get(tu.id) ?? runningDelegationChildId.value)
+      : null);
   return {
-    cardKind: isWorker ? "worker" : "delegate",
+    cardKind: isWorker ? "worker" : (isAsync ? "async" : "delegate"),
     agentName: isWorker
       ? (wr?.workerName ?? wInput?.purpose ?? "正在创建…")
       : (dr?.agentName ?? input?.agentId ?? "…"),
     agentId: isWorker ? null : (input?.agentId ?? null),
     task: isWorker ? (wInput?.task ?? wInput?.purpose ?? "") : (input?.task ?? ""),
     status,
-    childConvId: (isWorker ? wr?.childConvId : dr?.childConvId)
-      ?? (status === "running"
-        ? (chat.delegationChildByToolUse.get(tu.id) ?? runningDelegationChildId.value)
-        : null),
-    finishReason: (isWorker ? wr?.finishReason : dr?.finishReason) ?? null,
-    rounds: (isWorker ? wr?.rounds : dr?.rounds) ?? null,
+    childConvId,
+    finishReason: isAsync ? null : ((isWorker ? wr?.finishReason : dr?.finishReason) ?? null),
+    rounds: isAsync ? null : ((isWorker ? wr?.rounds : dr?.rounds) ?? null),
     hasError: tr?.isError ?? false,
   };
 }
 
 /** 流式中的委派卡片取数：call.arguments 逐字到达，call.result 到达即完成。
  *  running 跳转先查 store 的 tool_use 映射（delegation-started 登记），降级走
- *  会话级兜底（见 runningDelegationChildId 注释）。spawn_worker 同卡复用（批 P1-5）。 */
+ *  会话级兜底（见 runningDelegationChildId 注释）。spawn_worker 同卡复用（批
+ *  P1-5）；start_delegate 异步状态语义同 delegateCardFor（批 P2-1b）。 */
 function delegateStreamCard(call: {
   id: string; name: string; arguments: string; ended: boolean;
   result?: { content: string; isError: boolean } | null;
 }): {
-  cardKind: "delegate" | "worker";
+  cardKind: "delegate" | "worker" | "async";
   agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null;
 } | null {
-  if (call.name !== "delegate_to_agent" && call.name !== "spawn_worker") return null;
+  if (call.name !== "delegate_to_agent" && call.name !== "spawn_worker" && call.name !== "start_delegate") return null;
   const isWorker = call.name === "spawn_worker";
+  const isAsync = call.name === "start_delegate";
   const input = isWorker ? null : parseDelegateInput(call.arguments || "{}");
   const wInput = isWorker ? parseSpawnWorkerInput(call.arguments || "{}") : null;
   const dr = call.result && !call.result.isError ? parseDelegateResult(call.result.content) : null;
   const wr = call.result && !call.result.isError ? parseSpawnWorkerResult(call.result.content) : null;
-  const status = !call.result ? "running" : call.result.isError ? "error" : "done";
+  let status: "running" | "done" | "error";
+  if (isAsync) {
+    if (!call.result) status = "running";
+    else if (call.result.isError) status = "error";
+    else {
+      const cid = dr?.childConvId ?? null;
+      status = cid && !chat.streamingConvIds.has(cid) ? "done" : "running";
+    }
+  } else {
+    status = !call.result ? "running" : call.result.isError ? "error" : "done";
+  }
   const fallbackTask = isWorker
     ? (wInput?.task ?? wInput?.purpose ?? (call.ended ? "" : "正在接收参数…"))
     : (input?.task ?? (call.ended ? "" : "正在接收参数…"));
   return {
-    cardKind: isWorker ? "worker" : "delegate",
+    cardKind: isWorker ? "worker" : (isAsync ? "async" : "delegate"),
     agentName: isWorker
       ? (wr?.workerName ?? wInput?.purpose ?? "正在创建…")
       : (dr?.agentName ?? input?.agentId ?? "…"),
@@ -720,8 +763,8 @@ function delegateStreamCard(call: {
       ?? (status === "running"
         ? (chat.delegationChildByToolUse.get(call.id) ?? runningDelegationChildId.value)
         : null),
-    finishReason: (isWorker ? wr?.finishReason : dr?.finishReason) ?? null,
-    rounds: (isWorker ? wr?.rounds : dr?.rounds) ?? null,
+    finishReason: isAsync ? null : ((isWorker ? wr?.finishReason : dr?.finishReason) ?? null),
+    rounds: isAsync ? null : ((isWorker ? wr?.rounds : dr?.rounds) ?? null),
   };
 }
 
@@ -1393,7 +1436,16 @@ const RESUMABLE_REASONS = new Set([
         <div :class="['message-group', group.role, { 'channel-msg': isChannelConv && group.role === 'assistant' }]" :data-mid="group.items[0].msg.id">
           <!-- ===== 用户消息组（单条，透明壳）===== -->
           <template v-if="group.role === 'user'">
-            <div class="message-content user">
+            <!-- 批 P2-1b 方案 A：异步委派/worker 回投（来源=本会话子会话）渲染为
+                 任务汇报卡——系统事实不占用户气泡位（用户手测：右侧气泡感官差）。
+                 数据层不动（inbox 物化照旧），仅呈现分支。 -->
+            <TaskReportCard
+              v-if="taskReportOf(group.items[0].msg)"
+              :info="taskReportOf(group.items[0].msg)!"
+              :agent-id="convAgentIdOf(taskReportOf(group.items[0].msg)!.sourceConvId)"
+              @open-task="openChildConv(taskReportOf(group.items[0].msg)!.sourceConvId)"
+            />
+            <div v-else class="message-content user">
               <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg) || parseReferenceBlocks(group.items[0].msg.content_blocks).length > 0" class="message-bubble">
                 <!-- MA-3 跨会话来件：来源标注头（点击跳源会话；源已删纯展示）。
                      检测 = incoming_source 元数据优先（权威），无元数据回退

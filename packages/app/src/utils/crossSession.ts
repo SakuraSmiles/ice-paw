@@ -28,6 +28,27 @@ export interface IncomingInfo {
 }
 
 /**
+ * 任务汇报判定（批 P2-1b 方案 A）：来件的来源会话是**当前会话的委派/worker
+ * 子会话**（parent 边）→ 这是异步任务的完成回投，应渲染为任务汇报卡
+ * （系统事实），不占用户气泡位。MA-3 人/agent 直投（无父子关系）不受影响。
+ */
+export function isTaskReport(
+  inc: IncomingInfo,
+  activeConvId: string | null | undefined,
+  conversations: ReadonlyArray<{ id: string; kind?: string; parent_conversation_id?: string | null }>,
+): boolean {
+  if (!activeConvId) return false;
+  const src = conversations.find((c) => c.id === inc.sourceConvId);
+  return !!src
+    && (src.kind === "delegation" || src.kind === "worker")
+    && src.parent_conversation_id === activeConvId;
+}
+
+/** 回投正文的家族前缀（与 harness/mcp/delegate_async.rs 逐字一致；改动两边同步） */
+export const TASK_REPORT_DONE_PREFIX = "【异步委派完成】";
+export const TASK_REPORT_ABNORMAL_PREFIX = "【异步委派异常结束】";
+
+/**
  * 消息级解析（元数据优先 + 文本兜底）：incoming 卡渲染的统一入口。
  *
  * - 有 incoming_source 元数据 → 权威组装（body 取 content_blocks 的末 Text 块，

@@ -3,7 +3,7 @@
 // 逐字镜像——格式改动两边同步（此处用后端产出的完整样例锁形状）；元数据路径
 // 与后端 IncomingSourceMeta 字段镜像。
 import { describe, expect, it } from "vitest";
-import { incomingInfoOf, parseIncomingText, INCOMING_PREFIX_HEAD } from "../crossSession";
+import { incomingInfoOf, parseIncomingText, INCOMING_PREFIX_HEAD, isTaskReport } from "../crossSession";
 import type { Message } from "../../types";
 
 /** 后端 compose_incoming_annotation 产出的完整样例（唯一组装点的形状锁） */
@@ -126,5 +126,27 @@ describe("parseIncomingText（文本兜底）", () => {
     expect(parseIncomingText("[来自会话「」的 agent n｜，target=c1]\n\nx")).toBeNull(); // 空 title
     expect(parseIncomingText("[来自会话「t」的 agent ｜，target=c1]\n\nx")).toBeNull(); // 空 agent 名
     expect(parseIncomingText("[来自会话「t」的 agent n｜，target=]\n\nx")).toBeNull(); // 空 target
+  });
+});
+
+// ===== 批 P2-1b 方案 A：任务汇报判定 =====
+describe("isTaskReport（异步回投判定）", () => {
+  const inc = { sourceTitle: "t", agentName: "专家", sourceConvId: "c-child", body: "x" };
+  const convs = [
+    { id: "c-child", kind: "delegation", parent_conversation_id: "c-me" },
+    { id: "c-worker", kind: "worker", parent_conversation_id: "c-me" },
+    { id: "c-foreign", kind: "delegation", parent_conversation_id: "c-other" },
+    { id: "c-chat", kind: "chat", parent_conversation_id: null },
+  ];
+
+  it("来源是本会话的委派/worker 子会话 → 汇报卡", () => {
+    expect(isTaskReport(inc, "c-me", convs)).toBe(true);
+    expect(isTaskReport({ ...inc, sourceConvId: "c-worker" }, "c-me", convs)).toBe(true);
+  });
+  it("别人的子会话 / 普通会话来源 / 无激活会话 → 原 incoming 气泡", () => {
+    expect(isTaskReport({ ...inc, sourceConvId: "c-foreign" }, "c-me", convs)).toBe(false);
+    expect(isTaskReport({ ...inc, sourceConvId: "c-chat" }, "c-me", convs)).toBe(false);
+    expect(isTaskReport(inc, null, convs)).toBe(false);
+    expect(isTaskReport(inc, "c-me", [])).toBe(false);
   });
 });
