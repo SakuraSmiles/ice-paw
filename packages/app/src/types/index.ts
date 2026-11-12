@@ -291,6 +291,8 @@ export interface ProjectTask {
   ended_at: string | null;
   termination: string | null;
   rounds: number | null;
+  /** 任务级成本（批 P2-3）：全部 turn_ended 计费口径 Σ；null = 无 usage 数据 */
+  billed_tokens?: number | null;
 }
 
 /** 项目事件流行（list_project_events）：`SessionEvent` 同构 + 会话标注列

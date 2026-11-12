@@ -309,6 +309,8 @@ pub struct ProjectTaskOut {
     pub ended_at: Option<String>,
     pub termination: Option<String>,
     pub rounds: Option<u32>,
+    /// 任务级成本（批 P2-3）：全部 turn_ended 计费口径 Σ；None = 无 usage 数据
+    pub billed_tokens: Option<i64>,
 }
 
 #[tauri::command]
@@ -429,6 +431,7 @@ async fn list_project_tasks_impl(
                 ended_at: r.ended_at,
                 termination: ended.as_ref().map(|e| e.termination.clone()),
                 rounds: ended.map(|e| e.rounds),
+                billed_tokens: r.billed_tokens,
             }
         })
         .collect())

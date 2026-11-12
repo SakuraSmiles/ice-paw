@@ -37,6 +37,10 @@ pub struct ProjectTaskRow {
     pub ended_payload: Option<String>,
     /// 最后一条 turn_ended 的落库时间
     pub ended_at: Option<String>,
+    /// 任务级成本（批 P2-3）：全部 turn_ended 的 usage 按计费口径 Σ（
+    /// [`crate::harness::budget::billed_tokens`]——SQL 只做三和聚合，口径单一
+    /// 真相源在 Rust）。无任何带 usage 的 turn_ended = None（诚实不显示 0 假值）。
+    pub billed_tokens: Option<i64>,
 }
 
 /// 任务台账：项目内全部任务会话（delegation 委派 + worker 临时工作者，批 P1-4
@@ -48,10 +52,47 @@ pub async fn list_project_tasks(
     pool: &SqlitePool,
     project_id: &str,
 ) -> AppResult<Vec<ProjectTaskRow>> {
+    // 批 P2-3：成本聚合拆第二查询（GROUP BY 三和），口径套 Rust 单一真相源
+    // billed_tokens——SQL 侧不做除法（整除截断与浮点尾差都避免）。损坏 payload
+    // （截断 JSON）按 0 容忍：json_valid 守卫（json_extract 对非法 JSON 抛错，
+    // 与命令层「降级 None 不吞行」同哲学——成本列缺席，行照常）。
+    let mut rows = sqlx::query_as::<_, (String, i64, i64, i64)>(
+        "SELECT session_id,
+                SUM(CASE WHEN json_valid(payload)
+                     THEN COALESCE(json_extract(payload, '$.usage.prompt_tokens'), 0)
+                     ELSE 0 END),
+                SUM(CASE WHEN json_valid(payload)
+                     THEN COALESCE(json_extract(payload, '$.usage.cached_tokens'), 0)
+                     ELSE 0 END),
+                SUM(CASE WHEN json_valid(payload)
+                     THEN COALESCE(json_extract(payload, '$.usage.completion_tokens'), 0)
+                     ELSE 0 END)
+           FROM session_events
+          WHERE kind = 'turn_ended' AND session_id IN
+                (SELECT id FROM conversations
+                  WHERE kind IN ('delegation', 'worker') AND project_id = ?)
+          GROUP BY session_id",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    let usage: std::collections::HashMap<String, (i64, i64, i64)> = rows
+        .drain(..)
+        .map(|(sid, p, c, comp)| (sid, (p, c, comp)))
+        .filter(|(_, v)| *v != (0, 0, 0)) // 损坏 payload 行按 0 计 → 剔除成 None
+        .collect();
+    let has_usage = |id: &str| usage.contains_key(id);
+    let billed = |id: &str| -> Option<i64> {
+        usage.get(id).map(|(p, c, comp)| {
+            crate::harness::budget::billed_tokens(*p as u64, *c as u64, *comp as u64) as i64
+        })
+    };
+
     let rows = sqlx::query_as::<_, ProjectTaskRow>(
         "SELECT c.id, c.title, c.agent_id, c.initiator_agent_id, c.parent_conversation_id,
                 c.created_at, c.updated_at,
-                te.payload AS ended_payload, te.created_at AS ended_at
+                te.payload AS ended_payload, te.created_at AS ended_at,
+                NULL AS billed_tokens
            FROM conversations c
            LEFT JOIN session_events te
                   ON te.session_id = c.id AND te.kind = 'turn_ended'
@@ -63,7 +104,14 @@ pub async fn list_project_tasks(
     .bind(project_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    // 两查询间无事务：新回合的 usage 至多迟一拍呈现（面板 live 管线下轮补齐）
+    Ok(rows
+        .into_iter()
+        .map(|mut r| {
+            r.billed_tokens = if has_usage(&r.id) { billed(&r.id) } else { None };
+            r
+        })
+        .collect())
 }
 
 /// 项目事件流行：`SessionEventRow` 全字段 + 会话标注列（前端会话徽章）。
@@ -768,5 +816,57 @@ mod tests {
         assert_eq!(empty.delegation_conversations, 0);
         assert_eq!(empty.messages, 0);
         assert!(empty.last_activity_at.is_none());
+    }
+
+    /// 批 P2-3：任务级成本聚合——多轮 Σ、计费口径（缓存 1/10 折扣）、非任务
+    /// 会话不混入、损坏 payload 行按 None 容忍（不吞行不伪造 0）。
+    #[tokio::test]
+    async fn task_cost_aggregates_billed_across_turns() {
+        let pool = migrated_pool().await;
+        for (cid, kind) in [("task-1", "delegation"), ("chat-1", "chat"), ("task-2", "worker")] {
+            seed_conv(&pool, cid, kind, Some("p1"), None, None, "2026-08-18 10:00:00").await;
+        }
+        async fn log_turn(
+            pool: &SqlitePool,
+            cid: &str,
+            usage: Option<&str>,
+        ) {
+            let payload = format!(
+                r#"{{"v":1,"termination":"end_turn","rounds":1{} }}"#,
+                usage.map(|u| format!(",\"usage\":{u}")).unwrap_or_default()
+            );
+            crate::db::repo::session_event::append(
+                pool, cid, "turn_ended", "user", Some("t1"), None, &payload,
+            )
+            .await
+            .unwrap();
+        }
+        // task-1 两轮：billed₁ = (1000-600)+600/10+100 = 560；billed₂ = 500+50 = 550 → Σ 1110
+        log_turn(&pool, "task-1", Some(r#"{"prompt_tokens":1000,"completion_tokens":100,"cached_tokens":600}"#)).await;
+        log_turn(&pool, "task-1", Some(r#"{"prompt_tokens":500,"completion_tokens":50,"cached_tokens":0}"#)).await;
+        // chat-1 有 usage 但非任务会话——不得混入
+        log_turn(&pool, "chat-1", Some(r#"{"prompt_tokens":9999,"completion_tokens":1,"cached_tokens":0}"#)).await;
+        // task-2（worker）：损坏 JSON → json_valid 守卫按 0 → 剔除成 None
+        crate::db::repo::session_event::append(
+            &pool, "task-2", "turn_ended", "user", Some("t1"), None,
+            r#"{"v":1,"termination":"stop""#,
+        )
+        .await
+        .unwrap();
+
+        let rows = list_project_tasks(&pool, "p1").await.unwrap();
+        assert_eq!(rows.len(), 2);
+        let by_id = |id: &str| rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(by_id("task-1").billed_tokens, Some(1110), "计费口径 Σ（缓存 1/10 折扣）");
+        assert_eq!(by_id("task-2").billed_tokens, None, "损坏 payload → None 不伪造 0");
+    }
+
+    /// 无任何 usage 数据（旧库 / 无 turn_ended）→ None（前端不显示成本列）。
+    #[tokio::test]
+    async fn task_cost_none_when_no_usage() {
+        let pool = migrated_pool().await;
+        seed_conv(&pool, "task-1", "delegation", Some("p1"), None, None, "2026-08-18 10:00:00").await;
+        let rows = list_project_tasks(&pool, "p1").await.unwrap();
+        assert_eq!(rows[0].billed_tokens, None);
     }
 }

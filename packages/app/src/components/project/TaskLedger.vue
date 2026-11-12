@@ -18,6 +18,7 @@ import { useAgentStore } from "../../stores/agent";
 import { buildBoard, SECTION_TITLES, type BoardSection } from "../../utils/taskBoard";
 import { TASK_STATUS_LABELS } from "../../utils/taskStatus";
 import { parseDbTime, timeAgo, formatDate, formatTime } from "../../utils/time";
+import { formatTokenCompact } from "../../utils/format";
 import type { ProjectTask } from "../../types";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import StatusGlyph from "../chat/StatusGlyph.vue";
@@ -46,6 +47,8 @@ interface Row {
   initiatorLabel: string | null;
   title: string;
   rounds: number | null;
+  /** 计费口径成本（null = 无 usage 数据，不显示——不伪造 0） */
+  costLabel: string | null;
   waitingQuestion: string | null;
   timeLabel: string;
   timeTitle: string;
@@ -66,12 +69,20 @@ const rows = computed<Row[]>(() =>
         : null,
       title: r.task.title || "任务",
       rounds: r.task.rounds,
+      costLabel: r.task.billed_tokens != null ? formatTokenCompact(r.task.billed_tokens) : null,
       waitingQuestion: r.waitingQuestion,
       timeLabel: timeAgo(updated.toISOString()),
       timeTitle: `${formatDate(updated.toISOString())} ${formatTime(updated.toISOString())}`,
     };
   }),
 );
+
+/** 项目任务总成本（面板头部 meta；全 null 库不显示） */
+const totalCostLabel = computed(() => {
+  const total = props.tasks.reduce((s, t) => s + (t.billed_tokens ?? 0), 0);
+  const hasAny = props.tasks.some((t) => t.billed_tokens != null);
+  return hasAny ? formatTokenCompact(total) : null;
+});
 
 const sections = computed(() =>
   (Object.keys(SECTION_TITLES) as BoardSection[])
@@ -97,6 +108,7 @@ function openTask(convId: string) {
       <span class="board-meta">
         <template v-if="counts.waiting > 0"><b class="warn">{{ counts.waiting }} 个等你回应</b> · </template>
         进行中 {{ counts.running }} · 失败 {{ counts.failed }} · 已完成 {{ counts.done }}
+        <template v-if="totalCostLabel"> · 合计 {{ totalCostLabel }} tok</template>
       </span>
     </div>
     <div v-if="rows.length === 0" class="board-empty">
@@ -125,6 +137,7 @@ function openTask(convId: string) {
         <span class="row-meta">
           <span class="row-executor">{{ r.executorName }}</span>
           <span v-if="r.initiatorLabel" class="row-initiator">← {{ r.initiatorLabel }} 发起</span>
+          <span v-if="r.costLabel" class="row-cost" title="计费口径 token（缓存命中按 1/10 折扣）">{{ r.costLabel }} tok</span>
           <StatusGlyph
             :status="s.key === 'waiting' ? 'pending' : s.key === 'running' ? 'running' : s.key === 'failed' ? 'error' : 'done'"
             :size="12"
@@ -203,5 +216,6 @@ function openTask(convId: string) {
 }
 .row-executor { color: var(--ip-color-text-secondary); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-initiator { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-cost { font-variant-numeric: tabular-nums; color: var(--ip-color-text-secondary); }
 .row-time { font-variant-numeric: tabular-nums; min-width: 3em; text-align: right; }
 </style>
