@@ -370,7 +370,8 @@ const refOptions = computed<RefOption[]>(() => {
 
   // Agent：身份卡语义（name + desc），与 delegate 权限零冲突；
   // id 显示在名字后（等宽淡色可省略）并参与模糊匹配（uuid 片段可粘贴搜索）
-  for (const a of agentStore.list) {
+  // 候选基座 = visibleAgents（批 P1-1：ephemeral/router 不进 @ 引用候选）
+  for (const a of agentStore.visibleAgents) {
     if (!match(a.name) && !match(a.id)) continue;
     const code = shortCode(a.id);
     out.push({

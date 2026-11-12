@@ -277,6 +277,7 @@ mod tests {
             workspace_path: None,
             model_profile_id: model_profile_id.map(Into::into),
             fallback_profile_ids: fallback_ids.map(Into::into),
+            agent_kind: "standard".into(),
             created_at: String::new(),
             updated_at: String::new(),
         }

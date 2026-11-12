@@ -352,10 +352,10 @@ onMounted(() => {
 
           <div class="field">
             <label class="field-label">成员 <span class="hint">可选，后续可增删</span></label>
-            <div v-if="agent.list.length === 0" class="members-empty">暂无可用智能体，可创建后在项目卡片里添加</div>
+            <div v-if="agent.visibleAgents.length === 0" class="members-empty">暂无可用智能体，可创建后在项目卡片里添加</div>
             <div v-else class="member-chips">
               <button
-                v-for="a in agent.list"
+                v-for="a in agent.visibleAgents"
                 :key="a.id"
                 type="button"
                 class="member-chip"

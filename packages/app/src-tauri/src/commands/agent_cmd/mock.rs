@@ -148,6 +148,7 @@ impl AgentCmd for MockAgentCmd {
                 .fallback_profile_ids
                 .as_ref()
                 .map(|v| serde_json::to_string(v).unwrap_or_default()),
+            agent_kind: "standard".into(),
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
         };

@@ -45,7 +45,10 @@ const selectableAgents = computed(() => {
   const ids = inProject.value
     ? (project.activeProject?.agents ?? []).map((a) => a.agent_id)
     : null;
-  return ids ? agentStore.list.filter((a) => ids.includes(a.id)) : agentStore.list;
+  // 基座恒为 visibleAgents（批 P1-1：ephemeral/router 不进欢迎页卡片）
+  return ids
+    ? agentStore.visibleAgents.filter((a) => ids.includes(a.id))
+    : agentStore.visibleAgents;
 });
 const allKeyless = computed(
   () =>

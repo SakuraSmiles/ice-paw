@@ -234,6 +234,7 @@ mod tests {
                 avatar: None,
                 model_profile_id: None,
                 fallback_profile_ids: None,
+                agent_kind: None,
             },
             "a1",
             "slot",

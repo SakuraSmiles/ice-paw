@@ -30,7 +30,7 @@ export function useNewConversation() {
     (project.activeProject?.agents ?? []).map((a) => a.agent_id),
   );
   const hasMembers = computed(() => memberAgentIds.value.length > 0);
-  const hasAgents = computed(() => agent.list.length > 0);
+  const hasAgents = computed(() => agent.visibleAgents.length > 0);
 
   /** 选择器范围：项目内→仅成员；散落→全部（undefined）；项目无成员不会走到选择器 */
   const pickerAgentIds = computed<string[] | undefined>(() =>
@@ -71,9 +71,9 @@ export function useNewConversation() {
     if (ctaKind.value === "no-members") { router.push("/projects"); return; }
     if (ctaKind.value === "task-empty") { router.push("/settings/tasks"); return; }
     const ids = pickerAgentIds.value;
-    const count = ids ? ids.length : agent.list.length;
+    const count = ids ? ids.length : agent.visibleAgents.length;
     if (count === 1) {
-      create(ids ? ids[0] : agent.list[0].id);
+      create(ids ? ids[0] : agent.visibleAgents[0].id);
       return;
     }
     showPicker.value = true;

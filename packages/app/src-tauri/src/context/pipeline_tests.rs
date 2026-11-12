@@ -59,6 +59,7 @@ pub(super) fn make_agent() -> AgentRow {
         workspace_path: None,
         model_profile_id: None,
         fallback_profile_ids: None,
+        agent_kind: "standard".into(),
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),
     }

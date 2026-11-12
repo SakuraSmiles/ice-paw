@@ -12,8 +12,10 @@ const emit = defineEmits<{ "update:memberIds": [ids: string[]] }>();
 
 const agent = useAgentStore();
 const memberSet = computed(() => new Set(props.memberIds));
-/** 未入项目的 agent = 候选（+ 前缀） */
-const candidates = computed(() => agent.list.filter((a) => !memberSet.value.has(a.id)));
+/** 未入项目的 agent = 候选（+ 前缀）；基座 = visibleAgents（批 P1-1：临时 worker 不进成员候选） */
+const candidates = computed(() =>
+  agent.visibleAgents.filter((a) => !memberSet.value.has(a.id)),
+);
 
 function add(id: string) {
   emit("update:memberIds", [...props.memberIds, id]);

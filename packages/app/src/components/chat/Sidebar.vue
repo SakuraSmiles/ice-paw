@@ -348,7 +348,7 @@ onMounted(async () => {
   // 就绪名册三组（启动演出：遮罩划出逐行揭示，各数据到达即注入；splash 退场
   // 后 no-op 零成本）。行内容 = 到达数据的展示标签；三组统一上限 8 条——
   // 名册是短暂演出，全量标题会成「数据雨」，只留最近几条。
-  rosterAppend("agents", agent.list.slice(0, 8).map((a) => `${a.name}（${a.id}）`));
+  rosterAppend("agents", agent.visibleAgents.slice(0, 8).map((a) => `${a.name}（${a.id}）`));
   await project.load();
   rosterAppend("projects", project.activeProjects.slice(0, 8).map((p) => p.name));
   await chat.loadConversations();

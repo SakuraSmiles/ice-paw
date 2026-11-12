@@ -12,9 +12,12 @@ const emit = defineEmits<{
 
 const agent = useAgentStore();
 
-/** 传入 agentIds 时只展示这些 agent（如限项目成员） */
+/** 传入 agentIds 时只展示这些 agent（如限项目成员）；
+ *  基座恒为 visibleAgents——ephemeral/router 不进选择器（批 P1-1） */
 const visibleAgents = computed(() =>
-  props.agentIds ? agent.list.filter((a) => props.agentIds!.includes(a.id)) : agent.list,
+  props.agentIds
+    ? agent.visibleAgents.filter((a) => props.agentIds!.includes(a.id))
+    : agent.visibleAgents,
 );
 </script>
 

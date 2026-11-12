@@ -211,7 +211,10 @@ pub(crate) async fn resolve_dispatchable(
     };
     Ok(rows
         .into_iter()
-        .filter(|a| a.id != initiator_agent_id)
+        // 生命周期闸（Router 化 Phase 1 批 P1-1）：可调度候选 = 用户常规 agent。
+        // ephemeral worker（用完即走，不该被当常驻专家指名）与 router（调度中枢
+        // 不接活）一律排除——0.9.11 教训：新增数据形态必须同步审计全部消费判定。
+        .filter(|a| a.id != initiator_agent_id && a.agent_kind == "standard")
         .map(|a| DispatchableAgent {
             id: a.id,
             name: a.name,
@@ -899,5 +902,32 @@ mod tests {
             "截断计数披露"
         );
         assert_eq!(v["total_successful_tool_calls"], 10, "计数不截断");
+    }
+
+    /// Router 化批 P1-1 回归锁：可调度候选集 = 仅 standard——ephemeral worker
+    /// （用完即走，不该被当常驻专家指名）与 router（调度中枢不接活）一律排除。
+    /// 防护网测试先于 spawn_worker 落地（0.9.11 教训：新增数据形态先锁消费判定）。
+    #[tokio::test]
+    async fn dispatchable_candidates_exclude_ephemeral_and_router() {
+        let pool = progress_pool().await; // 已 seed agent-1（standard）
+        for (id, kind) in [("w-1", "ephemeral"), ("r-1", "router"), ("std-2", "standard")] {
+            sqlx::query(
+                "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref,
+                                     temperature, max_tokens, extra_params, sort_order,
+                                     cache_prompt, agent_kind)
+                 VALUES (?, ?, 'anthropic', 'claude-test', '', '', 0.7, 1024, '{}', 0, 0, ?)",
+            )
+            .bind(id)
+            .bind(id)
+            .bind(kind)
+            .execute(&pool)
+            .await
+            .expect("seed agent");
+        }
+
+        // 散落会话（project None）→ 全量分支；自身剔除 + 生命周期闸
+        let candidates = resolve_dispatchable(&pool, None, "agent-1").await.expect("resolve");
+        let ids: Vec<&str> = candidates.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["std-2"], "候选只含 standard：{ids:?}");
     }
 }

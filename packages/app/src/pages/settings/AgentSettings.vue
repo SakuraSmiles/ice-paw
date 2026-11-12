@@ -15,8 +15,9 @@ import { useAgentStore } from "../../stores/agent";
 import { msgOf, stripInvokePrefix } from "../../utils/errors";
 
 const store = useAgentStore();
-// 单一数据源：直接从 Pinia store 派生，避免本地 ref 与 store 不一致
-const agents = computed<Agent[]>(() => store.list);
+// 单一数据源：直接从 Pinia store 派生，避免本地 ref 与 store 不一致；
+// 管理页只列用户常规 agent（批 P1-1：ephemeral/router 系统实体不进配置面）
+const agents = computed<Agent[]>(() => store.visibleAgents);
 const loading = ref(true);
 // 列表加载失败（UI-2 批次二 2/3）：失败 ≠ 空——与空态引导互斥可区分
 const loadError = ref<string | null>(null);

@@ -216,7 +216,7 @@ function emptyDraft(): void {
   formError.value = "";
   advancedOpen.value = false;
   Object.assign(draft, {
-    name: "", agent_id: agentStore.list[0]?.id ?? "",
+    name: "", agent_id: agentStore.visibleAgents[0]?.id ?? "",
     kind: "daily", at: "", time: "09:00", weekdays: [1], minutes: 30, expr: "0 0 9 * * *",
     prompt: "", miss_policy: "run_once", deliver_to: null, preauth: "none",
   });
@@ -363,7 +363,7 @@ const deliverTargets = computed(() => chatStore.conversations);
               <div class="field">
                 <div class="field-label">Agent</div>
                 <select v-model="draft.agent_id" class="form-input">
-                  <option v-for="a in agentStore.list" :key="a.id" :value="a.id">{{ a.name }}</option>
+                  <option v-for="a in agentStore.visibleAgents" :key="a.id" :value="a.id">{{ a.name }}</option>
                 </select>
               </div>
             </div>
@@ -486,7 +486,7 @@ const deliverTargets = computed(() => chatStore.conversations);
               <div class="field">
                 <div class="field-label">Agent</div>
                 <select v-model="draft.agent_id" class="form-input">
-                  <option v-for="a in agentStore.list" :key="a.id" :value="a.id">{{ a.name }}</option>
+                  <option v-for="a in agentStore.visibleAgents" :key="a.id" :value="a.id">{{ a.name }}</option>
                 </select>
               </div>
             </div>

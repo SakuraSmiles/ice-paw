@@ -35,6 +35,7 @@ fn sample_agent_row(id: &str, name: &str) -> AgentRow {
         workspace_path: None,
         model_profile_id: None,
         fallback_profile_ids: None,
+        agent_kind: "standard".into(),
         created_at: "2024-01-01 00:00:00".to_string(),
         updated_at: "2024-01-01 00:00:00".to_string(),
     }
@@ -63,6 +64,7 @@ fn new_agent(provider: &str, api_key: &str) -> NewAgent {
         avatar: None,
         model_profile_id: None,
         fallback_profile_ids: None,
+        agent_kind: None,
     }
 }
 
@@ -287,6 +289,7 @@ async fn mock_create_adds_agent() {
         avatar: None,
         model_profile_id: None,
         fallback_profile_ids: None,
+        agent_kind: None,
     };
 
     let a = mock.create(new).await.unwrap();

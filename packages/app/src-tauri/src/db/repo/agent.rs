@@ -17,7 +17,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
                 max_history_messages, enabled_tools, tool_scopes, context_window,
                 supports_vision, description, avatar,
                 workspace_path, model_profile_id, fallback_profile_ids,
-                created_at, updated_at
+                agent_kind, created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
     )
@@ -34,7 +34,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
                 max_history_messages, enabled_tools, tool_scopes, context_window,
                 supports_vision, description, avatar,
                 workspace_path, model_profile_id, fallback_profile_ids,
-                created_at, updated_at
+                agent_kind, created_at, updated_at
            FROM agents WHERE id = ?",
     )
     .bind(id)
@@ -72,8 +72,9 @@ pub async fn create(
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
             max_history_messages, enabled_tools, supports_vision,
-            workspace_path, context_window, avatar, model_profile_id, fallback_profile_ids)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            workspace_path, context_window, avatar, model_profile_id, fallback_profile_ids,
+            agent_kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -106,6 +107,10 @@ pub async fn create(
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default()),
     )
+    // 生命周期标记：NewAgent.agent_kind 为 serde skip 的内部字段——用户路径
+    // 恒 None → standard（DB 默认值同源）；仅引擎内部（spawn_worker/Router 接线）
+    // 显式传 ephemeral/router
+    .bind(new_agent.agent_kind.as_deref().unwrap_or("standard"))
     .execute(pool)
     .await?;
 
@@ -423,7 +428,30 @@ mod tests {
             avatar: avatar.map(String::from),
             model_profile_id: None,
             fallback_profile_ids: None,
+            agent_kind: None,
         }
+    }
+
+    /// Router 化批 P1-1：agent_kind 默认 standard（存量零迁移语义）+ 内部路径
+    /// 显式 ephemeral 落列往返。
+    #[tokio::test]
+    async fn agent_kind_roundtrip() {
+        let pool = test_pool().await;
+
+        // 用户路径：NewAgent.agent_kind = None（serde skip 防伪造）→ DB 默认 standard
+        create(&pool, &new_agent(None), "a1", "a1")
+            .await
+            .expect("create");
+        let row = get_by_id(&pool, "a1").await.expect("get");
+        assert_eq!(row.agent_kind, "standard");
+
+        // 内部路径：spawn_worker 显式 ephemeral → 原样落列
+        let mut worker = new_agent(None);
+        worker.id = "w1".into();
+        worker.agent_kind = Some("ephemeral".into());
+        create(&pool, &worker, "w1", "w1").await.expect("create worker");
+        let row = get_by_id(&pool, "w1").await.expect("get worker");
+        assert_eq!(row.agent_kind, "ephemeral");
     }
 
     #[tokio::test]

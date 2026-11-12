@@ -33,6 +33,10 @@ export interface Agent {
   /** 降级链 profile id（null = 无链；后端批 2 消费） */
   fallback_profile_ids?: string[] | null;
   config_from_file?: boolean;
+  /** 生命周期标记（migration 61）：standard=用户常规 / router=项目调度中枢 /
+   *  ephemeral=临时 worker。列表/选择器消费一律走 agent store 的 visibleAgents；
+   *  undefined 兼容视为 standard（后端旧负载）。 */
+  agent_kind?: string;
   created_at: string;
   updated_at: string;
   has_api_key: boolean;

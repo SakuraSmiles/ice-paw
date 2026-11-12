@@ -57,6 +57,10 @@ pub struct AgentRow {
     pub model_profile_id: Option<String>,
     /// ModelProfile Phase 2: 降级链（JSON 数组串，批 2 消费；NULL = 无降级链）
     pub fallback_profile_ids: Option<String>,
+    /// 生命周期标记（migration 61，Router 化 Phase 1）：standard=用户常规 agent
+    /// （存量默认）/ router=项目调度中枢（系统实体）/ ephemeral=临时 worker
+    /// （用户配置面不可见）。DB 层 NOT NULL DEFAULT，读出恒有值。
+    pub agent_kind: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -322,6 +326,10 @@ pub struct Agent {
     /// Phase 3: 是否从 agent.yaml 读取了部分配置
     #[serde(default)]
     pub config_from_file: bool,
+    /// 生命周期标记（migration 61）：standard / router / ephemeral。
+    /// 前端消费纪律：**列表/选择器一律走 agent store 的 visibleAgents**（过滤
+    /// ephemeral/router）；getById 名字解析允许全量（委派卡/台账要能显示 worker 名）。
+    pub agent_kind: String,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用）
@@ -389,6 +397,7 @@ impl From<AgentRow> for Agent {
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
+            agent_kind: row.agent_kind,
             description: row.description,
             avatar: row.avatar,
         }
@@ -446,6 +455,11 @@ pub struct NewAgent {
     /// ModelProfile Phase 2: 降级链（批 2 消费；仅引用模式有意义）。
     #[serde(default)]
     pub fallback_profile_ids: Option<Vec<String>>,
+    /// 内部生命周期标记（批 P1-1）。**serde skip = 前端 JSON 里的该字段被忽略**，
+    /// 用户 create/update 路径恒落 standard（防伪造：ephemeral/router 只能由
+    /// 引擎内部构造 spawn_worker/Router 接线时传入）。
+    #[serde(skip)]
+    pub agent_kind: Option<String>,
 }
 
 fn default_temperature() -> f64 {
