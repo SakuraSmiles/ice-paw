@@ -474,6 +474,34 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
             .inherit(&ctx.conv_id, &child_conv_id)
             .await;
 
+        // 出生档案落事件（批 P1-4）：完整 spec 进 worker 会话流——agent 行日后
+        // 过期清理（P1-5）后事件仍是永久审计面；turn_id 归父回合的 spawn 时刻
+        //（worker 会话流首条，早于自己的 turn_context——出生证明先于第一声啼哭）
+        crate::harness::event_log::log_worker_spawned(
+            &ctx.pool,
+            &crate::harness::event_log::EventCtx::new(
+                &child_conv_id,
+                ctx.turn_id.as_deref().unwrap_or(""),
+                &ctx.agent_id,
+            ),
+            &crate::harness::event_log::WorkerSpawnedPayload {
+                v: 1,
+                worker_agent_id: worker_id.clone(),
+                creator_agent_id: ctx.agent_id.clone(),
+                parent_conversation_id: ctx.conv_id.clone(),
+                purpose: parsed.purpose.trim().to_string(),
+                model_profile_id: profile.id.clone(),
+                tool_scopes: requested_scopes.clone(),
+                max_total_tokens: parsed.max_total_tokens,
+                approval: if classify_scope_tier(&requested_scopes) == ScopeTier::Wide {
+                    "card".into()
+                } else {
+                    "readonly".into()
+                },
+            },
+        )
+        .await;
+
         // --- 6. cancel 级联 + ChatState 注册（RAII 兜底注销，同 delegate） ---
         let parent_cancel = ctx
             .cancel
@@ -605,6 +633,42 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
         )
         .await;
         let normal = crate::harness::mcp::delegate::is_normal_completion(&summary.finish_reason);
+
+        // 生命周期终态落事件（批 P1-4）：ready 附验收性产出摘要（Phase 3 router
+        // 终局判定的数据源）；failed 含熔断/取消/异常——worker 会话流完整生命线
+        //（spawned → … → lifecycle）闭环
+        crate::harness::event_log::log_worker_lifecycle(
+            &ctx.pool,
+            &crate::harness::event_log::EventCtx::new(
+                &child_conv_id,
+                ctx.turn_id.as_deref().unwrap_or(""),
+                &ctx.agent_id,
+            ),
+            &crate::harness::event_log::WorkerLifecyclePayload {
+                v: 1,
+                worker_agent_id: worker_id.clone(),
+                state: if normal { "ready".into() } else { "failed".into() },
+                finish_reason: summary.finish_reason.clone(),
+                acceptance: if normal {
+                    Some(crate::infra::strings::truncate_to_byte_boundary(
+                        summary.final_text.trim(),
+                        200,
+                        Some("…"),
+                    ))
+                } else {
+                    None
+                },
+                billed_tokens: summary.usage.as_ref().map(|u| {
+                    crate::harness::budget::billed_tokens(
+                        u.prompt_tokens as u64,
+                        u.cached_tokens as u64,
+                        u.completion_tokens as u64,
+                    )
+                }),
+            },
+        )
+        .await;
+
         let mut out = serde_json::json!({
             "worker_conversation_id": child_conv_id,
             "worker_agent_id": worker_id,

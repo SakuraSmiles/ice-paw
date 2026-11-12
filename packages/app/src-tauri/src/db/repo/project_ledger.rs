@@ -39,7 +39,8 @@ pub struct ProjectTaskRow {
     pub ended_at: Option<String>,
 }
 
-/// 任务台账：项目内全部 delegation 会话 + 最后一条 turn_ended。
+/// 任务台账：项目内全部任务会话（delegation 委派 + worker 临时工作者，批 P1-4
+/// 起收录）+ 最后一条 turn_ended。
 ///
 /// 执行计划：`idx_conversations_kind_project(kind, project_id)` 圈行，关联
 /// 子查询的 MAX(seq) 走 `idx_session_events_session_seq`，无 N+1 全表扫。
@@ -56,7 +57,7 @@ pub async fn list_project_tasks(
                   ON te.session_id = c.id AND te.kind = 'turn_ended'
                  AND te.seq = (SELECT MAX(e2.seq) FROM session_events e2
                                 WHERE e2.session_id = c.id AND e2.kind = 'turn_ended')
-          WHERE c.kind = 'delegation' AND c.project_id = ?
+          WHERE c.kind IN ('delegation', 'worker') AND c.project_id = ?
           ORDER BY c.updated_at DESC",
     )
     .bind(project_id)

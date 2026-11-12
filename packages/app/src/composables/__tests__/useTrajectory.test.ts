@@ -498,9 +498,9 @@ describe("buildRows 行模型", () => {
 });
 
 describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () => {
-  it("结构：FILTER_KEYS 13 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
-    expect(FILTER_KEYS).toHaveLength(13);
-    expect(new Set(FILTER_KEYS).size).toBe(13);
+  it("结构：FILTER_KEYS 14 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式；+worker 批 P1-4）", () => {
+    expect(FILTER_KEYS).toHaveLength(14);
+    expect(new Set(FILTER_KEYS).size).toBe(14);
     for (const k of DEFAULT_HIDDEN) expect(FILTER_KEYS).toContain(k);
   });
 
@@ -521,6 +521,8 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
       ["channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }],
       ["channel_election", { phase: "vote", vote: { voter_agent_id: "ag1", candidate_agent_id: "ag2" } }],
       ["channel_coordinator", { action: "appointed", agent_id: "ag1" }],
+      ["worker_spawned", { worker_agent_id: "w1", creator_agent_id: "ag1", parent_conversation_id: "c1", purpose: "统计文档", model_profile_id: "mp-1", tool_scopes: ["read_file"], approval: "readonly" }],
+      ["worker_lifecycle", { worker_agent_id: "w1", state: "ready", finish_reason: "end_turn", acceptance: "共 14 个文件", billed_tokens: 1234 }],
       ["modal_adapted", { stage: "s", mode: "m", items: [] }],
       ["hook_injected", { point: "p", prompt: "x" }],
       ["attachment_stored", { kind: "page", items: [] }],

@@ -656,21 +656,65 @@ async fn stream_loop_inner(
             .await;
         }
 
-        // W4.2: Token 预算触顶检查（落盘前）。纯软护栏（2026-10-30）：不再自动续期、
-        // 不再硬停——触顶只注入一次收尾提醒让 agent 自管理（接近完成 → 收尾；确有
-        // 大额剩余 → 说明理由继续）。失控由 stuck/doom 独立兜底，本轮 text 照常走
-        // 下方公共落盘路径。
-        if effective_max_tokens != usize::MAX
-            && cumulative_tokens > effective_max_tokens
-            && !budget_limit_reminded
-        {
-            budget_limit_reminded = true;
-            budget_limit_prompt =
-                Some(budget_limit_warning(cumulative_tokens, effective_max_tokens));
-            tracing::info!(
-                target: "ice_paw.chat",
-                "Token 预算已超限——注入收尾提醒（纯软护栏，不硬停不续期）",
-            );
+        // W4.2: Token 预算触顶检查（落盘前）。分叉（Router 化批 P1-4，Q1 拍板）：
+        // - hard_budget=false（用户在场的会话回合）：纯软护栏（2026-10-30）——触顶只
+        //   注入一次收尾提醒让 agent 自管理（接近完成 → 收尾；确有大额剩余 → 说明
+        //   理由继续）。失控由 stuck/doom 独立兜底，本轮 text 照常走公共落盘路径。
+        // - hard_budget=true（ephemeral worker 等无人监督回合）：触顶即终止——
+        //   没人盯着它烧用户的 key，静默超支是真实产品事故（0.9.17 前降级链烧穿
+        //   余额同族教训）。终止点在本轮工具已配对 tool_result 之后（无孤儿），
+        //   当前内容照常落盘 + fallback 文案如实披露。
+        if effective_max_tokens != usize::MAX && cumulative_tokens > effective_max_tokens {
+            if ctx.budget.hard_budget {
+                tracing::warn!(
+                    target: "ice_paw.chat",
+                    "Token 预算硬熔断（无人监督回合）：累计 {cumulative_tokens} > 上限 \
+                     {effective_max_tokens}，终止回合",
+                );
+                finalize_guard_logged(
+                    &ctx.pool,
+                    &batch_writer,
+                    &ev,
+                    &current_asst_msg_id,
+                    &msg_text,
+                    &round_blocks,
+                    round_completion_tokens,
+                    Some("（临时工作者预算已用尽，已强制停止。已花 token 达到其预算上限，\
+                         结果可能不完整——可提高预算后重试。）"),
+                    tool_round,
+                    ctx.asst_model.as_deref(),
+                    !continue_full_text.is_empty(),
+                    round_gen_ms,
+                )
+                .await;
+                return finalize_success(
+                    ctx.emitter.as_ref(),
+                    &ctx.pool,
+                    &ev,
+                    &current_asst_msg_id,
+                    // 词表复用 0.9.15 前的 budget_exceeded（0.9.15 起用户会话不再
+                    // 产生它；worker 无人监督语境重新启用——消费链全通：非正常完成
+                    // note / 台账 Failed 桶 / finishReasonLabel）
+                    "budget_exceeded",
+                    synthesize_usage(
+                        first_prompt_tokens,
+                        total_completion_tokens,
+                        collected_usage,
+                    ),
+                    first_prompt_tokens,
+                    tool_round + 1,
+                )
+                .await;
+            }
+            if !budget_limit_reminded {
+                budget_limit_reminded = true;
+                budget_limit_prompt =
+                    Some(budget_limit_warning(cumulative_tokens, effective_max_tokens));
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    "Token 预算已超限——注入收尾提醒（纯软护栏，不硬停不续期）",
+                );
+            }
         }
 
         // === M2.1: 停滞检测（落盘前）===

@@ -267,7 +267,9 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
             | "context_breakdown"
             | "channel_election"
             | "channel_coordinator"
-            | "channel_mention" => {}
+            | "channel_mention"
+            | "worker_spawned"
+            | "worker_lifecycle" => {}
             other => result.issues.push(DeriveIssue {
                 seq,
                 kind: other.to_string(),

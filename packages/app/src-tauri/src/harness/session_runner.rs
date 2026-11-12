@@ -522,9 +522,11 @@ pub(crate) async fn run_agent_turn(
         },
     );
 
-    // --- 预算（轮数/预算两维度均纯软护栏——触顶只提醒不硬停不续期） ---
+    // --- 预算（轮数/预算两维度均纯软护栏——触顶只提醒不硬停不续期；
+    //     例外：ephemeral worker 无人监督回合预算硬熔断，批 P1-4/Q1 拍板） ---
     let tool_max_rounds = agent.tool_max_rounds();
     let agent_max_tokens = agent.max_total_tokens();
+    let hard_budget = agent.agent_kind == "ephemeral";
     let budget_max_tokens = agent_max_tokens.unwrap_or_else(|| {
         // context_window = 0 视为未设置（脏值 → 0×3=0 预算 = 每轮触顶的隐性
         // 炸弹；filter 掉走默认表兜底）
@@ -831,6 +833,7 @@ pub(crate) async fn run_agent_turn(
         asst_model: Some(effective_model),
         tool_max_rounds,
         budget_max_tokens,
+        hard_budget,
         auth_registry: env.auth_registry.clone(),
         // conv_id 已 move 进上方字段，这里用 conv.id（同一值）取会话记忆
         auth_session: env.auth_sessions.session_for(&conv.id),
@@ -945,6 +948,10 @@ pub(crate) struct StreamLoopInput {
     pub asst_model: Option<String>,
     pub tool_max_rounds: Option<u32>,
     pub budget_max_tokens: usize,
+    /// 无人监督回合的预算硬熔断开关（批 P1-4，Q1 拍板；run_agent_turn 从 agent
+    /// 行的 agent_kind 判定后传入——spawn_stream_loop 内只有 agent_id 拿不到行）。
+    /// 详见 budget.rs LoopBudget::hard_budget 注释。
+    pub hard_budget: bool,
     pub auth_registry: ToolAuthRegistry,
     /// L0：本会话的授权记忆（run_agent_turn 从 AuthSessionRegistry 取好传入——
     /// 同一 conversation 跨回合共享同表）
@@ -993,6 +1000,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         asst_model,
         tool_max_rounds,
         budget_max_tokens,
+        hard_budget,
         auth_registry,
         auth_session,
         tool_registry,
@@ -1022,7 +1030,11 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         let budget = LoopBudget {
             max_tool_rounds: tool_max_rounds.unwrap_or(LoopBudget::default().max_tool_rounds),
             max_total_tokens: budget_max_tokens,
-            // 轮数/预算两维度均纯软护栏（2026-10-30）：触顶只提醒不硬停不续期，无续期字段。
+            // 硬熔断分叉（批 P1-4，Q1 拍板）：用户在场的会话回合维持纯软护栏
+            // （2026-10-30）语义不变；ephemeral worker 无人盯着、静默烧用户 key，
+            // 预算触顶即终止（worker 的 max_total_tokens 出生随 spec 落 extra_params，
+            // 经 budget_max_tokens 解析自然生效为硬帽）。
+            hard_budget,
             ..LoopBudget::default()
         };
 

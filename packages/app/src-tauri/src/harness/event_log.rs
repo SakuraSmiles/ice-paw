@@ -135,6 +135,13 @@ pub mod kind {
     pub const CHANNEL_ELECTION: &str = "channel_election";
     pub const CHANNEL_COORDINATOR: &str = "channel_coordinator";
     pub const CHANNEL_MENTION: &str = "channel_mention";
+    /// 临时 Worker 原语两 kind（Router 化批 P1-4，roadmap §5）：出生 spec
+    /// （完整档案落事件——可还原性）与生命周期终态（ready 必附验收性产出摘要）。
+    /// 两事件均落 **worker 会话**的事件流（出生证明与生命终场同场可溯；父会话的
+    /// tool_execution/tool_result 已记录调用事实与 worker_conversation_id 锚）。
+    /// derive skip 臂与前端 EV_KIND_TO_FILTER、summarizeEvent 同步。
+    pub const WORKER_SPAWNED: &str = "worker_spawned";
+    pub const WORKER_LIFECYCLE: &str = "worker_lifecycle";
 }
 
 // =========================================================================
@@ -616,6 +623,51 @@ pub struct ChannelMentionPayload {
     /// | user_preempted（无 = 跳正常发生）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
+}
+
+/// 临时 worker 出生档案（批 P1-4）：完整 spec 落事件——「不落库」与「可还原」
+/// 矛盾的解（agent 行本身可能过期清理，事件是永久审计面）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerSpawnedPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    /// worker agent 行 id（事件落 worker 会话流，行 id 与会话 id 不同）
+    pub worker_agent_id: String,
+    /// 创建者（agent id；用户直接创建留 None——v1 只有 agent 创建路径）
+    pub creator_agent_id: String,
+    /// 父会话（发起地——身份头「查看父会话」的数据源）
+    pub parent_conversation_id: String,
+    /// 创建理由（审计 + 命名素材）
+    pub purpose: String,
+    /// 模型配置引用（永不含密钥）
+    pub model_profile_id: String,
+    /// 工具面（出生时实际生效的清单）
+    pub tool_scopes: Vec<String>,
+    /// 预算硬帽（token；None = 默认 3×窗口）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_tokens: Option<i64>,
+    /// 审批形态：readonly（只读自动放行）/ card（宽面经用户批准）
+    pub approval: String,
+}
+
+/// 临时 worker 生命周期终态（批 P1-4 v1 两态；expired 留 P1-5 过期清理批接线）。
+/// ready 必附验收性产出摘要（简报 §5① 终局判定：router 对空手 ready 有权退回——
+/// Phase 3 router 消费本字段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerLifecyclePayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    pub worker_agent_id: String,
+    /// ready（正常完成）| failed（异常/熔断/取消）
+    pub state: String,
+    /// 回合终止器（end_turn / budget_exceeded / abort / doom_loop…）
+    pub finish_reason: String,
+    /// 验收性产出摘要（最终回复截断）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<String>,
+    /// 计费口径 token 合计
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billed_tokens: Option<u64>,
 }
 
 /// 上下文组成清单（③ 可观测化）——一条事件装整回合，构建期快照落库
@@ -1227,6 +1279,27 @@ pub async fn log_channel_mention(
         payload,
     )
     .await;
+}
+
+/// 临时 worker 出生档案（落 worker 会话流；actor = 创建者 agent）。
+pub async fn log_worker_spawned(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    payload: &WorkerSpawnedPayload,
+) {
+    let actor = format!("agent:{}", payload.creator_agent_id);
+    append_event(pool, ctx, kind::WORKER_SPAWNED, &actor, None, payload).await;
+}
+
+/// 临时 worker 生命周期终态（落 worker 会话流；actor 同创建者——worker 无自主
+/// 权威，事实归因到派活方）。
+pub async fn log_worker_lifecycle(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    payload: &WorkerLifecyclePayload,
+) {
+    let actor = format!("agent:{}", payload.worker_agent_id);
+    append_event(pool, ctx, kind::WORKER_LIFECYCLE, &actor, None, payload).await;
 }
 
 // =========================================================================

@@ -528,6 +528,8 @@ export type SessionEvent =
   | (SessionEventBase & { kind: "channel_election"; payload: ChannelElectionPayload })
   | (SessionEventBase & { kind: "channel_coordinator"; payload: ChannelCoordinatorPayload })
   | (SessionEventBase & { kind: "channel_mention"; payload: ChannelMentionPayload })
+  | (SessionEventBase & { kind: "worker_spawned"; payload: WorkerSpawnedPayload })
+  | (SessionEventBase & { kind: "worker_lifecycle"; payload: WorkerLifecyclePayload })
   | (SessionEventBase & { kind: "context_breakdown"; payload: ContextBreakdownPayload });
 
 // ============================================================================
@@ -601,6 +603,32 @@ export interface ChannelMentionPayload {
    *  user_preempted（用户插话取消）· ambiguous_name（重名歧义）·
    *  coordinator_failed（指定档统筹故障降级） */
   blocked_reason?: string | null;
+}
+
+/** `worker_spawned`——临时工作者出生档案（Router 化批 P1-4；落 worker 会话流） */
+export interface WorkerSpawnedPayload {
+  v?: number;
+  worker_agent_id: string;
+  creator_agent_id: string;
+  /** 父会话（身份头「查看父会话」数据源） */
+  parent_conversation_id: string;
+  purpose: string;
+  model_profile_id: string;
+  tool_scopes: string[];
+  max_total_tokens?: number | null;
+  /** readonly（只读自动放行）/ card（宽面经用户批准） */
+  approval: string;
+}
+
+/** `worker_lifecycle`——临时工作者终态（ready 必附验收性产出摘要） */
+export interface WorkerLifecyclePayload {
+  v?: number;
+  worker_agent_id: string;
+  /** ready（正常完成）/ failed（异常/熔断/取消）；expired 留 P1-5 接线 */
+  state: string;
+  finish_reason: string;
+  acceptance?: string | null;
+  billed_tokens?: number | null;
 }
 
 /** `channel_election`——选举事实（一届 = started → N×vote → result 三相） */

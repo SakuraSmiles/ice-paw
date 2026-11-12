@@ -79,6 +79,12 @@ pub struct LoopBudget {
     /// 重复累加致虚高）。
     /// agent.yaml 的 max_total_tokens 可显式覆盖；撞预算由守卫对称清场，不再卡死。
     pub max_total_tokens: usize,
+    /// 无人监督回合的硬熔断开关（Router 化批 P1-4，Q1 拍板「人在场软护栏 /
+    /// 无人监督硬停」分界）：false（默认，用户在场的会话回合）= 0.9.15 纯软护栏
+    /// 语义不变（触顶只提醒）；true（ephemeral worker 等无人盯着、静默烧用户
+    /// key 的回合）= 触顶即终止（finish_reason="budget_exceeded"，词表复用
+    /// 既有值——is_normal_completion 拒绝清单/台账 Failed 桶消费链全通）。
+    pub hard_budget: bool,
 }
 
 impl Default for LoopBudget {
@@ -88,6 +94,7 @@ impl Default for LoopBudget {
             max_attempts: MAX_ATTEMPTS,
             stuck_threshold: 5,
             max_total_tokens: 1_000_000,
+            hard_budget: false,
         }
     }
 }
@@ -130,6 +137,7 @@ mod tests {
             max_attempts: 4,
             stuck_threshold: 3,
             max_total_tokens: 1_000,
+            hard_budget: false,
         };
         // 模拟 round 1 用了 800 tokens，round 2 累计到 1600 → 超过 1000
         let mut cumulative_tokens: usize = 800;
@@ -151,6 +159,7 @@ mod tests {
             max_attempts: 4,
             stuck_threshold: 3,
             max_total_tokens: usize::MAX,
+            hard_budget: false,
         };
         // 模拟极端大的累计值
         let cumulative_tokens: usize = usize::MAX - 1;

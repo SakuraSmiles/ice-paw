@@ -41,6 +41,8 @@ import type {
   TurnEndedPayload,
   UserMessagePayload,
   PlanUpdatedPayload,
+  WorkerSpawnedPayload,
+  WorkerLifecyclePayload,
 } from "../types";
 
 // =========================================================================
@@ -79,6 +81,7 @@ export type FilterKey =
   | "model_switch"
   | "cross_session"
   | "channel"
+  | "worker"
   | "attachment_stored"
   | "modal_adapted"
   | "hook_injected";
@@ -86,11 +89,11 @@ export type FilterKey =
 /** 默认隐藏集：三类辅助事件（低频审计信息；与旧 showAux=false 行为等价） */
 export const DEFAULT_HIDDEN: FilterKey[] = ["attachment_stored", "modal_adapted", "hook_injected"];
 
-/** 「类型」下拉的分组与中文文案（4 组 13 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
+/** 「类型」下拉的分组与中文文案（4 组 14 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
 export const FILTER_GROUPS: { label: string; items: { key: FilterKey; label: string }[] }[] = [
   { label: "对话", items: [{ key: "user", label: "用户消息" }, { key: "assistant", label: "回复消息" }] },
   { label: "过程", items: [{ key: "tool", label: "工具调用" }, { key: "error", label: "错误" }] },
-  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }, { key: "cross_session", label: "跨会话来件" }, { key: "channel", label: "频道协作" }] },
+  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }, { key: "cross_session", label: "跨会话来件" }, { key: "channel", label: "频道协作" }, { key: "worker", label: "临时工作者" }] },
   { label: "辅助", items: [{ key: "attachment_stored", label: "附件落库" }, { key: "modal_adapted", label: "视觉适配" }, { key: "hook_injected", label: "钩子注入" }] },
 ];
 
@@ -114,6 +117,8 @@ const EV_KIND_TO_FILTER: Record<string, FilterKey> = {
   channel_election: "channel",
   channel_coordinator: "channel",
   channel_mention: "channel",
+  worker_spawned: "worker",
+  worker_lifecycle: "worker",
   attachment_stored: "attachment_stored",
   modal_adapted: "modal_adapted",
   hook_injected: "hook_injected",
@@ -513,6 +518,30 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       const label = ACTION_LABELS[p.action] ?? p.action;
       const who = p.agent_id ? tag(p.agent_id) : "空缺";
       return { kind: "cross", summary: `${who} ${label}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+    }
+    case "worker_spawned": {
+      const p = ev.payload as WorkerSpawnedPayload;
+      return {
+        kind: "cross",
+        summary: `临时工作者出生：${p.purpose}（工具面 ${p.tool_scopes?.length ?? 0} 件 · ${p.approval === "card" ? "经用户批准" : "只读自动放行"}）`,
+        isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false,
+      };
+    }
+    case "worker_lifecycle": {
+      const p = ev.payload as WorkerLifecyclePayload;
+      const cost = p.billed_tokens != null ? ` · 计费 ${Intl.NumberFormat("zh-CN").format(p.billed_tokens)} tok` : "";
+      if (p.state === "ready") {
+        return {
+          kind: "cross",
+          summary: `临时工作者完成（${p.finish_reason}${cost}）：${p.acceptance ?? ""}`,
+          isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false,
+        };
+      }
+      return {
+        kind: "cross",
+        summary: `临时工作者失败（${p.finish_reason}${cost}）`,
+        isError: true, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false,
+      };
     }
     case "modal_adapted": {
       const p = ev.payload as ModalAdaptedPayload;
