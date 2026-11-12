@@ -208,6 +208,8 @@ pub fn run() {
             commands::inbox_cmd::set_inbox_policy,
             commands::inbox_cmd::respond_inbox_item,
             commands::inbox_cmd::set_conversation_auto_approve,
+            commands::worker_cmd::get_worker_profile,
+            commands::worker_cmd::promote_worker,
             commands::task_cmd::list_scheduled_tasks,
             commands::task_cmd::create_scheduled_task,
             commands::task_cmd::update_scheduled_task,
@@ -580,6 +582,16 @@ pub fn run() {
             let aa_pool = pool.clone();
             tauri::async_runtime::spawn(async move {
                 harness::auto_approve::global().seed_from_db(&aa_pool).await;
+            });
+
+            // 3k) 临时 worker 退役扫尾（Router 化批 P1-5）：超龄 ephemeral 行退役
+            //     为 expired 墓碑（行/会话/事件全保留——物理删除会 CASCADE 抹掉
+            //     审计，永不走）。幂等，正常 boot 零命中零成本。
+            let retire_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = commands::worker_cmd::retire_expired_workers(&retire_pool).await {
+                    tracing::warn!(target: "ice_paw.worker", "boot 退役扫尾失败（下次启动重试）: {e}");
+                }
             });
 
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)

@@ -624,11 +624,21 @@ export interface WorkerSpawnedPayload {
 export interface WorkerLifecyclePayload {
   v?: number;
   worker_agent_id: string;
-  /** ready（正常完成）/ failed（异常/熔断/取消）；expired 留 P1-5 接线 */
+  /** ready（正常完成）/ failed（异常/熔断/取消）/ expired（超龄退役，P1-5） */
   state: string;
   finish_reason: string;
   acceptance?: string | null;
   billed_tokens?: number | null;
+}
+
+/** worker 会话身份档（get_worker_profile 命令返回；身份条渲染位，批 P1-5） */
+export interface WorkerProfile {
+  worker_agent_id: string;
+  worker_name: string;
+  /** 行生命周期：ephemeral（活跃）/ standard（已转正）/ expired（已退役） */
+  agent_kind: string;
+  spawned?: WorkerSpawnedPayload | null;
+  lifecycle?: WorkerLifecyclePayload | null;
 }
 
 /** `channel_election`——选举事实（一届 = started → N×vote → result 三相） */

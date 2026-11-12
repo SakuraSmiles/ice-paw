@@ -23,3 +23,4 @@ pub mod project_cmd;
 pub mod provider_cmd;
 pub mod screen_cmd;
 pub mod task_cmd;
+pub mod worker_cmd;

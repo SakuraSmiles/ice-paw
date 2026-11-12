@@ -636,6 +636,19 @@ const channels = {
   },
 };
 
+const workers = {
+  /** worker 会话身份档（批 P1-5 身份条数据源：出生 spec + 终态 + 行现状） */
+  async getProfile(conversationId: string): Promise<import("../types").WorkerProfile> {
+    try { return await invoke<import("../types").WorkerProfile>("get_worker_profile", { conversationId }); }
+    catch (err) { throw wrapInvokeError("workers.getProfile", err); }
+  },
+  /** 转正：ephemeral → standard（「保存为正式 agent」钩子） */
+  async promote(workerAgentId: string): Promise<void> {
+    try { await invoke<void>("promote_worker", { workerAgentId }); }
+    catch (err) { throw wrapInvokeError("workers.promote", err); }
+  },
+};
+
 const trajectory = {
   /** 读取会话事件流（seq 正序，payload 已 parse）；供「轨迹回放」视图消费。
    *  三形态：无参=全量 / limit+beforeSeq=尾部优先向前翻页 / limit+afterSeq=正向增量（live 追加轮询） */
@@ -722,5 +735,5 @@ const screen = {
   },
 };
 
-export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, appInfo, inbox, tasks, channels, trajectory, screen };
+export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, appInfo, inbox, tasks, channels, workers, trajectory, screen };
 export default bridge;

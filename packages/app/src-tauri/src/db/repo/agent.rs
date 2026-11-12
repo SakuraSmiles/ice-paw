@@ -340,6 +340,27 @@ pub async fn set_model_profile_reference(
     Ok(())
 }
 
+/// 生命周期标记窄写（Router 化批 P1-5）：转正（ephemeral→standard）/ 退役
+/// （ephemeral→expired 墓碑——行/会话/事件全保留，append-only 审计不因清理丢失；
+/// 物理删除永不走此路径的反向）。受影响行数 0 = 行不存在或 kind 不匹配。
+pub async fn set_agent_kind(
+    pool: &SqlitePool,
+    id: &str,
+    from_kind: &str,
+    to_kind: &str,
+) -> AppResult<u64> {
+    let affected = sqlx::query(
+        "UPDATE agents SET agent_kind = ? WHERE id = ? AND agent_kind = ?",
+    )
+    .bind(to_kind)
+    .bind(id)
+    .bind(from_kind)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected)
+}
+
 /// 删除 agent（依赖外键 CASCADE 自动清理 conversations / messages）
 pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     let affected = sqlx::query("DELETE FROM agents WHERE id = ?")

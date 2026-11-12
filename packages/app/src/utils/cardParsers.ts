@@ -38,6 +38,38 @@ export function parseDelegateResult(content: string): {
   return null;
 }
 
+/** 解析 spawn_worker 参数（purpose/task——批 P1-5：worker 卡取数）。
+ *  流式期间参数逐字到达，解析失败统一 null（同 parseDelegateInput 约定）。 */
+export function parseSpawnWorkerInput(input: string): { purpose: string; task: string } | null {
+  try {
+    const o = JSON.parse(input) as { purpose?: unknown; task?: unknown };
+    if (o && typeof o.purpose === "string") {
+      return { purpose: o.purpose, task: typeof o.task === "string" ? o.task : "" };
+    }
+  } catch { /* 参数未接收完/非 JSON */ }
+  return null;
+}
+
+/** 解析 spawn_worker tool_result（worker_conversation_id/worker_name/finish_reason/rounds）。
+ *  字段族与 delegate 不同名（worker_conversation_id / worker_name），故独立解析器。 */
+export function parseSpawnWorkerResult(content: string): {
+  childConvId: string | null; workerName: string | null;
+  finishReason: string | null; rounds: number | null;
+} | null {
+  try {
+    const o = JSON.parse(content) as Record<string, unknown>;
+    if (o && (typeof o.worker_conversation_id === "string" || typeof o.worker_name === "string")) {
+      return {
+        childConvId: typeof o.worker_conversation_id === "string" ? o.worker_conversation_id : null,
+        workerName: typeof o.worker_name === "string" ? o.worker_name : null,
+        finishReason: typeof o.finish_reason === "string" ? o.finish_reason : null,
+        rounds: typeof o.rounds === "number" ? o.rounds : null,
+      };
+    }
+  } catch { /* 非 worker JSON */ }
+  return null;
+}
+
 /** 解析计划工具参数（steps → PlanItem[]）。steps 缺失/非数组 → null（流式参数
  *  未到齐）；steps: [] 合法（agent 主动清空计划）。字段宽容降级，不为展示卡死。 */
 export function parsePlanInput(input: string): PlanItem[] | null {

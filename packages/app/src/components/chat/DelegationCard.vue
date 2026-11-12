@@ -14,11 +14,14 @@ import EntityAvatar from "../common/EntityAvatar.vue";
 import StatusGlyph from "./StatusGlyph.vue";
 
 const props = defineProps<{
-  /** 目标 agent 显示名（参数里的 agent_id 原样兜底） */
+  /** 卡变体（批 P1-5）：delegate=委派存量专家（默认）；worker=临时工作者
+   *  （spawn_worker 复用本卡——标题与语义切换，状态/跳转体系共用） */
+  cardKind?: "delegate" | "worker";
+  /** 目标 agent 显示名（参数里的 agent_id 原样兜底；worker=引擎生成的工作者名） */
   agentName: string;
   /** 目标 agent id（可解析时用于头像；流式参数未到齐为 null → 走名字渐变兜底） */
   agentId?: string | null;
-  /** 委派任务文本（参数 task，截断展示） */
+  /** 委派任务文本（参数 task，截断展示；worker 卡显示 purpose） */
   task: string;
   /** running=进行中（无结果）；done=正常回传；error=Err 回传 */
   status: "running" | "done" | "error";
@@ -64,7 +67,9 @@ const FINISH_LABEL: Record<string, string> = {
         :image="targetAgent?.avatar ?? null"
         size="sm"
       />
-      <span class="dlg-title">委派给 {{ agentName }}</span>
+      <span class="dlg-title">
+        {{ cardKind === "worker" ? `临时工作者 ${agentName}` : `委派给 ${agentName}` }}
+      </span>
       <span class="dlg-status">
         <StatusGlyph :status="status" />
         {{ STATUS_TEXT[status] }}

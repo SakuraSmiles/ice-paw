@@ -672,6 +672,7 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
         let mut out = serde_json::json!({
             "worker_conversation_id": child_conv_id,
             "worker_agent_id": worker_id,
+            "worker_name": worker_name,
             "finish_reason": summary.finish_reason,
             "rounds": summary.rounds,
             "response": summary.final_text,

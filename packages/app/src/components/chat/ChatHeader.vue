@@ -23,7 +23,8 @@ import { useScreenChannelStore } from "../../stores/screenChannel";
 import { useInbox } from "../../composables/useInbox";
 import { bridge } from "../../api/bridge";
 import { scheduleLabel } from "../../utils/taskSchedule";
-import type { ScheduledTask } from "../../types";
+import { msgOf } from "../../utils/errors";
+import type { ScheduledTask, WorkerProfile } from "../../types";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import StatusGlyph from "./StatusGlyph.vue";
 import InboxPopover from "./InboxPopover.vue";
@@ -131,23 +132,78 @@ const headerModel = computed(() => {
   return activeAgent.value?.model ?? "";
 });
 
-// ===== MA-1 任务详情 v1：委派子会话的回路与状态 =====
+// ===== MA-1 任务详情 v1：委派子会话的回路与状态（批 P1-5 起 worker 会话同款）=====
 // 子会话不在侧栏，用户从委派卡片/任务胶囊进来——头部必须给「我是谁的任务、
 // 从哪来、回哪去」。深度=1 护栏保证父会话必为 kind='chat'（在侧栏列表内）。
 // 状态只有 进行中（streamingConvIds）/已结束 两态——done/failed 精确终态是
 // MA-2 台账（turn_ended 派生状态机）的事，此处不伪造。
 const delegation = computed(() => {
   const conv = chat.activeConversation;
-  if (!conv || conv.kind !== "delegation") return null;
+  if (!conv || (conv.kind !== "delegation" && conv.kind !== "worker")) return null;
   const parentId = conv.parent_conversation_id ?? null;
   const parentTitle = parentId
     ? (chat.conversations.find((c) => c.id === parentId)?.title ?? "父会话")
     : null;
-  return { parentId, parentTitle, running: chat.streamingConvIds.has(conv.id) };
+  return {
+    kind: conv.kind as "delegation" | "worker",
+    parentId,
+    parentTitle,
+    running: chat.streamingConvIds.has(conv.id),
+  };
 });
 
 function goBackToParent() {
   if (delegation.value?.parentId) chat.selectConversation(delegation.value.parentId);
+}
+
+// ===== 临时工作者身份条（批 P1-5「不孤岛」触点）：出生档案/状态/转正 =====
+// 数据源 get_worker_profile（worker 会话事件流第一条 spawned + 最后一条
+// lifecycle + agent 行现状）；切进 worker 会话时拉取，失败静默（条降级只显徽章）。
+const workerProfile = ref<WorkerProfile | null>(null);
+const promoting = ref(false);
+const promoteError = ref<string | null>(null);
+async function loadWorkerProfile() {
+  workerProfile.value = null;
+  promoteError.value = null;
+  const conv = chat.activeConversation;
+  if (!conv || conv.kind !== "worker") return;
+  try {
+    workerProfile.value = await bridge.workers.getProfile(conv.id);
+  } catch { /* 非关键路径：身份条降级为仅徽章 */ }
+}
+watch(() => chat.activeConversation?.id, loadWorkerProfile, { immediate: true });
+
+const workerStateLabel = computed(() => {
+  const p = workerProfile.value;
+  if (!p) return null;
+  if (p.agent_kind === "standard") return "已转正";
+  if (p.agent_kind === "expired") return "已退役";
+  const st = p.lifecycle?.state;
+  if (st === "ready") return "已完成";
+  if (st === "failed") return "失败";
+  if (delegation.value?.running) return "执行中";
+  return st ?? "已结束";
+});
+
+async function promoteWorker() {
+  const p = workerProfile.value;
+  if (!p || promoting.value) return;
+  promoting.value = true;
+  promoteError.value = null;
+  try {
+    await bridge.workers.promote(p.worker_agent_id);
+    await loadWorkerProfile();
+    await useAgentStore().load(true);
+  } catch (e) {
+    promoteError.value = msgOf(e);
+  } finally {
+    promoting.value = false;
+  }
+}
+
+/** 创建者名（agent store 全量解析——worker/创建者都不进 visibleAgents 但 getById 命中） */
+function agentNameOf(id?: string): string {
+  return (id && agent.getById(id)?.name) || "agent";
 }
 
 // ===== 定时任务载体识别（0.9.3）：任务专属会话头辨识——徽章「定时任务」+ =====
@@ -386,9 +442,22 @@ async function toggleScreenShare() {
             <span v-if="titleSaved" class="title-saved-flag">已保存</span>
           </Transition>
           <!-- MA-1 任务详情 v1：徽章升级为「委派任务」+ 状态 glyph（进行中像素格/已结束中性环；
-               done/failed 精确终态是 MA-2 台账，不伪造） -->
+               done/failed 精确终态是 MA-2 台账，不伪造）。批 P1-5：worker 会话
+               同位换「临时工作者」徽章，终态词来自身份档（不伪造） -->
           <span
-            v-if="delegation"
+            v-if="delegation?.kind === 'worker'"
+            class="header-kind-badge"
+            :title="`临时工作者 · ${workerStateLabel ?? '已结束'}`"
+          >
+            <StatusGlyph
+              :size="12"
+              :status="delegation.running ? 'running' : 'pending'"
+              :label="delegation.running ? undefined : (workerStateLabel ?? '已结束')"
+            />
+            临时工作者
+          </span>
+          <span
+            v-else-if="delegation"
             class="header-kind-badge"
             :title="delegation.running ? 'agent 委派的任务 · 执行中' : 'agent 委派的任务 · 已结束'"
           >
@@ -459,6 +528,30 @@ async function toggleScreenShare() {
             </div>
             <span v-else class="header-model channel-archived-text">已归档 · 记录只读</span>
           </template>
+          <!-- 临时工作者身份条（批 P1-5「不孤岛」触点）：出生档案一行可读——
+               做什么/谁建的/什么权限/多少预算/什么状态/可否留用。拉取失败降级
+               为默认副标题（worker 名仍可经 agent store 全量解析）。 -->
+          <div v-if="delegation?.kind === 'worker' && workerProfile" class="worker-strip">
+            <span class="worker-purpose" :title="workerProfile.spawned?.purpose">
+              {{ workerProfile.spawned?.purpose ?? workerProfile.worker_name }}
+            </span>
+            <span class="worker-meta">
+              由 {{ agentNameOf(workerProfile.spawned?.creator_agent_id) }} 创建
+              <template v-if="workerProfile.spawned"> · 工具 {{ workerProfile.spawned.tool_scopes.length }} 件</template>
+              <template v-if="workerProfile.spawned?.max_total_tokens"> · 预算 {{ workerProfile.spawned.max_total_tokens.toLocaleString() }} tok</template>
+              <template v-if="workerProfile.lifecycle?.billed_tokens"> · 实花 {{ workerProfile.lifecycle.billed_tokens.toLocaleString() }} tok</template>
+              · {{ workerStateLabel }}
+            </span>
+            <button
+              v-if="workerProfile.agent_kind === 'ephemeral'"
+              class="worker-promote"
+              :disabled="promoting"
+              title="把这个临时工作者保存为正式 agent（配置进智能体管理页，可长期使用）"
+              @click.stop="promoteWorker"
+            >{{ promoting ? "转正中…" : "转为正式" }}</button>
+            <span v-else-if="workerProfile.agent_kind === 'standard'" class="worker-promoted">已转正</span>
+            <span v-if="promoteError" class="worker-promote-error" :title="promoteError">{{ promoteError }}</span>
+          </div>
           <!-- 副标题头像：仅子会话（kind='delegation'）显示 28px 小头像。
                主会话（kind='chat'）保持纯文本「agent 名 · model」，
                外层 .header-left 的 44px 头像承担身份展示（仅在用户上传过 avatar 时）。 -->
@@ -636,6 +729,23 @@ async function toggleScreenShare() {
 .title-saved-enter-active, .title-saved-leave-active { transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
 .title-saved-enter-from, .title-saved-leave-to { opacity:0; }
 .header-meta { display:flex; align-items:center; gap:var(--ip-spacing-1_5); }
+/* 临时工作者身份条（批 P1-5）：单行档案（purpose 主体 + meta 弱化 + 转正动作） */
+.worker-strip { display:flex; align-items:center; gap:var(--ip-spacing-2); min-width:0; max-width:100%; }
+.worker-purpose {
+  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px;
+}
+.worker-meta { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); white-space: nowrap; }
+.worker-promote {
+  flex: none; border: 1px solid var(--ip-primary-400); background: none; color: var(--ip-primary-600);
+  font-size: var(--ip-text-micro-size); line-height: 1; padding: 4px var(--ip-spacing-2);
+  border-radius: var(--ip-radius-full, 999px); cursor: pointer;
+}
+.worker-promote:hover:not(:disabled) { background: var(--ip-primary-soft-bg, rgba(0, 0, 0, 0.05)); }
+.worker-promote:disabled { opacity: 0.6; cursor: default; }
+.worker-promoted { flex: none; font-size: var(--ip-text-micro-size); color: var(--ip-success-text); }
+.worker-promote-error { flex: none; font-size: var(--ip-text-micro-size); color: var(--ip-danger-text); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* agent 头像（md=28px，EntityAvatar 三级链） */
 .header-agent-avatar { flex: none; }
 /* 外层头像（xl=44px，占两行高度；用户上传时才有，无头像时元素 v-if 不渲染） */

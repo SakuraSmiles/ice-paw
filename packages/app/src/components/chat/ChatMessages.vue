@@ -42,7 +42,13 @@ import {
   parseImageBlocks, parseAttachmentBlocks, parseToolUseBlocks, parseThinkingBlocks,
   hasUserMedia, isToolResultOnlyUser,
 } from "../../utils/blockParsers";
-import { parseDelegateInput, parseDelegateResult, parsePlanInput } from "../../utils/cardParsers";
+import {
+  parseDelegateInput,
+  parseDelegateResult,
+  parsePlanInput,
+  parseSpawnWorkerInput,
+  parseSpawnWorkerResult,
+} from "../../utils/cardParsers";
 import { phaseLabel } from "../../utils/phaseMachine";
 import { usePhaseClock } from "../../composables/usePhaseClock";
 import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
@@ -640,63 +646,82 @@ const runningDelegationChildId = computed(() => {
   const pid = chat.activeConvId;
   if (!pid) return null;
   const running = chat.conversations.find(
-    (c) => c.kind === "delegation" && c.parent_conversation_id === pid && chat.streamingConvIds.has(c.id),
+    (c) => (c.kind === "delegation" || c.kind === "worker")
+      && c.parent_conversation_id === pid && chat.streamingConvIds.has(c.id),
   );
   return running?.id ?? null;
 });
 
-/** 历史 tool_use 的委派卡片取数：跨消息配对 tool_result，无结果=进行中。 */
+/** 历史 tool_use 的委派卡片取数：跨消息配对 tool_result，无结果=进行中。
+ *  spawn_worker 同卡复用（批 P1-5）：参数/结果字段族不同名，取数分支在此分野。 */
 function delegateCardFor(
   tu: { id: string; name: string; input: string },
 ): {
+  cardKind: "delegate" | "worker";
   agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null; hasError: boolean;
 } | null {
-  if (tu.name !== "delegate_to_agent") return null;
-  const input = parseDelegateInput(tu.input);
+  if (tu.name !== "delegate_to_agent" && tu.name !== "spawn_worker") return null;
+  const isWorker = tu.name === "spawn_worker";
+  const input = isWorker ? null : parseDelegateInput(tu.input);
+  const wInput = isWorker ? parseSpawnWorkerInput(tu.input) : null;
   const tr = findToolResult(tu.id);
   const dr = tr && !tr.isError ? parseDelegateResult(tr.content) : null;
+  const wr = tr && !tr.isError ? parseSpawnWorkerResult(tr.content) : null;
   const status = !tr ? "running" : tr.isError ? "error" : "done";
   return {
-    agentName: dr?.agentName ?? input?.agentId ?? "…",
-    agentId: input?.agentId ?? null,
-    task: input?.task ?? "",
+    cardKind: isWorker ? "worker" : "delegate",
+    agentName: isWorker
+      ? (wr?.workerName ?? wInput?.purpose ?? "正在创建…")
+      : (dr?.agentName ?? input?.agentId ?? "…"),
+    agentId: isWorker ? null : (input?.agentId ?? null),
+    task: isWorker ? (wInput?.task ?? wInput?.purpose ?? "") : (input?.task ?? ""),
     status,
-    childConvId: dr?.childConvId
+    childConvId: (isWorker ? wr?.childConvId : dr?.childConvId)
       ?? (status === "running"
         ? (chat.delegationChildByToolUse.get(tu.id) ?? runningDelegationChildId.value)
         : null),
-    finishReason: dr?.finishReason ?? null,
-    rounds: dr?.rounds ?? null,
+    finishReason: (isWorker ? wr?.finishReason : dr?.finishReason) ?? null,
+    rounds: (isWorker ? wr?.rounds : dr?.rounds) ?? null,
     hasError: tr?.isError ?? false,
   };
 }
 
 /** 流式中的委派卡片取数：call.arguments 逐字到达，call.result 到达即完成。
  *  running 跳转先查 store 的 tool_use 映射（delegation-started 登记），降级走
- *  会话级兜底（见 runningDelegationChildId 注释）。 */
+ *  会话级兜底（见 runningDelegationChildId 注释）。spawn_worker 同卡复用（批 P1-5）。 */
 function delegateStreamCard(call: {
   id: string; name: string; arguments: string; ended: boolean;
   result?: { content: string; isError: boolean } | null;
 }): {
+  cardKind: "delegate" | "worker";
   agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null;
 } | null {
-  if (call.name !== "delegate_to_agent") return null;
-  const input = parseDelegateInput(call.arguments || "{}");
+  if (call.name !== "delegate_to_agent" && call.name !== "spawn_worker") return null;
+  const isWorker = call.name === "spawn_worker";
+  const input = isWorker ? null : parseDelegateInput(call.arguments || "{}");
+  const wInput = isWorker ? parseSpawnWorkerInput(call.arguments || "{}") : null;
   const dr = call.result && !call.result.isError ? parseDelegateResult(call.result.content) : null;
+  const wr = call.result && !call.result.isError ? parseSpawnWorkerResult(call.result.content) : null;
   const status = !call.result ? "running" : call.result.isError ? "error" : "done";
+  const fallbackTask = isWorker
+    ? (wInput?.task ?? wInput?.purpose ?? (call.ended ? "" : "正在接收参数…"))
+    : (input?.task ?? (call.ended ? "" : "正在接收参数…"));
   return {
-    agentName: dr?.agentName ?? input?.agentId ?? "…",
-    agentId: input?.agentId ?? null,
-    task: input?.task ?? (call.ended ? "" : "正在接收参数…"),
+    cardKind: isWorker ? "worker" : "delegate",
+    agentName: isWorker
+      ? (wr?.workerName ?? wInput?.purpose ?? "正在创建…")
+      : (dr?.agentName ?? input?.agentId ?? "…"),
+    agentId: isWorker ? null : (input?.agentId ?? null),
+    task: fallbackTask,
     status,
-    childConvId: dr?.childConvId
+    childConvId: (isWorker ? wr?.childConvId : dr?.childConvId)
       ?? (status === "running"
         ? (chat.delegationChildByToolUse.get(call.id) ?? runningDelegationChildId.value)
         : null),
-    finishReason: dr?.finishReason ?? null,
-    rounds: dr?.rounds ?? null,
+    finishReason: (isWorker ? wr?.finishReason : dr?.finishReason) ?? null,
+    rounds: (isWorker ? wr?.rounds : dr?.rounds) ?? null,
   };
 }
 
@@ -1642,10 +1667,12 @@ const RESUMABLE_REASONS = new Set([
                 <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
                 <div v-if="parseToolUseBlocks(item.msg.content_blocks).length > 0 && !(isLiveAssistant(item) && toolCallList.length > 0)" class="tools-strip">
                   <div v-for="tu in parseToolUseBlocks(item.msg.content_blocks)" :key="tu.id">
-                    <!-- MA-1：delegate_to_agent 渲染为委派卡片（失败时补通用行承载原始错误） -->
+                    <!-- MA-1：delegate_to_agent 渲染为委派卡片（失败时补通用行承载原始错误）；
+                         spawn_worker 同卡复用（批 P1-5，cardKind 分野标题语义） -->
                     <template v-for="d in [delegateCardFor(tu)]" :key="d ? 'dlg-card' : 'dlg-none'">
                       <template v-if="d">
                         <DelegationCard
+                          :card-kind="d.cardKind"
                           :agent-name="d.agentName"
                           :agent-id="d.agentId"
                           :task="d.task"
@@ -1731,10 +1758,12 @@ const RESUMABLE_REASONS = new Set([
                      恒 lastIdx ≥ turnFirstIdx → groupInLiveTurn → 永不折叠，本块零改动 -->
                 <div v-if="isLiveAssistant(item) && toolCallList.length > 0" class="tools-strip">
                   <div v-for="call in toolCallList" :key="call.id">
-                    <!-- MA-1：流式中的委派卡片（参数逐字到达/结果即完成） -->
+                    <!-- MA-1：流式中的委派卡片（参数逐字到达/结果即完成）；
+                         spawn_worker 同卡复用（批 P1-5） -->
                     <template v-for="d in [delegateStreamCard(call)]" :key="d ? 'dlg-live' : 'dlg-none'">
                       <DelegationCard
                         v-if="d"
+                        :card-kind="d.cardKind"
                         :agent-name="d.agentName"
                         :agent-id="d.agentId"
                         :task="d.task"
