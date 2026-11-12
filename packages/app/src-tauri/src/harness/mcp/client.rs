@@ -330,6 +330,11 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::web::WebFetchTool));
         self.register_sync(Arc::new(super::agent_config::ReadAgentConfigTool));
         self.register_sync(Arc::new(super::proposal_tool::ProposeConfigChangeTool));
+        // 提案/spawn 引用的实体发现（脱敏只读；PLATFORM_META_TOOLS 恒注入语义）。
+        // ⚠️ 2026-11-12 生产实案修复：此注册自 0.9.4 落地起缺失——工具从未真正
+        // 注册，模型按 spawn_worker 错误指路硬调 → NotFound（低频+软失败潜伏两月；
+        // 组覆盖测试手工名单「假世界绿」未锁住）。对称 read_agent_config 走全局注册。
+        self.register_sync(Arc::new(super::proposal_tool::ListModelProfilesTool));
         // 计划维护（全局注册：委派子会话的专家也能维护自己的计划，事件落子会话日志）
         self.register_sync(Arc::new(super::plan_tool::UpdatePlanTool));
         // computer use（阶段一·看屏）：截屏/窗口枚举/窗口捕获（截屏类 Confirm 级
@@ -611,6 +616,22 @@ mod tests {
         let reg = McpRegistry::new();
         reg.register_meta_tools(&source).await;
         assert!(reg.tool_names().await.is_empty());
+    }
+
+    /// 恒注入承诺的直接锁（2026-11-12 生产实案修复配套）：PLATFORM_META_TOOLS
+    /// 每件都必须真在 with_builtin 注册表里。旧 bug：list_model_profiles 两月
+    /// 未注册——「指路但路不存在」，模型硬调 NotFound；相关测试各自在假世界绿
+    /// （组覆盖手工名单/自造 source 复制测试都锁不住「全局注册表缺件」）。
+    #[tokio::test]
+    async fn platform_meta_tools_all_registered_in_builtin() {
+        let registry = McpRegistry::with_builtin();
+        let names = registry.tool_names().await;
+        for meta in PLATFORM_META_TOOLS {
+            assert!(
+                names.iter().any(|n| n == meta),
+                "平台元工具 {meta} 未在 register_builtin 注册——恒注入承诺被击穿"
+            );
+        }
     }
 
     #[tokio::test]

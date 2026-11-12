@@ -206,8 +206,10 @@ mod tests {
     /// 2026-10-26 地基审计批 Y：名单真相源从「测试内手抄清单」改为 **真实注册表
     /// 枚举**（`McpRegistry::with_builtin()` 快照）——旧实现里 register_builtin
     /// 新增工具而测试名单/TOOL_GROUPS 两边都漏改时测试仍绿（锁没锁住真注册表）。
-    /// 组装期注册件（不在全局注册表）保留 5 件小名单：task 四件 + list_model_profiles
-    /// 在 session_runner 组装期注入（同 delegate/relay 性质，但进 TOOL_GROUPS）。
+    /// 组装期注册件（不在全局注册表）保留 4 件小名单：task 四件在 session_runner
+    /// 组装期注入（同 delegate/relay 性质，但进 TOOL_GROUPS）。list_model_profiles
+    /// 2026-11-12 起回 register_builtin 全局注册（生产实案：组装期注册之说从未
+    /// 兑现，工具两月未注册）——真注册表枚举自动覆盖，勿再列回手工名单。
     #[tokio::test]
     async fn groups_cover_all_registered_tools() {
         let registry = crate::harness::mcp::McpRegistry::with_builtin();
@@ -215,7 +217,6 @@ mod tests {
         registered.extend(
             [
                 // 组装期注册（session_runner 按 conv.kind 注入，不在 register_builtin）
-                "list_model_profiles",
                 "list_scheduled_tasks",
                 "create_scheduled_task",
                 "update_scheduled_task",
