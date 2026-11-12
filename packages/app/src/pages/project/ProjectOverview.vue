@@ -19,6 +19,7 @@ import { formatTokenCompact } from "../../utils/format";
 import { timeAgo } from "../../utils/time";
 import type { ProjectOverview as OverviewData } from "../../types";
 import EntityAvatar from "../../components/common/EntityAvatar.vue";
+import TaskLedger from "../../components/project/TaskLedger.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -341,8 +342,11 @@ const donutSegs = computed(() => {
       </div>
       <div class="mix-empty">成员暂无消息</div>
     </div>
-    <!-- 会话入口（用户拍板撤下：完整列表在侧栏）与任务台账区（重设计中）
-         先空着，只留统计带 -->
+    <!-- ===== 任务面板 v2（批 P2-2，person-first）——接棒 v1 撤下后的重设计。
+          分区排序：等你回应 > 执行中 > 失败受阻 > 已完成（DSH 005-panel 本地化）。 ===== -->
+    <TaskLedger :tasks="tasks" />
+
+    <!-- 会话入口（用户拍板撤下：完整列表在侧栏） -->
   </div>
 </template>
 

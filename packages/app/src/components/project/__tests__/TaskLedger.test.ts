@@ -1,5 +1,7 @@
-// TaskLedger.test.ts — 台账视图行为锁定：running 置顶 / updated_at 倒序 /
-// 行点击跳首页+落轨迹 / interrupted 诚实文案 / 空态引导。
+// TaskLedger.test.ts — 任务面板 v2（批 P2-2 person-first）行为锁定：
+// 分区排序（等你回应 > 执行中 > 失败受阻 > 已完成）/ 行点击跳轨迹 /
+// interrupted 诚实归「失败受阻」区 / 发起者与执行者解析 / 空态引导。
+// v1 旧锁（running 置顶等）由 taskBoard 纯函数测试覆盖同一语义。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
@@ -41,76 +43,90 @@ function seedStores() {
       base_url: null, temperature: 0.7, max_tokens: 1, extra_params: {}, sort_order: 0,
       cache_prompt: false, has_api_key: true,
       created_at: "2026-08-18 00:00:00", updated_at: "2026-08-18 00:00:00",
-    },
+    } as never,
   ];
   return { chat, agent };
 }
 
-describe("TaskLedger 台账", () => {
+function sectionsOf(w: ReturnType<typeof mount>) {
+  return w.findAll(".board-section").map((s) => s.attributes("data-section"));
+}
+
+describe("TaskLedger 任务面板 v2（批 P2-2）", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     mockInvoke.mockReset().mockResolvedValue([] as never);
     push.mockReset();
   });
 
-  it("running 置顶（即便 updated_at 更旧），其余 updated_at 倒序", () => {
+  it("分区排序：等你回应 > 执行中 > 失败受阻 > 已完成", () => {
     const { chat } = seedStores();
-    // bgStreams 有 r1 → r1 视为 running（store 无直接暴露 setter，用 streaming 计算依赖：
-    // sending+activeConvId 组合）
-    chat.selectConversation("r1");
+    // r1 在途（streaming 桶）；w1 在途且有未答 ask（waiting 最高优先）
     chat.ensureStream("r1").sending = true;
+    chat.ensureStream("w1").sending = true;
+    chat.pendingAskRequests = new Map([
+      ["w1", { payload: { request_id: "q1", question: "用哪个版本？" } } as never],
+    ]);
 
     const w = mount(TaskLedger, {
       props: {
         tasks: [
           task({ conv_id: "old-done", termination: "stop", updated_at: "2026-08-18 09:00:00" }),
           task({ conv_id: "r1", termination: null, ended_at: null, updated_at: "2026-08-18 08:00:00" }),
+          task({ conv_id: "w1", termination: null, ended_at: null, updated_at: "2026-08-18 08:30:00" }),
+          task({ conv_id: "f1", termination: "budget_exceeded", updated_at: "2026-08-18 11:00:00" }),
           task({ conv_id: "new-done", termination: "stop", updated_at: "2026-08-18 12:00:00" }),
         ],
       },
     });
-    const ids = w.findAll(".ledger-row").map((r) => r.attributes("title"));
-    // 首行 = running（r1），随后 new-done（12:00）→ old-done（09:00）
-    expect(ids[0]).toContain("进行中");
-    expect(w.findAll(".col-title")[0].text()).toBe("任务");
-    const labels = w.findAll(".state-label").map((l) => l.text());
-    expect(labels).toEqual(["进行中", "已完成", "已完成"]);
+    expect(sectionsOf(w)).toEqual(["waiting", "running", "failed", "done"]);
+    // 等你回答的问题摘要在行内呈现
+    const wSec = w.find('.board-section[data-section="waiting"]');
+    expect(wSec.text()).toContain("执行专家");
+    expect(wSec.text()).toContain("等你回答");
+    // 头部摘要计数在场
+    expect(w.find(".board-meta").text()).toContain("1 个等你回应");
   });
 
-  it("行点击 → 首页 + 落到该子会话轨迹", async () => {
+  it("行点击 → 落到该子会话轨迹（openConversationAtTrajectory）", async () => {
     seedStores();
     const chat = useChatStore();
     const spy = vi.spyOn(chat, "openConversationAtTrajectory");
-
     const w = mount(TaskLedger, {
       props: { tasks: [task({ conv_id: "child-1", parent_conversation_id: "parent" })] },
     });
-    await w.find(".ledger-row").trigger("click");
-    expect(push).toHaveBeenCalledWith("/");
+    await w.find(".task-row").trigger("click");
     expect(spy).toHaveBeenCalledWith("child-1");
   });
 
-  it("interrupted 诚实文案（无 turn_ended 且非流式）", () => {
+  it("interrupted 诚实归「失败受阻」区（无 turn_ended 且非流式）", () => {
     seedStores();
     const w = mount(TaskLedger, {
       props: { tasks: [task({ conv_id: "c", termination: null, ended_at: null })] },
     });
-    expect(w.find(".state-label").text()).toBe("中断");
+    expect(sectionsOf(w)).toEqual(["failed"]);
+    // 状态词走 StatusGlyph aria-label（可见态由 glyph 语系承载：叉/中性环）
+    expect(w.find(".task-row [role='img']").attributes("aria-label")).toBe("中断");
   });
 
-  it("发起者 null ≡ 用户发起；agent 名从 store 解析", () => {
+  it("发起者标注：agent 名解析 / null ≡ 用户发起（不显示发起标注）", () => {
     seedStores();
     const w = mount(TaskLedger, {
-      props: { tasks: [task({ executor_agent_id: "a1", initiator_agent_id: null })] },
+      props: {
+        tasks: [
+          task({ conv_id: "u", executor_agent_id: "a1", initiator_agent_id: null }),
+          task({ conv_id: "g", executor_agent_id: "a1", initiator_agent_id: "a1" }),
+        ],
+      },
     });
-    const agentCols = w.findAll(".ledger-row .col-agent");
-    expect(agentCols[0].text()).toBe("执行专家");
-    expect(agentCols[1].text()).toBe("用户");
+    const rows = w.findAll(".task-row");
+    expect(rows[0].text()).not.toContain("发起");
+    expect(rows[1].text()).toContain("执行专家 发起");
   });
 
   it("空态引导文案", () => {
     seedStores();
     const w = mount(TaskLedger, { props: { tasks: [] } });
-    expect(w.find(".ledger-empty").text()).toContain("还没有委派任务");
+    expect(w.find(".board-empty").text()).toContain("暂无任务");
   });
 });
