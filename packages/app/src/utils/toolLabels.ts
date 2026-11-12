@@ -73,6 +73,8 @@ export const TOOL_LABELS: Record<string, string> = {
   request_screen_session: "请求屏幕共享",
   // 委派
   delegate_to_agent: "委派任务",
+  // 临时 Worker 原语（Router 化 Phase 1 批 P1-2）
+  spawn_worker: "创建临时工作者",
   // 跨会话通讯（MA-3）
   send_message_to_session: "跨会话投递",
   list_conversations: "列出会话",

@@ -662,6 +662,12 @@ pub(crate) async fn run_agent_turn(
         if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
                 .await;
+            // 临时 Worker 原语（Router 化 Phase 1 批 P1-2）：与 delegate 同闸——
+            // worker 子会话（kind='worker'）/委派子会话拿不到它 = 深度闸结构性
+            // 成立（「外包不能再雇外包」）。⚠️ 勿加入 PLATFORM_TOOLS（收窄恒
+            // 保留名单会击穿深度闸，见 worker_tools.rs 模块头）。
+            reg.register(Arc::new(crate::harness::mcp::worker_tools::SpawnWorkerTool))
+                .await;
             reg.register(Arc::new(crate::harness::mcp::relay::SendToSessionTool))
                 .await;
             reg.register(Arc::new(crate::harness::mcp::relay::ListConversationsTool))

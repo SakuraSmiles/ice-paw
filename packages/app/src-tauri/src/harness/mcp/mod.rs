@@ -37,6 +37,7 @@ pub mod search;
 pub(crate) mod server_secrets;
 pub mod shell;
 pub mod tool_scopes;
+pub mod worker_tools;
 pub mod web;
 
 pub use client::{McpClient, McpRegistry, ToolContext};

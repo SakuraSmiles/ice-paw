@@ -95,7 +95,8 @@ fn validate_args(parsed: &DelegateArgs) -> AppResult<()> {
 /// 单值会把所有 Anthropic 系子会话的正常完成误标「未正常完成」（手测坐实）。
 /// 其余（length/max_tokens/budget_exceeded/stuck/abort/tool_use…）response
 /// 可能为空或不完整，须附 note 提醒委派方。
-fn is_normal_completion(reason: &str) -> bool {
+/// pub(crate)：worker_tools 复用（tool_result 的「可能未完整完成」note 判定）
+pub(crate) fn is_normal_completion(reason: &str) -> bool {
     matches!(reason, "stop" | "end_turn")
 }
 
@@ -112,7 +113,8 @@ const PROGRESS_MAX_FILES: usize = 8;
 /// 样式/漏表，跨核对靠事件流）；子会话被预算掐死时统筹者也能看到做到哪了。
 /// 纯 SELECT 无广播副作用；DB 读失败降级为零值报告（进度是增补信息，
 /// 不让诊断噪声挡住主结果回传）。
-async fn collect_progress(pool: &sqlx::SqlitePool, conv_id: &str) -> serde_json::Value {
+/// pub(crate)：worker_tools（临时 Worker 原语）同语义复用——两者执行面同构。
+pub(crate) async fn collect_progress(pool: &sqlx::SqlitePool, conv_id: &str) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     let mut total: usize = 0;
     let mut files: Vec<String> = Vec::new();
