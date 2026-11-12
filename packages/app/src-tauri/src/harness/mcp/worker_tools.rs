@@ -93,7 +93,39 @@ struct SpawnWorkerArgs {
     max_total_tokens: Option<i64>,
 }
 
-/// 参数校验 + 工具面分级（纯函数，单测锁定）。
+/// 工具面分级（批 P1-3 起：宽面不再参数层拒绝，改走审批卡）。
+/// ReadOnly = 全部条目命中只读名单（含空缺省）；Wide = 含 group:/server:/
+/// 只读名单外的裸名（写类）。Wide 在有人值守语境弹审批卡，无人值守直接拒。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeTier {
+    ReadOnly,
+    Wide,
+}
+
+fn classify_scope_tier(scopes: &[String]) -> ScopeTier {
+    let wide = scopes
+        .iter()
+        .any(|raw| !READONLY_WORKER_SCOPES.contains(&raw.as_str()));
+    if wide {
+        ScopeTier::Wide
+    } else {
+        ScopeTier::ReadOnly
+    }
+}
+
+/// 无人值守语境的 worker 家族短语（判定腿复用 ask_user_tool::unattended_reason，
+/// 文案各挂各的家族前缀——完整三段式在调用点组装）。
+fn unattended_reason_text(reason: super::ask_user_tool::UnattendedReason) -> &'static str {
+    use super::ask_user_tool::UnattendedReason::*;
+    match reason {
+        NoTurn => "当前不在对话回合内",
+        NonChatKind => "当前会话类型不支持用户审批",
+        ScheduledCarrier => "本会话是定时任务的载体，回合由计划自动触发",
+        IncomingConsumed => "本回合由跨会话来件触发，发起方是另一个 agent",
+    }
+}
+
+/// 参数校验（纯函数，单测锁定）。
 /// 返回 Err = 家族前缀稳定的三段式错误（doom_detect 依赖首行前缀稳定）。
 fn validate_spawn_args(args: &SpawnWorkerArgs) -> AppResult<()> {
     if args.purpose.trim().is_empty() {
@@ -115,21 +147,6 @@ fn validate_spawn_args(args: &SpawnWorkerArgs) -> AppResult<()> {
         return Err(AppError::Validation(
             "临时工作者创建失败: task 为空。任务描述必须自包含（这是 worker 收到的全部输入）".into(),
         ));
-    }
-    if let Some(scopes) = args.tool_scopes.as_deref() {
-        for raw in scopes {
-            if READONLY_WORKER_SCOPES.contains(&raw.as_str()) {
-                continue;
-            }
-            // 三段式：发生了什么 + 为什么 + 怎么办（批 P1-3 审批卡上线后本分支
-            // 换成弹卡，宽工具面经用户批准放行）
-            return Err(AppError::Validation(format!(
-                "临时工作者创建失败: 工具面含非只读条目「{raw}」。本版本临时 worker 仅放行只读工具\
-                 （{}），写文件/执行命令等宽权限需用户逐次审批、通道即将上线；当前如需写操作请改用 \
-                 delegate_to_agent 委派已配置的 agent",
-                READONLY_WORKER_SCOPES.join("、")
-            )));
-        }
     }
     Ok(())
 }
@@ -235,12 +252,107 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
                 ))
             })?;
 
-        // --- 2. 创建者工具面闸（治理①：worker ⊆ 创建者） ---
-        let creator = repo::agent::get_by_id(&ctx.pool, &ctx.agent_id).await?;
+        // --- 1.5 宽工具面审批闸（批 P1-3：只读自动放行 / 宽面弹卡 / 无人值守拒） ---
+        // 复用委派授权通道（chat:delegation-auth-request 同款卡 + oneshot 120s +
+        // 后台栈/toast 全复用，前端零改动）。worker_id 先生成供卡显示，批准才落库
+        // （拒绝 = 零残留）。DelegationGrant 两档对 worker 均按放行处理（命令免问
+        // 档的子会话 run_command 预授权语义不适用于 scopes 面本身，忽略附加档）。
         let requested_scopes: Vec<String> = parsed
             .tool_scopes
             .clone()
             .unwrap_or_else(|| READONLY_WORKER_SCOPES.iter().map(|s| s.to_string()).collect());
+        let worker_id = Uuid::new_v4().to_string();
+        let worker_name = worker_display_name(&parsed.purpose, &worker_id);
+        if classify_scope_tier(&requested_scopes) == ScopeTier::Wide {
+            // 无人值守语境宽面即拒（120s 必超时挂死工具轮——同 ask_user 治理：
+            // 挂死会卡调度器/消费队列；判定四腿复用 ask_user_tool::unattended_reason）
+            if let Some(reason) = super::ask_user_tool::unattended_reason(
+                &ctx.pool,
+                &ctx.conv_id,
+                ctx.turn_id.as_deref(),
+            )
+            .await
+            {
+                return Err(AppError::AuthorizationRequired {
+                    tool: "spawn_worker".into(),
+                    reason: format!(
+                        "临时工作者宽工具面需用户批准，但当前语境无人值守（{}）——\
+                         请改用只读工具面（缺省即是），或改为在最终回复中向用户建议创建",
+                        unattended_reason_text(reason)
+                    ),
+                });
+            }
+            let auth_registry = app
+                .state::<crate::harness::tool_executor::ToolAuthRegistry>()
+                .inner()
+                .clone();
+            let auth_request_id = Uuid::new_v4().to_string();
+            let rx = auth_registry.register(auth_request_id.clone()).await;
+            let auth_payload = crate::infra::protocol::DelegationAuthRequestPayload {
+                request_id: auth_request_id.clone(),
+                conversation_id: ctx.conv_id.clone(),
+                message_id: ctx.turn_id.clone().unwrap_or_default(),
+                agent_name: worker_name.clone(),
+                agent_id: worker_id.clone(),
+                // 卡主体呈现：创建理由 + 请求的权限面（用户批的是这份清单）
+                task: format!(
+                    "创建临时工作者：{}\n请求工具面：{}",
+                    parsed.purpose.trim(),
+                    requested_scopes.join("、")
+                ),
+            };
+            if let Err(e) = app.emit("chat:delegation-auth-request", &auth_payload) {
+                let _ = auth_registry.take(&auth_request_id).await;
+                return Err(AppError::Internal(format!("无法通知前端审批请求: {e}")));
+            }
+            tracing::info!(
+                target: "ice_paw.worker",
+                parent_conv = %ctx.conv_id,
+                request_id = %auth_request_id,
+                scopes = requested_scopes.join(","),
+                "等待用户批准宽工具面 worker（120s 超时）"
+            );
+            let auth_emitter =
+                crate::harness::r#loop::emitter::tauri_emitter(app.clone(), ctx.conv_id.clone());
+            let parent_cancel = ctx.cancel.clone().ok_or_else(|| {
+                AppError::Internal("spawn_worker 缺少父会话取消令牌".into())
+            })?;
+            match crate::harness::tool_executor::wait_for_auth_response(
+                rx,
+                &parent_cancel,
+                &auth_request_id,
+                &auth_registry,
+                auth_emitter.as_ref(),
+                &ctx.conv_id,
+            )
+            .await
+            {
+                Some(resp) if resp.allowed => { /* 放行（附加档忽略，见上注） */ }
+                Some(_) => {
+                    return Err(AppError::AuthorizationRequired {
+                        tool: "spawn_worker".into(),
+                        reason: format!(
+                            "用户拒绝了这次临时工作者创建（{}，工具面：{}）——\
+                             请与用户确认意图，或改用缺省只读工具面重试",
+                            parsed.purpose.trim(),
+                            requested_scopes.join("、")
+                        ),
+                    });
+                }
+                None => {
+                    return Err(AppError::AuthorizationRequired {
+                        tool: "spawn_worker".into(),
+                        reason: "临时工作者创建授权被取消或超时（120 秒内未获用户批准）\
+                                 ——请改用缺省只读工具面，或在回复中向用户说明需求"
+                            .into(),
+                    });
+                }
+            }
+        }
+
+        // --- 2. 创建者工具面闸（治理①：worker ⊆ 创建者；审批不能越权——
+        //        用户批准的是「请求面」，创建者面闸恒在此后独立执行） ---
+        let creator = repo::agent::get_by_id(&ctx.pool, &ctx.agent_id).await?;
         let violations = creator_scope_violations(
             creator
                 .tool_scopes
@@ -259,9 +371,7 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
         }
 
         // --- 3. 建 ephemeral agent 行（内部路径直调 repo：不走 create_agent 命令层，
-        //        无 yaml 生成、无物化——引用已显式） ---
-        let worker_id = Uuid::new_v4().to_string();
-        let worker_name = worker_display_name(&parsed.purpose, &worker_id);
+        //        无 yaml 生成、无物化——引用已显式；worker_id/name 已在审批段生成） ---
         let mut extra = serde_json::Map::new();
         if let Some(cap) = parsed.max_total_tokens {
             extra.insert(
@@ -549,24 +659,35 @@ mod tests {
         assert!(validate_spawn_args(&a).is_err());
     }
 
-    /// 批 P1-2 安全边界：只放行只读裸名——group:/server:/写类裸名一律拒，
-    /// 错误家族前缀稳定（AppError::Validation 变体前缀「参数校验失败」+
-    /// 工具族前缀「临时工作者创建失败」，doom_detect 按首行冒号前缀签名）。
+    /// 批 P1-3 分层判定：只读名单全命中 = ReadOnly（自动放行）；任一宽条目
+    /// （group:/server:/写类裸名）= Wide（走审批卡，无人值守拒）。
     #[test]
-    fn validate_rejects_non_readonly_scopes() {
+    fn classify_scope_tier_splits_readonly_and_wide() {
+        let ro: Vec<String> = vec!["read_file".into(), "search_kb".into()];
+        assert_eq!(classify_scope_tier(&ro), ScopeTier::ReadOnly);
+        // 缺省（空清单）由调用方展开为只读名单——空本身视为 ReadOnly
+        assert_eq!(classify_scope_tier(&[]), ScopeTier::ReadOnly);
+
         for bad in ["group:files", "server:srv-1", "write_file", "run_command"] {
-            let a = args("p", Some(vec![bad]));
-            let err = validate_spawn_args(&a).expect_err("宽工具面应暂拒");
-            let msg = err.to_string();
-            assert!(
-                msg.contains("临时工作者创建失败"),
-                "工具族前缀须在场: {msg}"
+            let mixed: Vec<String> = vec!["read_file".into(), bad.into()];
+            assert_eq!(
+                classify_scope_tier(&mixed),
+                ScopeTier::Wide,
+                "宽条目「{bad}」应判 Wide"
             );
-            assert!(msg.contains(bad), "须点名被拒条目: {msg}");
         }
-        // 只读名单全量通过
-        assert!(validate_spawn_args(&args("p", Some(vec!["read_file"]))).is_ok());
-        assert!(validate_spawn_args(&args("p", None)).is_ok());
+        // 只读条目已不进参数层校验（宽面走审批，validate 只管空值）
+        assert!(validate_spawn_args(&args("p", Some(vec!["write_file"]))).is_ok());
+    }
+
+    /// 无人值守文案映射：四腿全覆盖、家族语义到位（完整三段式在调用点）。
+    #[test]
+    fn unattended_reason_text_covers_all_legs() {
+        use crate::harness::mcp::ask_user_tool::UnattendedReason::*;
+        assert!(unattended_reason_text(NoTurn).contains("回合"));
+        assert!(unattended_reason_text(NonChatKind).contains("会话类型"));
+        assert!(unattended_reason_text(ScheduledCarrier).contains("定时任务"));
+        assert!(unattended_reason_text(IncomingConsumed).contains("跨会话来件"));
     }
 
     /// 治理①：worker 工具面 ⊆ 创建者（scope_allows 组展开——creator 配了

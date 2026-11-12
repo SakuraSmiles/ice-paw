@@ -169,22 +169,32 @@ fn bump_turn_count(turn_id: &str) -> u8 {
 // 无人值守语境判定（数据驱动，不新增 turn 管线字段）
 // =========================================================================
 
-/// 返回拒绝原因（None = 前台用户语境，可问）。三段式文案家族前缀恒
-/// 「用户选择不可用:」——稳定家族前缀是 doom_loop 签名的地基。
-async fn unattended_rejection(
+/// 无人值守语境四腿（数据判定，与文案解耦——worker 宽权限审批等后续消费方
+/// 复用同款判定、各挂各的家族前缀文案；CLAUDE.md 不变式②「新增无人值守
+/// 触发源必须同步判定」的唯一真相源在此）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnattendedReason {
+    /// 工具轮外（hooks 等语境）无回合身份
+    NoTurn,
+    /// 会话类型非 1v1 chat（组装期已按 kind 注册，此处挡直调/漂移）
+    NonChatKind,
+    /// 定时任务载体会话（kind 仍是 chat——按 scheduled_tasks 表判定）
+    ScheduledCarrier,
+    /// MA-3 跨会话来件消费回合（turn 锚消息带 incoming_source）
+    IncomingConsumed,
+}
+
+/// 无人值守语境判定（None = 前台用户语境，可问）。四腿同序：①无回合身份 →
+/// ②会话类型 → ③定时任务载体 → ④来件消费回合。
+pub(crate) async fn unattended_reason(
     pool: &sqlx::SqlitePool,
     conv_id: &str,
     turn_id: Option<&str>,
-) -> Option<AppError> {
+) -> Option<UnattendedReason> {
     // ① 工具轮外（hooks 等语境）无回合身份——问也无处归属
     let turn_id = match turn_id {
         Some(t) => t,
-        None => {
-            return Some(AppError::Validation(
-                "用户选择不可用: 当前不在对话回合内（无回合身份）。请自行决策并在结果中说明。"
-                    .into(),
-            ))
-        }
+        None => return Some(UnattendedReason::NoTurn),
     };
     // ② 会话类型防御（组装期已按 kind 注册，此处挡直调/漂移）
     let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM conversations WHERE id = ?")
@@ -194,11 +204,7 @@ async fn unattended_rejection(
         .ok()
         .flatten();
     if kind.as_deref() != Some("chat") {
-        return Some(AppError::Validation(
-            "用户选择不可用: 当前会话类型不支持用户选择（仅 1v1 对话可用）。\
-             请自行决策并在结果中说明。"
-                .into(),
-        ));
+        return Some(UnattendedReason::NonChatKind);
     }
     // ③ 定时任务载体（载体会话 kind 仍是 chat——按 scheduled_tasks 表判定；
     // 挂死等待会卡住全局串行调度器，必须在调用时拒绝）
@@ -209,11 +215,7 @@ async fn unattended_rejection(
             .await
             .unwrap_or(0);
     if task_count > 0 {
-        return Some(AppError::Validation(
-            "用户选择不可用: 本会话是定时任务的载体，回合由计划自动触发，用户不在场。\
-             请基于任务描述自行决策，并在最终结果中说明该决策未经用户确认。"
-                .into(),
-        ));
+        return Some(UnattendedReason::ScheduledCarrier);
     }
     // ④ MA-3 跨会话来件消费回合（turn 锚消息带 incoming_source = 投递物化，
     // 发起方是另一个 agent 而非用户）
@@ -225,13 +227,40 @@ async fn unattended_rejection(
             .ok()
             .flatten();
     if incoming.flatten().is_some() {
-        return Some(AppError::Validation(
-            "用户选择不可用: 本回合由跨会话来件触发，发起方是另一个 agent 而非用户。\
-             请自行决策并说明；如需用户拍板，在最终回复里给出建议即可。"
-                .into(),
-        ));
+        return Some(UnattendedReason::IncomingConsumed);
     }
     None
+}
+
+/// ask_user 语境的拒绝文案映射（家族前缀恒「用户选择不可用:」——稳定家族
+/// 前缀是 doom_loop 签名的地基）。
+fn unattended_rejection_of(reason: UnattendedReason) -> AppError {
+    use UnattendedReason::*;
+    AppError::Validation(match reason {
+        NoTurn => "用户选择不可用: 当前不在对话回合内（无回合身份）。请自行决策并在结果中说明。".into(),
+        NonChatKind => "用户选择不可用: 当前会话类型不支持用户选择（仅 1v1 对话可用）。\
+             请自行决策并在结果中说明。"
+            .into(),
+        ScheduledCarrier => "用户选择不可用: 本会话是定时任务的载体，回合由计划自动触发，用户不在场。\
+             请基于任务描述自行决策，并在最终结果中说明该决策未经用户确认。"
+            .into(),
+        IncomingConsumed => "用户选择不可用: 本回合由跨会话来件触发，发起方是另一个 agent 而非用户。\
+             请自行决策并说明；如需用户拍板，在最终回复里给出建议即可。"
+            .into(),
+    })
+}
+
+/// ask_user 语境完整判定（数据腿 + 文案映射；测试的稳定入口——生产调用点
+/// 已直连 unattended_reason + unattended_rejection_of，此包装仅测试消费）。
+#[cfg(test)]
+async fn unattended_rejection(
+    pool: &sqlx::SqlitePool,
+    conv_id: &str,
+    turn_id: Option<&str>,
+) -> Option<AppError> {
+    unattended_reason(pool, conv_id, turn_id)
+        .await
+        .map(unattended_rejection_of)
 }
 
 /// 通知前端清除对应选择卡（等待失效时调用）。与 emit_auth_cancel 对称。
@@ -326,10 +355,10 @@ impl McpClient for AskUserTool {
         validate_args(&parsed)?;
 
         // 无人值守语境：调用即拒（不进入等待——挂死会卡调度器/消费队列）
-        if let Some(err) =
-            unattended_rejection(&ctx.pool, &ctx.conv_id, ctx.turn_id.as_deref()).await
+        if let Some(reason) =
+            unattended_reason(&ctx.pool, &ctx.conv_id, ctx.turn_id.as_deref()).await
         {
-            return Err(err);
+            return Err(unattended_rejection_of(reason));
         }
 
         // 每回合护栏
