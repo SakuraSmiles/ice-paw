@@ -369,10 +369,28 @@ impl McpClient for DelegateTool {
         // 档）。工具本身保持 Always 级（通用授权层零改动），决策点是工具内部
         // 治理层（屏幕共享通道同款先例）；应答与工具授权共用同一 oneshot
         // registry + respond_tool_auth 命令，前端审批卡/后台栈/toast 全复用。
+        //
+        // 全自动短路（2026-11-12 用户拍板纳入）：会话级全自动开关是用户对该会话
+        // 的显式信任声明（Confirm 级工具已全放行）——委派授权同语义接通，不再
+        // 逐次弹卡打断无人值守流。grant=None（子会话内部授权由出生继承的全自动
+        // 开关负责，migration 58「含此会话发起的委派任务」语义闭环）；info 披露
+        // 治看不见。
         let parent_cancel = ctx
             .cancel
             .clone()
             .ok_or_else(|| AppError::Internal("delegate_to_agent 缺少父会话取消令牌".into()))?;
+        let grant = if crate::harness::auto_approve::global()
+            .is_on(&ctx.conv_id)
+            .await
+        {
+            tracing::info!(
+                target: "ice_paw.delegate",
+                parent_conv = %ctx.conv_id,
+                to_agent = %parsed.agent_id,
+                "全自动放行委派授权（会话级开关，不弹卡）"
+            );
+            None
+        } else {
         let auth_registry = app
             .state::<crate::harness::tool_executor::ToolAuthRegistry>()
             .inner()
@@ -400,7 +418,7 @@ impl McpClient for DelegateTool {
         );
         let auth_emitter =
             crate::harness::r#loop::emitter::tauri_emitter(app.clone(), ctx.conv_id.clone());
-        let grant = match crate::harness::tool_executor::wait_for_auth_response(
+        match crate::harness::tool_executor::wait_for_auth_response(
             rx,
             &parent_cancel,
             &auth_request_id,
@@ -439,6 +457,7 @@ impl McpClient for DelegateTool {
                     reason: "委派授权被取消或超时（120 秒内未获用户批准）".into(),
                 });
             }
+        }
         };
 
         // --- 3. 建子会话（kind='delegation'，继承项目，挂父边） ---

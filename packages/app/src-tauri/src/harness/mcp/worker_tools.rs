@@ -263,7 +263,23 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
             .unwrap_or_else(|| READONLY_WORKER_SCOPES.iter().map(|s| s.to_string()).collect());
         let worker_id = Uuid::new_v4().to_string();
         let worker_name = worker_display_name(&parsed.purpose, &worker_id);
+        let auto_approved = crate::harness::auto_approve::global()
+            .is_on(&ctx.conv_id)
+            .await;
         if classify_scope_tier(&requested_scopes) == ScopeTier::Wide {
+            // 全自动短路（2026-11-12 用户拍板，与 delegate 同语义）：会话级全自动
+            // 是显式信任声明且优先于无人值守判定——此会话 Confirm 级工具已全
+            // 放行，agent 自己本就能写文件/执行命令，禁它雇能干的 worker 逻辑
+            // 不自洽；放行不等待故无挂死之忧。创建者面闸（数学子集）仍在其后
+            // 独立生效。info 披露治看不见。
+            if auto_approved {
+                tracing::info!(
+                    target: "ice_paw.worker",
+                    parent_conv = %ctx.conv_id,
+                    scopes = requested_scopes.join(","),
+                    "全自动放行宽工具面 worker（会话级开关，不弹卡）"
+                );
+            } else {
             // 无人值守语境宽面即拒（120s 必超时挂死工具轮——同 ask_user 治理：
             // 挂死会卡调度器/消费队列；判定四腿复用 ask_user_tool::unattended_reason）
             if let Some(reason) = super::ask_user_tool::unattended_reason(
@@ -348,6 +364,7 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
                     });
                 }
             }
+            } // else（非全自动）结束
         }
 
         // --- 2. 创建者工具面闸（治理①：worker ⊆ 创建者；审批不能越权——
@@ -494,7 +511,7 @@ and disappears afterwards (not user-visible, auto-expiring). Read-only tools onl
                 tool_scopes: requested_scopes.clone(),
                 max_total_tokens: parsed.max_total_tokens,
                 approval: if classify_scope_tier(&requested_scopes) == ScopeTier::Wide {
-                    "card".into()
+                    if auto_approved { "auto".into() } else { "card".into() }
                 } else {
                     "readonly".into()
                 },

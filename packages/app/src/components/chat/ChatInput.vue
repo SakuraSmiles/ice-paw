@@ -713,8 +713,8 @@ function handleKeydown(e: KeyboardEvent) {
             :class="{ auto: chat.activeConversation?.auto_approve }"
             :disabled="modeSwitching || !chat.activeConversation"
             :title="chat.activeConversation?.auto_approve
-              ? '全自动已开启：工具调用免审批（委派任务同权；屏幕共享除外）。点击切回逐次审批'
-              : '点击开启全自动：本会话工具调用免审批（含委派任务；屏幕共享除外）'"
+              ? '全自动已开启：工具调用免审批（委派与临时工作者同权，含宽工具面；屏幕共享除外）。点击切回逐次审批'
+              : '点击开启全自动：本会话工具调用免审批（含委派与临时工作者；屏幕共享除外）'"
             @click="cycleApproveMode"
           >
             <component :is="chat.activeConversation?.auto_approve ? Zap : Shield" :size="13" />
