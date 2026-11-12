@@ -243,7 +243,8 @@ pub(crate) fn build_dispatch_hint(agents: &[DispatchableAgent]) -> String {
 }
 
 /// 目标解析：先 id 精确匹配，退 name 精确匹配（重名歧义 → None，走「不在集合」错误）。
-fn resolve_target<'a>(
+/// pub(crate)：delegate_async（异步变体）同源复用——两形态目标解析语义勿单边改。
+pub(crate) fn resolve_target<'a>(
     agents: &'a [DispatchableAgent],
     id_or_name: &str,
 ) -> Option<&'a DispatchableAgent> {

@@ -26,6 +26,7 @@ pub mod types;
 pub mod agent_config;
 pub mod ask_user_tool;
 pub mod delegate;
+pub mod delegate_async;
 pub mod discovery_tools;
 pub mod docx_tool;
 pub mod file_tools;

@@ -514,7 +514,7 @@ pub async fn execute_task(
                 project_id: conv.project_id.clone(),
             };
             let deliver_result =
-                crate::harness::inbox::deliver(app, pool, &source, dst, &final_text, false, false)
+                crate::harness::inbox::deliver(app, pool, &source, dst, &final_text, false, false, false)
                     .await;
             let note = match deliver_result {
                 Ok(_) => "\n[转发投递：已送达]".to_string(),

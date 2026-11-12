@@ -274,6 +274,11 @@ pub struct DeliveryOutcome {
 ///
 /// `is_reply` = expect_reply 回投件（源会话用户自己发起的回路）——不受
 /// hold 扣（见模块文档「收件三态」），refuse 仍拦。
+///
+/// `internal_chain`（批 P2-1）= 引擎内部链投递（异步委派的完成回投）：跳过
+/// 项目边界校验——源与目标存在 parent_conversation_id 硬关系（父子会话），
+/// 边界授权已由发起时的委派链自证，无需用户语义的项目边界再验（散落会话
+/// 的异步委派回投不被误拦）。用户语义投递（relay 工具/scheduler 转发）恒 false。
 #[allow(clippy::too_many_arguments)]
 pub async fn deliver(
     app: &AppHandle,
@@ -283,6 +288,7 @@ pub async fn deliver(
     content: &str,
     expect_reply: bool,
     is_reply: bool,
+    internal_chain: bool,
 ) -> AppResult<DeliveryOutcome> {
     let content = content.trim();
     if content.is_empty() {
@@ -318,7 +324,15 @@ pub async fn deliver(
         )));
     }
     if let Some(msg) = project_boundary_error(source.project_id.as_deref(), &target) {
-        return Err(AppError::Validation(msg));
+        if !internal_chain {
+            return Err(AppError::Validation(msg));
+        }
+        tracing::info!(
+            target: "ice_paw.inbox",
+            source_conv = %source.conv_id,
+            target_conv = %target.id,
+            "内部链投递跳过项目边界（委派回投：父子关系自证）"
+        );
     }
     if target.inbox_policy == "refuse" {
         return Err(AppError::Validation(format!(
@@ -642,7 +656,7 @@ pub async fn consume_pending(
                         return;
                     }
                     if let Err(e) =
-                        deliver(&app, &pool, &source, &reply_to, reply, false, true).await
+                        deliver(&app, &pool, &source, &reply_to, reply, false, true, false).await
                     {
                         tracing::warn!(target: "ice_paw.inbox", "expect_reply 回投失败: {e}");
                     }

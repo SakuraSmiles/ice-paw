@@ -169,6 +169,7 @@ impl McpClient for SendToSessionTool {
             &parsed.content,
             parsed.expect_reply,
             false,
+            false,
         )
         .await?;
 

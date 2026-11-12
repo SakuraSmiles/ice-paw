@@ -664,6 +664,16 @@ pub(crate) async fn run_agent_turn(
         if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
                 .await;
+            // 异步委派变体（Phase 2 批 P2-1）：start 受理即回执+完成自动回投；
+            // stop 取消级联。同 chat 闸（delegation 子会话拿不到 → 深度闸不变）。
+            reg.register(Arc::new(
+                crate::harness::mcp::delegate_async::StartDelegateTool,
+            ))
+            .await;
+            reg.register(Arc::new(
+                crate::harness::mcp::delegate_async::StopDelegateTool,
+            ))
+            .await;
             // 临时 Worker 原语（Router 化 Phase 1 批 P1-2）：与 delegate 同闸——
             // worker 子会话（kind='worker'）/委派子会话拿不到它 = 深度闸结构性
             // 成立（「外包不能再雇外包」）。⚠️ 勿加入 PLATFORM_TOOLS（收窄恒
