@@ -102,9 +102,12 @@ impl AuthorizationDecision {
 /// 多次回合共享同表（「允许此工具」跨轮兑现），会话删除时清、app 重启
 /// 即清——**永不落盘、按会话隔离**；跨会话（跨 conversation / 跨重启）的
 /// 持久授权属于 agent 配置域（配置提案系统），审批通道不得升级。
+/// 定时任务的自动工具预授权通过独立的本轮句柄叠加，不进入此共享记忆。
 #[derive(Debug, Clone, Default)]
 pub struct PathAuthSession {
     inner: Arc<Mutex<AuthGrants>>,
+    /// 调用方为本轮提供的工具预授权，不写入会话记忆；句柄释放即结束。
+    turn_tool_grants: Arc<HashSet<String>>,
 }
 
 /// 四档授权集合（路径族存归一化形式；工具/server 存原样 id）
@@ -123,13 +126,23 @@ struct AuthGrants {
 impl PathAuthSession {
     /// 新建空会话
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 共享用户手动批准的会话记忆，但替换本轮的自动预授权。
+    /// registry 中的原句柄不受影响；本轮 mark_* 仍写回共享会话记忆。
+    pub(crate) fn with_turn_tool_grants(&self, tools: HashSet<String>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(AuthGrants::default())),
+            inner: self.inner.clone(),
+            turn_tool_grants: Arc::new(tools),
         }
     }
 
     /// 本次工具调用是否已被会话授权覆盖（判定序 tool > dir > path）
     pub async fn is_authorized(&self, path: &str, tool_name: &str) -> bool {
+        if self.turn_tool_grants.contains(tool_name) {
+            return true;
+        }
         let grants = self.inner.lock().await;
         if grants.tools.contains(tool_name) {
             return true;
@@ -171,7 +184,8 @@ impl PathAuthSession {
     /// 用户授权的目录/路径属文件域 grant，拿来静默放行 Confirm 级工具
     /// 属范围升级，用户没批过这个）
     pub async fn is_tool_authorized(&self, tool_name: &str) -> bool {
-        self.inner.lock().await.tools.contains(tool_name)
+        self.turn_tool_grants.contains(tool_name)
+            || self.inner.lock().await.tools.contains(tool_name)
     }
 
     /// 工具档入账（「允许此工具」——会话内该工具所有调用免问；
@@ -196,13 +210,13 @@ impl PathAuthSession {
         grants.servers.insert(server_id.to_string());
     }
 
-    /// 清空本表全部授权（显式重置场景；会话级移除由 registry 丢弃整表完成）
+    /// 清空会话授权记忆；不改变调用方为在途回合提供的预授权快照。
     pub async fn clear(&self) {
         let mut grants = self.inner.lock().await;
         *grants = AuthGrants::default();
     }
 
-    /// 已授权条目总数（仅供测试 / 调试）
+    /// 会话记忆条目总数（不含本轮预授权，仅供测试 / 调试）
     #[cfg(test)]
     pub async fn len(&self) -> usize {
         let grants = self.inner.lock().await;
@@ -630,6 +644,71 @@ mod tests {
         assert!(session.is_authorized("/ws/file.txt", "read_file").await);
         assert!(session.is_authorized("/ws/file.txt/", "read_file").await);
         assert!(!session.is_authorized("/ws/other.txt", "read_file").await);
+    }
+
+    #[tokio::test]
+    async fn turn_tool_grants_are_local_and_replaced_instead_of_accumulated() {
+        let registry = AuthSessionRegistry::new();
+        let base = registry.session_for("task");
+        let all = base.with_turn_tool_grants(HashSet::from([
+            "run_command".to_string(),
+            "external_tool".to_string(),
+        ]));
+        assert!(all.is_tool_authorized("external_tool").await);
+        assert!(all.is_authorized("/outside/file", "external_tool").await);
+        assert!(!base.is_tool_authorized("run_command").await);
+        assert!(
+            !registry
+                .session_for("task")
+                .is_tool_authorized("run_command")
+                .await
+        );
+        assert!(
+            !registry
+                .session_for("other")
+                .is_tool_authorized("run_command")
+                .await
+        );
+
+        let commands = all.with_turn_tool_grants(HashSet::from(["run_command".to_string()]));
+        assert!(commands.is_tool_authorized("run_command").await);
+        assert!(!commands.is_tool_authorized("external_tool").await);
+        let none = commands.with_turn_tool_grants(HashSet::new());
+        assert!(!none.is_tool_authorized("run_command").await);
+        assert!(!none.is_authorized("/outside/file", "external_tool").await);
+        assert!(base.is_empty().await, "自动预授权从不写入会话记忆");
+    }
+
+    #[tokio::test]
+    async fn turn_tool_grants_keep_live_manual_path_directory_tool_and_server_grants() {
+        let base = PathAuthSession::new();
+        base.mark_authorized("/manual/file").await;
+        base.mark_dir_authorized("/manual/dir").await;
+        base.mark_tool_authorized("manual_tool").await;
+        base.mark_server_authorized("manual_server").await;
+        let turn = base.with_turn_tool_grants(HashSet::from(["run_command".to_string()]));
+        assert!(turn.is_authorized("/manual/file", "read_file").await);
+        assert!(
+            turn.is_authorized("/manual/dir/sub/file", "write_file")
+                .await
+        );
+        assert!(turn.is_tool_authorized("manual_tool").await);
+        assert!(turn.is_server_authorized("manual_server").await);
+
+        // 同名手动授权与自动授权重叠时，也不能在下一轮一并丢掉。
+        turn.mark_tool_authorized("run_command").await;
+        turn.mark_authorized("/new-manual-file").await;
+        base.mark_server_authorized("new-manual-server").await;
+        assert!(turn.is_server_authorized("new-manual-server").await);
+        drop(turn);
+        let next = base.with_turn_tool_grants(HashSet::new());
+        assert!(next.is_tool_authorized("run_command").await);
+        assert!(next.is_authorized("/new-manual-file", "read_file").await);
+        assert!(
+            next.is_authorized("/manual/dir/sub/file", "write_file")
+                .await
+        );
+        assert!(next.is_server_authorized("manual_server").await);
     }
 
     #[tokio::test]

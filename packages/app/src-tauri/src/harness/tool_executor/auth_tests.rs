@@ -2,6 +2,7 @@
 //! channel and retained session grants. The counting tools deliberately perform
 //! no filesystem writes: invocation itself is the protected side effect.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -180,6 +181,16 @@ impl Fixture {
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    async fn register_confirm_tool(&self, name: &'static str) {
+        self.registry
+            .register(Arc::new(CountingTool {
+                name,
+                calls: self.calls.clone(),
+                level: AuthorizationLevel::Confirm,
+            }))
+            .await;
     }
 
     async fn run(
@@ -640,4 +651,144 @@ async fn empty_paths_and_confirm_tools_do_not_inherit_path_authorization() {
         inspection.decision.needs_confirm(),
         "path grants cannot authorize a Confirm tool"
     );
+}
+
+#[tokio::test]
+async fn task_commands_to_none_requires_command_approval_again() {
+    let mut f = Fixture::new().await;
+    f.register_confirm_tool("run_command").await;
+    let base = f.session.clone();
+    let args = json!({"command": "count only"});
+
+    f.session = base.with_turn_tool_grants(HashSet::from(["run_command".to_string()]));
+    assert_result(&f.without_approval("run_command", &args).await, false);
+    assert_eq!(f.calls(), 1);
+    assert!(
+        base.is_empty().await,
+        "automatic grants never enter the base session"
+    );
+
+    // A new task or an ordinary chat obtains its own view of the same manual grants.
+    f.session = base.with_turn_tool_grants(HashSet::new());
+    let (blocks, _) = f
+        .with_approval("run_command", &args, deny(), |request| {
+            assert_eq!(request["tool_name"], "run_command");
+        })
+        .await;
+    assert_result(&blocks, true);
+    assert_eq!(
+        f.calls(),
+        1,
+        "denied command adds no invocation after narrowing"
+    );
+    assert!(base.is_empty().await);
+}
+
+#[tokio::test]
+async fn task_all_to_commands_revokes_other_confirm_tools() {
+    let mut f = Fixture::new().await;
+    f.register_confirm_tool("run_command").await;
+    f.register_confirm_tool("confirm_tool").await;
+    let base = f.session.clone();
+    let args = json!({});
+
+    f.session = base.with_turn_tool_grants(HashSet::from([
+        "run_command".to_string(),
+        "confirm_tool".to_string(),
+    ]));
+    assert_result(&f.without_approval("run_command", &args).await, false);
+    assert_result(&f.without_approval("confirm_tool", &args).await, false);
+    assert_eq!(f.calls(), 2);
+    assert!(base.is_empty().await);
+
+    f.session = base.with_turn_tool_grants(HashSet::from(["run_command".to_string()]));
+    assert_result(&f.without_approval("run_command", &args).await, false);
+    let (blocks, _) = f
+        .with_approval("confirm_tool", &args, deny(), |request| {
+            assert_eq!(request["tool_name"], "confirm_tool");
+        })
+        .await;
+    assert_result(&blocks, true);
+    assert_eq!(
+        f.calls(),
+        3,
+        "only run_command remains automatically authorized"
+    );
+    assert!(base.is_empty().await);
+}
+
+#[tokio::test]
+async fn manual_tool_approval_during_task_survives_the_next_none_turn() {
+    let mut f = Fixture::new().await;
+    f.register_confirm_tool("run_command").await;
+    f.register_confirm_tool("confirm_tool").await;
+    let base = f.session.clone();
+    let args = json!({});
+
+    f.session = base.with_turn_tool_grants(HashSet::from(["run_command".to_string()]));
+    let (blocks, _) = f
+        .with_approval(
+            "confirm_tool",
+            &args,
+            Response::Decide {
+                allowed: true,
+                scope: AuthScope::ThisTool,
+            },
+            |_| {},
+        )
+        .await;
+    assert_result(&blocks, false);
+    assert!(base.is_tool_authorized("confirm_tool").await);
+    assert!(!base.is_tool_authorized("run_command").await);
+
+    f.session = base.with_turn_tool_grants(HashSet::new());
+    assert_result(&f.without_approval("confirm_tool", &args).await, false);
+    let (blocks, _) = f.with_approval("run_command", &args, deny(), |_| {}).await;
+    assert_result(&blocks, true);
+    assert_eq!(
+        f.calls(),
+        2,
+        "manual approval persists while automatic approval expires"
+    );
+    assert!(base.is_tool_authorized("confirm_tool").await);
+    assert!(!base.is_tool_authorized("run_command").await);
+}
+
+#[tokio::test]
+async fn rejected_or_cancelled_task_approval_does_not_leak_into_the_next_turn() {
+    for cancel_request in [false, true] {
+        let mut f = Fixture::new().await;
+        f.register_confirm_tool("run_command").await;
+        f.register_confirm_tool("confirm_tool").await;
+        let base = f.session.clone();
+        let args = json!({});
+        f.session = base.with_turn_tool_grants(HashSet::from(["run_command".to_string()]));
+
+        let response = if cancel_request {
+            Response::Cancel
+        } else {
+            Response::Decide {
+                allowed: false,
+                scope: AuthScope::ThisTool,
+            }
+        };
+        let (blocks, _) = f
+            .with_approval("confirm_tool", &args, response, |_| {})
+            .await;
+        assert_result(&blocks, true);
+        assert_eq!(f.calls(), 0);
+        assert!(base.is_empty().await);
+
+        f.session = base.with_turn_tool_grants(HashSet::new());
+        for tool in ["run_command", "confirm_tool"] {
+            let (blocks, _) = f.with_approval(tool, &args, deny(), |_| {}).await;
+            assert_result(&blocks, true);
+        }
+        assert_eq!(
+            f.calls(),
+            0,
+            "neither rejected nor automatic grants survive"
+        );
+        assert!(base.is_empty().await);
+    }
 }

@@ -24,6 +24,7 @@
 //! `chat_state.start()` 新建并拒绝重入；委派路径 `parent.child_token()` 级联取消），
 //! runner 只消费。spawn 后的注销责任在流式任务的 RAII 守卫（见 [`spawn_stream_loop`]）。
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -152,6 +153,16 @@ pub(crate) struct AgentTurnInput {
 pub(crate) async fn run_agent_turn(
     env: &TurnEnv<'_>,
     input: AgentTurnInput,
+) -> AppResult<tokio::sync::oneshot::Receiver<TurnSummary>> {
+    run_agent_turn_with_tool_grants(env, input, HashSet::new()).await
+}
+
+/// 带调用方本轮预授权的同一执行路径。预授权仅随本轮句柄传入循环，
+/// 不 seed AuthSessionRegistry；失败、取消、结束都不会留下自动授权。
+pub(crate) async fn run_agent_turn_with_tool_grants(
+    env: &TurnEnv<'_>,
+    input: AgentTurnInput,
+    turn_tool_grants: HashSet<String>,
 ) -> AppResult<tokio::sync::oneshot::Receiver<TurnSummary>> {
     let AgentTurnInput {
         conv,
@@ -853,7 +864,10 @@ pub(crate) async fn run_agent_turn(
         hard_budget,
         auth_registry: env.auth_registry.clone(),
         // conv_id 已 move 进上方字段，这里用 conv.id（同一值）取会话记忆
-        auth_session: env.auth_sessions.session_for(&conv.id),
+        auth_session: env
+            .auth_sessions
+            .session_for(&conv.id)
+            .with_turn_tool_grants(turn_tool_grants),
         tool_registry,
         // 事件 actor 与工具上下文的 agent 归属 = **执行成员**：频道回合的执行
         // 者 ≠ 会话行 agent_id（那是统筹者投影）——此前取行值致频道回合的

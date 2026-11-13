@@ -46,6 +46,8 @@ use crate::harness::provider;
 use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv, TurnSummary};
 use crate::infra::protocol::ContentBlock;
 
+mod authorization;
+
 /// 调度 tick 周期。
 pub const TICK: Duration = Duration::from_secs(60);
 /// 任务级最小触发间隔（分钟）——interval 档钳制下限（护栏，防误配风暴）。
@@ -475,57 +477,22 @@ pub async fn execute_task(
     let conv_id_guard = conv.id.clone();
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
-    // --- 无人值守预授权 seed（2026-09-20 拍板三档）：任务 = 用户事先委托的
-    //     自动化，授权范围建任务时划定——治理权最大原则。必须在回合 spawn 前
-    //     完成（委派 4.5 同款时序）；只写载体会话的授权记忆（他处零污染），
-    //     生效路径 = Confirm 级判定的 is_tool_authorized 分支。屏幕家族仍走
-    //     通道治理不进预授权（委派不变式 3 对齐：request_screen_session 排除）。
-    match t.preauth.as_str() {
-        "commands" => {
-            app.state::<crate::harness::authority::AuthSessionRegistry>()
-                .inner()
-                .session_for(&conv.id)
-                .mark_tool_authorized("run_command")
-                .await;
-            tracing::info!(
-                target: "ice_paw.scheduler",
-                task = %t.name,
-                "任务预授权: commands 档（载体会话 run_command 免问）"
-            );
-        }
-        "all" => {
-            let registry = app
-                .state::<std::sync::Arc<crate::harness::mcp::McpRegistry>>()
-                .inner()
-                .clone();
-            let snap = registry.snapshot().await;
-            let mut seeded = 0usize;
-            let session = app
-                .state::<crate::harness::authority::AuthSessionRegistry>()
-                .inner();
-            // 复用 session_for：逐工具 mark（幂等）
-            for (name, tool) in &snap {
-                if *name == "request_screen_session" {
-                    continue; // 屏幕家族走通道治理，不进预授权
-                }
-                if tool.authorization_level()
-                    == crate::harness::mcp::types::AuthorizationLevel::Confirm
-                {
-                    session
-                        .session_for(&conv.id)
-                        .mark_tool_authorized(name)
-                        .await;
-                    seeded += 1;
-                }
-            }
-            tracing::info!(
-                target: "ice_paw.scheduler",
-                task = %t.name,
-                "任务预授权: all 档（载体会话 {seeded} 个 Confirm 工具免问）"
-            );
-        }
-        _ => {}
-    }
+    // --- 本轮无人值守预授权：实际起跑前重新读取，不能沿用排队时的旧档位。
+    // 与手动会话授权分开，整轮结束/准备失败后随本轮句柄释放，无需撤销共享记忆。
+    let global_registry = app
+        .state::<std::sync::Arc<crate::harness::mcp::McpRegistry>>()
+        .inner()
+        .clone();
+    let (preauth_mode, turn_tool_grants) =
+        authorization::resolve_task_tool_grants(pool, &t.id, &global_registry).await?;
+    tracing::info!(
+        target: "ice_paw.scheduler",
+        task_id = %t.id,
+        conversation_id = %conv.id,
+        mode = %preauth_mode,
+        tool_count = turn_tool_grants.len(),
+        "任务预授权已按最新设置应用，仅本轮有效"
+    );
 
     // --- 执行记录（running；载体会话已确定） ---
     let run_id = Uuid::new_v4().to_string();
@@ -543,7 +510,7 @@ pub async fn execute_task(
     ];
     let fallback = crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
-    let result = session_runner::run_agent_turn(
+    let result = session_runner::run_agent_turn_with_tool_grants(
         &TurnEnv {
             emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv.id.clone()),
             tool_app: Some(app.clone()),
@@ -552,10 +519,7 @@ pub async fn execute_task(
                 .state::<crate::harness::read_route::ReadRouteRegistry>()
                 .inner(),
             chat_state: chat_state.clone(),
-            global_registry: std::sync::Arc::clone(
-                app.state::<std::sync::Arc<crate::harness::mcp::McpRegistry>>()
-                    .inner(),
-            ),
+            global_registry,
             mcp_manager: std::sync::Arc::clone(
                 app.state::<std::sync::Arc<crate::harness::mcp::McpServerManager>>()
                     .inner(),
@@ -592,6 +556,7 @@ pub async fn execute_task(
             cancel_token: cancel_token.clone(),
             fallback,
         },
+        turn_tool_grants,
     )
     .await;
 
