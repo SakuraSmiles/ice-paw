@@ -702,9 +702,13 @@ pub(crate) async fn run_agent_turn(
                 crate::harness::mcp::task_tools::DeleteScheduledTaskTool,
             ))
             .await;
-            // 用户选择卡（2026-09-30）：回合内人机决策点——仅 1v1 用户会话
-            // （频道多成员语义 v1 未定、委派子会话无用户；定时任务/MA-3 消费
-            // 回合在工具内按数据判定拒绝，见 ask_user_tool::unattended_rejection）
+        }
+        // 用户选择卡（2026-09-30）：回合内人机决策点。P2.5（2026-11-13）扩至
+        // 任务会话（delegation/worker）——「需要你」区的信号源：worker 卡住
+        // 等人回答比 agent 瞎猜好（DSH person-first：面板置顶提醒用户进去作答，
+        // AskUserCard 常驻等待无超时）；频道仍不注册（多成员语义 v1 未定）。
+        // 定时任务/MA-3 消费回合在工具内按数据判定拒绝（unattended_rejection）。
+        if matches!(conv.kind.as_str(), "chat" | "delegation" | "worker") {
             reg.register(Arc::new(crate::harness::mcp::ask_user_tool::AskUserTool))
                 .await;
         }

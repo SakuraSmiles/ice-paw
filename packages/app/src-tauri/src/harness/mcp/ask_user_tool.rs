@@ -196,14 +196,16 @@ pub(crate) async fn unattended_reason(
         Some(t) => t,
         None => return Some(UnattendedReason::NoTurn),
     };
-    // ② 会话类型防御（组装期已按 kind 注册，此处挡直调/漂移）
+    // ② 会话类型防御（组装期已按 kind 注册，此处挡直调/漂移）。P2.5 起任务
+    // 会话（delegation/worker）放行——ask 挂起等人是 person-first 设计（面板
+    // 「需要你」区置顶提醒）；频道等其余 kind 仍拒。
     let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM conversations WHERE id = ?")
         .bind(conv_id)
         .fetch_optional(pool)
         .await
         .ok()
         .flatten();
-    if kind.as_deref() != Some("chat") {
+    if !matches!(kind.as_deref(), Some("chat") | Some("delegation") | Some("worker")) {
         return Some(UnattendedReason::NonChatKind);
     }
     // ③ 定时任务载体（载体会话 kind 仍是 chat——按 scheduled_tasks 表判定；
@@ -238,7 +240,7 @@ fn unattended_rejection_of(reason: UnattendedReason) -> AppError {
     use UnattendedReason::*;
     AppError::Validation(match reason {
         NoTurn => "用户选择不可用: 当前不在对话回合内（无回合身份）。请自行决策并在结果中说明。".into(),
-        NonChatKind => "用户选择不可用: 当前会话类型不支持用户选择（仅 1v1 对话可用）。\
+        NonChatKind => "用户选择不可用: 当前会话类型不支持用户选择（1v1 对话与任务会话可用）。\
              请自行决策并在结果中说明。"
             .into(),
         ScheduledCarrier => "用户选择不可用: 本会话是定时任务的载体，回合由计划自动触发，用户不在场。\
@@ -669,5 +671,27 @@ mod tests {
                 .is_some(),
             "频道 kind 应拒绝（防御位）"
         );
+    }
+
+    /// P2.5（2026-11-13）：任务会话（delegation/worker）放行——「需要你」区的
+    /// 信号源（worker 卡住挂起等人，面板置顶提醒用户作答）。防闸将来又收窄。
+    #[tokio::test]
+    async fn gate_allows_task_conversations() {
+        let pool = gate_pool().await;
+        for kind in ["delegation", "worker"] {
+            let cid = format!("conv-{kind}");
+            sqlx::query(
+                "INSERT INTO conversations (id, agent_id, title, kind) VALUES (?, 'agent-1', 't', ?)",
+            )
+            .bind(&cid)
+            .bind(kind)
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert!(
+                unattended_rejection(&pool, &cid, Some("m-any")).await.is_none(),
+                "{kind} 会话应放行（挂起等人，非无人值守）"
+            );
+        }
     }
 }
