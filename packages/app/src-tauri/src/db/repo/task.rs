@@ -223,13 +223,14 @@ pub struct RecentRunView {
     pub task_name: String,
     pub status: String,
     pub summary: Option<String>,
+    pub error: Option<String>,
     pub started_at: String,
     pub finished_at: Option<String>,
 }
 
 pub async fn recent_runs(pool: &SqlitePool, limit: i64) -> AppResult<Vec<RecentRunView>> {
     let rows = sqlx::query_as::<_, RecentRunView>(
-        "SELECT r.id AS run_id, r.task_id, t.name AS task_name, r.status, r.summary,
+        "SELECT r.id AS run_id, r.task_id, t.name AS task_name, r.status, r.summary, r.error,
                 r.started_at, r.finished_at
          FROM task_runs r JOIN scheduled_tasks t ON t.id = r.task_id
          ORDER BY r.started_at DESC, r.id DESC LIMIT ?",

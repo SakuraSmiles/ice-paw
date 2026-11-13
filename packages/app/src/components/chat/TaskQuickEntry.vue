@@ -15,6 +15,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { bridge } from "../../api/bridge";
 import { timeAgo, timeUntil } from "../../utils/time";
+import { scheduledTaskNotification, scheduledTaskReason, scheduledTaskStatus } from "../../utils/scheduledTaskStatus";
 import type { RecentTaskRun, ScheduledTaskView } from "../../types";
 
 const router = useRouter();
@@ -32,7 +33,7 @@ function pickNextTask(list: ScheduledTaskView[]): ScheduledTaskView | null {
   return best;
 }
 
-// ===== OS 失焦通知：任务完成/失败且应用不在前台时系统通知 =====
+// ===== OS 失焦通知：按任务终态区分完成/未完成/停止/错过 =====
 // 恰一次语义：run_id 进已通知集不再重发（容量 50 滚动防泄漏）；聚焦时静默
 // （用户自己能看到入口）。权限失败静默降级（入口可见性兜底）。
 let notifiedRunIds = new Set<string>();
@@ -52,13 +53,10 @@ async function ensureNotifPermission(): Promise<void> {
 function maybeNotify(list: RecentTaskRun[]): void {
   if (!notifReady || !document.hidden) return;
   for (const r of list) {
-    if (r.status === "running" || notifiedRunIds.has(r.run_id)) continue;
+    const notification = scheduledTaskNotification(r);
+    if (!notification || notifiedRunIds.has(r.run_id)) continue;
     notifiedRunIds.add(r.run_id);
-    const firstLine = (r.summary ?? "").split("\n")[0].trim();
-    sendNotification({
-      title: r.status === "error" ? `定时任务失败：${r.task_name}` : `定时任务完成：${r.task_name}`,
-      body: r.status === "error" ? (r.summary ?? "查看执行记录了解详情") : (firstLine || "点击查看结果"),
-    });
+    sendNotification(notification);
   }
   if (notifiedRunIds.size > 50) {
     notifiedRunIds = new Set([...notifiedRunIds].slice(-50));
@@ -88,18 +86,13 @@ const lastRun = computed(() => recent.value[0] ?? null);
 /** 两行任一存在才渲染（无任务整体隐藏） */
 const visible = computed(() => !!lastRun.value || !!nextTask.value);
 
-const statusTitle = (s: string) =>
-  ({ done: "已完成", running: "运行中", error: "失败", missed: "已错过" }[s] ?? s);
-/** 状态胶囊语义档（health-chip 同四档 + next 主色） */
-const statusTone = (s: string) =>
-  ({ running: "warn", done: "ok", error: "danger", missed: "muted" }[s] ?? "muted");
 </script>
 
 <template>
   <div v-if="visible" class="task-entry">
     <!-- 上行：最近一次执行（状态胶囊 + 名 + 相对时） -->
-    <button v-if="lastRun" class="entry-line" title="定时任务" @click="router.push('/settings/tasks')">
-      <span :class="['tag', `tag--${statusTone(lastRun.status)}`]">{{ statusTitle(lastRun.status) }}</span>
+    <button v-if="lastRun" class="entry-line" :title="scheduledTaskReason(lastRun) || '定时任务'" @click="router.push('/settings/tasks')">
+      <span :class="['tag', `tag--${scheduledTaskStatus(lastRun.status).tone}`]">{{ scheduledTaskStatus(lastRun.status).label }}</span>
       <span class="entry-name">{{ lastRun.task_name }}</span>
       <span class="entry-time">{{ timeAgo(lastRun.started_at) }}</span>
     </button>
@@ -113,11 +106,12 @@ const statusTone = (s: string) =>
     <div v-if="recent.length" class="entry-pop">
       <button
         v-for="r in recent" :key="r.run_id"
-        class="pop-row" @click="router.push('/settings/tasks')"
+        class="pop-row" :title="scheduledTaskReason(r) || r.summary || undefined" @click="router.push('/settings/tasks')"
       >
-        <span :class="['tag', `tag--${statusTone(r.status)}`]">{{ statusTitle(r.status) }}</span>
+        <span :class="['tag', `tag--${scheduledTaskStatus(r.status).tone}`]">{{ scheduledTaskStatus(r.status).label }}</span>
         <span class="pop-name">{{ r.task_name }}</span>
         <span class="pop-time">{{ timeAgo(r.started_at) }}</span>
+        <span v-if="scheduledTaskReason(r)" class="pop-reason">{{ scheduledTaskReason(r) }}</span>
       </button>
       <button class="pop-manage" @click="router.push('/settings/tasks')">管理定时任务…</button>
     </div>
@@ -143,10 +137,10 @@ const statusTone = (s: string) =>
   color: var(--ip-color-text-disabled);
   white-space: nowrap;
 }
-.tag--ok { color: var(--ip-success-text); }
+.tag--success { color: var(--ip-success-text); }
 .tag--danger { color: var(--ip-danger-text); }
-.tag--warn { color: var(--ip-warning-text); }
-.tag--muted { color: var(--ip-color-text-disabled); }
+.tag--warning { color: var(--ip-warning-text); }
+.tag--neutral { color: var(--ip-color-text-disabled); }
 .tag--next { color: var(--ip-primary-600); }
 .entry-name { justify-self: start; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
 .entry-time { justify-self: end; color: var(--ip-color-text-disabled); }
@@ -158,6 +152,7 @@ const statusTone = (s: string) =>
 .pop-row:hover { background: var(--ip-color-bg-tertiary); }
 .pop-name { justify-self: start; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
 .pop-time { justify-self: end; color: var(--ip-color-text-disabled); }
+.pop-reason { grid-column: 2 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-secondary); }
 .pop-manage { margin-top: 2px; padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border: none; border-top: 1px solid var(--ip-color-border-default); background: transparent; color: var(--ip-primary-600); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; text-align: left; }
 .pop-manage:hover { color: var(--ip-primary-700, var(--ip-primary-600)); }
 </style>

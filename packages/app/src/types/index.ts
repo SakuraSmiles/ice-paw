@@ -1371,7 +1371,7 @@ export interface ScheduledTask {
   /** 无人值守预授权：none | commands | all */
   preauth: string;
   enabled: number;
-  /** 本地时间 'YYYY-MM-DD HH:MM:SS'；NULL = 一次性任务已完成或未排程 */
+  /** 本地时间 'YYYY-MM-DD HH:MM:SS'；NULL = 无后续计划，不代表上次执行成功 */
   next_run: string | null;
   last_run_at: string | null;
   created_at: string;
@@ -1383,7 +1383,7 @@ export interface TaskRun {
   id: string;
   task_id: string;
   conv_id: string | null;
-  /** running | done | error | missed */
+  /** running | done | error | stopped | missed；done 仅表示正常结束 */
   status: string;
   summary: string | null;
   error: string | null;
@@ -1403,6 +1403,8 @@ export interface RecentTaskRun {
   task_name: string;
   status: string;
   summary: string | null;
+  /** 未完成/停止原因；旧负载可能缺省，summary 仍保留部分输出。 */
+  error?: string | null;
   started_at: string;
   finished_at: string | null;
 }

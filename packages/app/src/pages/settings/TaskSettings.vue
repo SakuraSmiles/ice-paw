@@ -14,6 +14,7 @@ import { useProjectStore, TASK_SCOPE } from "../../stores/project";
 import { msgOf } from "../../utils/errors";
 import { formatDate, formatTime, parseDbTime, timeAgo } from "../../utils/time";
 import { scheduleLabel } from "../../utils/taskSchedule";
+import { scheduledTaskReason, scheduledTaskStatus } from "../../utils/scheduledTaskStatus";
 import type { ScheduledTaskView, TaskRun, TaskScheduleKind } from "../../types";
 
 const router = useRouter();
@@ -34,12 +35,6 @@ const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
 function parseData(json: string): Record<string, unknown> {
   try { return JSON.parse(json) as Record<string, unknown>; } catch { return {}; }
 }
-
-const statusLabel = (s: string) =>
-  ({ running: "运行中", done: "已完成", error: "失败", missed: "已错过" }[s] ?? s);
-/** 状态 → health-chip 语义档（族内四档：success/warning/danger/neutral） */
-const statusTone = (s: string) =>
-  ({ running: "warning", done: "success", error: "danger", missed: "neutral" }[s] ?? "neutral");
 
 /** 下次运行的 hover 绝对时（DB 存 UTC——parseDbTime 转本地格式化，勿裸出原串） */
 function nextRunTitle(nextRun: string | null): string | undefined {
@@ -458,7 +453,7 @@ const deliverTargets = computed(() => chatStore.conversations);
                 <Clock :size="13" class="card-clock" />
                 <span class="card-name">{{ t.name }}</span>
                 <span class="next-run" :title="nextRunTitle(t.next_run)">
-                  {{ t.enabled ? (t.next_run ? `下次 ${timeAgo(t.next_run)}` : "已完成") : "已停用" }}
+                  {{ t.enabled ? (t.next_run ? `下次 ${timeAgo(t.next_run)}` : "无后续计划") : "已停用" }}
                 </span>
               </div>
               <!-- 次行：agent · 调度人话 · 转发（card-model 同形态 tag）+ 最近状态（右锚定） -->
@@ -468,8 +463,8 @@ const deliverTargets = computed(() => chatStore.conversations);
                     <template v-if="t.deliver_to_conv_id"> · 转发至「{{ convTitle(t.deliver_to_conv_id) }}」</template>
                   </span>
                 </span>
-                <span v-if="t.last_run" class="health-chip" :class="`health-chip--${statusTone(t.last_run.status)}`" :title="t.last_run.started_at">
-                  <span class="health-dot" aria-hidden="true"></span>{{ statusLabel(t.last_run.status) }} · {{ timeAgo(t.last_run.started_at) }}
+                <span v-if="t.last_run" class="health-chip" :class="`health-chip--${scheduledTaskStatus(t.last_run.status).tone}`" :title="[t.last_run.started_at, scheduledTaskReason(t.last_run)].filter(Boolean).join('\n')">
+                  <span class="health-dot" aria-hidden="true"></span>{{ scheduledTaskStatus(t.last_run.status).label }} · {{ timeAgo(t.last_run.started_at) }}
                 </span>
               </div>
             </div>
@@ -562,13 +557,14 @@ const deliverTargets = computed(() => chatStore.conversations);
               </div>
               <p v-if="(runsCache.get(t.id) ?? []).length === 0" class="runs-empty">还没有执行记录。</p>
               <div v-for="r in runsCache.get(t.id) ?? []" :key="r.id" class="run-row">
-                <span :class="['health-chip', `health-chip--${statusTone(r.status)}`, 'run-chip']" :title="r.started_at">
-                  <span class="health-dot" aria-hidden="true"></span>{{ statusLabel(r.status) }}
+                <span :class="['health-chip', `health-chip--${scheduledTaskStatus(r.status).tone}`, 'run-chip']" :title="r.started_at">
+                  <span class="health-dot" aria-hidden="true"></span>{{ scheduledTaskStatus(r.status).label }}
                 </span>
-                <span class="run-summary">
-                  <template v-if="r.status === 'error'">{{ r.error }}</template>
-                  <template v-else>{{ r.summary ?? (r.status === "running" ? "执行中…" : "") }}</template>
-                </span>
+                <div class="run-summary">
+                  <p v-if="scheduledTaskReason(r)" class="run-reason">{{ scheduledTaskReason(r) }}</p>
+                  <p v-if="r.summary?.trim()" class="run-output"><span v-if="r.status !== 'done' && r.status !== 'running'">部分输出：</span>{{ r.summary }}</p>
+                  <p v-else-if="r.status === 'running'" class="run-output">执行中…</p>
+                </div>
               </div>
             </div>
 
@@ -986,21 +982,25 @@ textarea.prompt-area {
 .runs-empty { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); }
 .run-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--ip-spacing-1_5);
   min-width: 0;
   padding: 1px 0;
 }
 .run-chip { margin-left: 0; }
 .run-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1);
   flex: 1;
   min-width: 0;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
+.run-reason,
+.run-output { margin: 0; }
 
 /* ===== 按钮（族内同款） ===== */
 .btn {

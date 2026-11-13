@@ -53,6 +53,9 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 pub(crate) struct TurnSummary {
     /// 终止原因（复用 finish_reason 词表：stop / tool_use / budget_exceeded / abort / ...）
     pub finish_reason: String,
+    /// 异常终态的错误事实（已脱敏）；纯用户取消与正常完成为 None。
+    /// 无法读取终态/错误证据时携带不确定原因，不能据 abort 字样推断用户停止。
+    pub error: Option<String>,
     /// 最终 assistant 正文（回传给委派方的结果；异常路径为空串）
     pub final_text: String,
     /// 本 turn 完成的 LLM 轮数
@@ -871,21 +874,22 @@ pub(crate) async fn run_agent_turn(
 /// 从事件日志读取本 turn 终态（完成信号的数据源，见模块注释）。
 ///
 /// 查不到 `turn_ended`（异常退出）/查询失败/payload 损坏 → 诚实的降级摘要
-/// （finish_reason="aborted"、空正文），委派方据此向主 LLM 报错而非悬挂。
+/// （finish_reason="aborted"、空正文、明确 error），不得误报为用户主动停止。
 pub(crate) async fn read_turn_outcome(
     pool: &SqlitePool,
     conv_id: &str,
     turn_id: &str,
 ) -> TurnSummary {
-    let fallback = TurnSummary {
+    let fallback = |error: String| TurnSummary {
         finish_reason: "aborted".into(),
+        error: Some(crate::infra::strings::mask_credentials(&error)),
         final_text: String::new(),
         rounds: 0,
         usage: None,
     };
     // turn_ended 先于 unregister 落库（event_log 硬规则）→ stream_loop 返回时必在库。
-    let row: Option<(Option<String>, String)> = match sqlx::query_as(
-        "SELECT message_id, payload FROM session_events \
+    let row: Option<(i64, Option<String>, String)> = match sqlx::query_as(
+        "SELECT seq, message_id, payload FROM session_events \
          WHERE session_id = ? AND turn_id = ? AND kind = 'turn_ended' \
          ORDER BY seq DESC LIMIT 1",
     )
@@ -897,39 +901,87 @@ pub(crate) async fn read_turn_outcome(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(target: "ice_paw.session_runner", "读取 turn_ended 失败: {e}");
-            return fallback;
+            return fallback(format!("无法确认回合终态：读取终态记录失败：{e}"));
         }
     };
-    let Some((message_id, payload_json)) = row else {
+    let Some((ended_seq, message_id, payload_json)) = row else {
         tracing::warn!(
             target: "ice_paw.session_runner",
             "turn 无 turn_ended 事件（异常退出路径），降级为 aborted: conv={conv_id} turn={turn_id}"
         );
-        return fallback;
+        return fallback("无法确认回合终态：未找到 turn_ended 记录，回合可能异常中断。".into());
     };
     let payload = match serde_json::from_str::<event_log::TurnEndedPayload>(&payload_json) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(target: "ice_paw.session_runner", "turn_ended payload 解析失败: {e}");
-            return fallback;
+            return fallback(format!("无法确认回合终态：终态记录格式无效：{e}"));
         }
     };
+    // 成功回合可能含历史错误/恢复记录；不将已恢复的错误重新定为最终失败。
+    // abort 同时用于用户停止与 provider/持久化错误，必须结合本回合错误事实区分。
+    let mut error = if crate::harness::mcp::delegate::is_normal_completion(&payload.termination) {
+        None
+    } else {
+        read_terminal_message_error(pool, conv_id, turn_id, ended_seq).await
+    };
     let final_text = match &message_id {
-        Some(id) => sqlx::query_scalar::<_, String>("SELECT content FROM messages WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default(),
+        Some(id) => {
+            match sqlx::query_scalar::<_, String>("SELECT content FROM messages WHERE id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+            {
+                Ok(text) => text.unwrap_or_default(),
+                Err(e) => {
+                    let detail =
+                        crate::infra::strings::mask_credentials(&format!("读取回合结果失败：{e}"));
+                    tracing::warn!(target: "ice_paw.session_runner", conv = conv_id,
+                    turn = turn_id, error = %detail, "无法读取最终消息正文");
+                    // 正文读取失败不能伪装成合法空回复；已有终态错误保留原始归因。
+                    error.get_or_insert(detail);
+                    String::new()
+                }
+            }
+        }
         None => String::new(),
     };
     TurnSummary {
         finish_reason: payload.termination,
+        error,
         final_text,
         rounds: payload.rounds,
         usage: payload.usage,
     }
+}
+
+/// 只读同会话、同回合且发生于本次结束之前的最后错误；查询或解析失败保持诚实。
+async fn read_terminal_message_error(
+    pool: &SqlitePool,
+    conv_id: &str,
+    turn_id: &str,
+    ended_seq: i64,
+) -> Option<String> {
+    let row = sqlx::query_scalar::<_, String>(
+        "SELECT payload FROM session_events \
+         WHERE session_id = ? AND turn_id = ? AND kind = 'message_error' AND seq <= ? \
+         ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(conv_id)
+    .bind(turn_id)
+    .bind(ended_seq)
+    .fetch_optional(pool)
+    .await;
+    let error = match row {
+        Ok(None) => return None,
+        Ok(Some(json)) => match serde_json::from_str::<event_log::MessageErrorPayload>(&json) {
+            Ok(payload) if !payload.error.trim().is_empty() => payload.error,
+            Ok(payload) => format!("回合记录了 {} 错误，但缺少错误详情。", payload.kind),
+            Err(e) => format!("无法确认回合错误原因：message_error 记录格式无效：{e}"),
+        },
+        Err(e) => format!("无法确认回合错误原因：读取 message_error 记录失败：{e}"),
+    };
+    Some(crate::infra::strings::mask_credentials(&error))
 }
 
 /// `spawn_stream_loop` 的入参收拢（S4）：编排层（[`run_agent_turn`]）分散收集的
@@ -1208,6 +1260,240 @@ fn filter_tools_by_scopes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn outcome_pool() -> SqlitePool {
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(":memory:")
+            .foreign_keys(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO agents (id, name, provider, model, api_key_ref) VALUES ('a1', 'a1', 'mock', 'mock', 'a1')")
+            .execute(&pool).await.unwrap();
+        for conv in ["conv-a", "conv-b"] {
+            sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES (?, 'a1', ?)")
+                .bind(conv)
+                .bind(conv)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool
+    }
+
+    async fn end_outcome_turn(pool: &SqlitePool, conv: &str, turn: &str, termination: &str) {
+        event_log::log_turn_ended(
+            pool,
+            &EventCtx::new(conv, turn, "a1"),
+            None,
+            &event_log::TurnEndedPayload {
+                v: 1,
+                termination: termination.into(),
+                rounds: 2,
+                usage: None,
+                user_token_count: None,
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn turn_outcome_distinguishes_cancel_from_real_abort_error_and_masks_credentials() {
+        let pool = outcome_pool().await;
+        end_outcome_turn(&pool, "conv-a", "cancel", "abort").await;
+        let cancelled = read_turn_outcome(&pool, "conv-a", "cancel").await;
+        assert_eq!(cancelled.finish_reason, "abort");
+        assert!(cancelled.error.is_none(), "纯用户停止没有错误事实");
+
+        let ctx = EventCtx::new("conv-a", "failed", "a1");
+        event_log::log_message_error(&pool, &ctx, "asst-failed", "network", "earlier failure")
+            .await;
+        event_log::log_message_error(
+            &pool,
+            &ctx,
+            "asst-failed",
+            "auth",
+            "鉴权失败 sk-testCredential123 Bearer testCredential456",
+        )
+        .await;
+        end_outcome_turn(&pool, "conv-a", "failed", "abort").await;
+        let failed = read_turn_outcome(&pool, "conv-a", "failed").await;
+        assert_eq!(
+            failed.finish_reason, "abort",
+            "只补证据，不改变循环终止语义"
+        );
+        assert_eq!(failed.rounds, 2);
+        assert_eq!(failed.error.as_deref(), Some("鉴权失败 sk-*** Bearer ***"));
+        assert!(!failed.error.unwrap().contains("testCredential"));
+    }
+
+    #[tokio::test]
+    async fn turn_outcome_success_ignores_historical_errors_for_both_provider_terminations() {
+        let pool = outcome_pool().await;
+        for reason in ["stop", "end_turn"] {
+            let ctx = EventCtx::new("conv-a", reason, "a1");
+            event_log::log_message_error(
+                &pool,
+                &ctx,
+                "earlier-message",
+                "network",
+                "recovered error",
+            )
+            .await;
+            end_outcome_turn(&pool, "conv-a", reason, reason).await;
+            let summary = read_turn_outcome(&pool, "conv-a", reason).await;
+            assert_eq!(summary.finish_reason, reason);
+            assert!(summary.error.is_none(), "正常完成不能被已恢复的错误污染");
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_outcome_errors_are_isolated_by_conversation_turn_and_end_sequence() {
+        let pool = outcome_pool().await;
+        event_log::log_message_error(
+            &pool,
+            &EventCtx::new("conv-b", "current", "a1"),
+            "other-conv",
+            "auth",
+            "other conversation",
+        )
+        .await;
+        event_log::log_message_error(
+            &pool,
+            &EventCtx::new("conv-a", "previous", "a1"),
+            "other-turn",
+            "auth",
+            "other turn",
+        )
+        .await;
+        end_outcome_turn(&pool, "conv-a", "current", "abort").await;
+        // 延迟/损坏写路径在终态之后追加的错误不属于该次终态判断。
+        event_log::log_message_error(
+            &pool,
+            &EventCtx::new("conv-a", "current", "a1"),
+            "late",
+            "auth",
+            "after terminal event",
+        )
+        .await;
+        let summary = read_turn_outcome(&pool, "conv-a", "current").await;
+        assert_eq!(summary.finish_reason, "abort");
+        assert!(summary.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn turn_outcome_missing_corrupt_or_unreadable_terminal_has_explicit_failure() {
+        let pool = outcome_pool().await;
+        let missing = read_turn_outcome(&pool, "conv-a", "missing").await;
+        assert_eq!(missing.finish_reason, "aborted");
+        assert!(missing.error.unwrap().contains("未找到 turn_ended"));
+        repo::session_event::append(
+            &pool,
+            "conv-a",
+            "turn_ended",
+            "system",
+            Some("bad-terminal"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
+        let malformed = read_turn_outcome(&pool, "conv-a", "bad-terminal").await;
+        assert_eq!(malformed.finish_reason, "aborted");
+        assert!(malformed.error.unwrap().contains("终态记录格式无效"));
+        pool.close().await;
+        let unreadable = read_turn_outcome(&pool, "conv-a", "missing").await;
+        assert_eq!(unreadable.finish_reason, "aborted");
+        assert!(unreadable.error.unwrap().contains("读取终态记录失败"));
+    }
+
+    #[tokio::test]
+    async fn turn_outcome_corrupt_error_evidence_is_not_reported_as_user_cancel() {
+        let pool = outcome_pool().await;
+        repo::session_event::append(
+            &pool,
+            "conv-a",
+            "message_error",
+            "system",
+            Some("bad-error"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
+        end_outcome_turn(&pool, "conv-a", "bad-error", "abort").await;
+        let summary = read_turn_outcome(&pool, "conv-a", "bad-error").await;
+        assert_eq!(summary.finish_reason, "abort");
+        assert!(summary
+            .error
+            .unwrap()
+            .contains("message_error 记录格式无效"));
+    }
+
+    #[tokio::test]
+    async fn turn_outcome_result_query_failure_is_distinct_from_empty_or_absent_content() {
+        let pool = outcome_pool().await;
+        sqlx::query("INSERT INTO messages (id, conversation_id, role, content) VALUES ('empty-result', 'conv-a', 'assistant', '')")
+            .execute(&pool).await.unwrap();
+        for (turn, reason, message_id) in [
+            ("empty", "stop", Some("empty-result")),
+            ("missing-row", "end_turn", Some("absent-result")),
+            ("no-message", "stop", None),
+            ("real-error", "abort", Some("empty-result")),
+        ] {
+            let ctx = EventCtx::new("conv-a", turn, "a1");
+            if turn == "real-error" {
+                event_log::log_message_error(&pool, &ctx, "empty-result", "auth", "真实终止原因")
+                    .await;
+            } else {
+                // 正常终态仍需忽略已经恢复的历史错误。
+                event_log::log_message_error(
+                    &pool,
+                    &ctx,
+                    "empty-result",
+                    "network",
+                    "历史已恢复错误",
+                )
+                .await;
+            }
+            event_log::log_turn_ended(
+                &pool,
+                &ctx,
+                message_id,
+                &event_log::TurnEndedPayload {
+                    v: 1,
+                    termination: reason.into(),
+                    rounds: 1,
+                    usage: None,
+                    user_token_count: None,
+                },
+            )
+            .await;
+        }
+        for turn in ["empty", "missing-row", "no-message"] {
+            let summary = read_turn_outcome(&pool, "conv-a", turn).await;
+            assert!(summary.final_text.is_empty());
+            assert!(summary.error.is_none(), "合法空结果不应变成错误：{turn}");
+        }
+        // 故障注入只破坏正文查询；事件表及本回合终态仍可读。
+        sqlx::query("ALTER TABLE messages RENAME COLUMN content TO unavailable_content")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let unreadable = read_turn_outcome(&pool, "conv-a", "empty").await;
+        assert_eq!(unreadable.finish_reason, "stop");
+        assert!(unreadable.error.unwrap().contains("读取回合结果失败"));
+        let failed = read_turn_outcome(&pool, "conv-a", "real-error").await;
+        assert_eq!(failed.error.as_deref(), Some("真实终止原因"));
+        let no_message = read_turn_outcome(&pool, "conv-a", "no-message").await;
+        assert!(no_message.error.is_none(), "无结果消息的正常回合不查询正文");
+    }
 
     #[test]
     fn inject_into_system_appends_block_to_existing_system() {

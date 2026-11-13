@@ -43,7 +43,7 @@ use crate::db::repo::{conversation, task};
 use crate::error::{AppError, AppResult};
 use crate::harness::chat_state::ChatState;
 use crate::harness::provider;
-use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
+use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv, TurnSummary};
 use crate::infra::protocol::ContentBlock;
 
 /// 调度 tick 周期。
@@ -231,6 +231,130 @@ pub enum ExecOutcome {
     Ran,
     /// 载体会话正忙（调度触发 = 下轮重试；手动触发应提示用户）
     Busy,
+}
+
+/// 执行记录与自动转发共用同一个终态判定，收到完成信号不等于任务成功。
+struct TaskCompletion {
+    status: &'static str,
+    finish_reason: String,
+    text: String,
+    error: Option<String>,
+}
+
+impl TaskCompletion {
+    fn from_summary(summary: TurnSummary, cancelled: bool) -> Self {
+        let reason = summary.finish_reason;
+        let text = summary.final_text.trim().to_string();
+        let (status, error) = if let Some(error) = summary.error {
+            (
+                "error",
+                Some(format!(
+                    "任务未完成：{}。请查看执行会话中的错误详情，处理后重试。",
+                    crate::infra::strings::mask_credentials(&error)
+                )),
+            )
+        } else if crate::harness::mcp::delegate::is_normal_completion(&reason) {
+            ("done", None)
+        } else if matches!(reason.as_str(), "abort" | "cancelled") && cancelled {
+            (
+                "stopped",
+                Some("任务已停止：本轮收到了停止请求。已有输出已保留，可打开执行会话查看。".into()),
+            )
+        } else {
+            let cause = match reason.as_str() {
+                "budget_exceeded" => "已达到预算上限，结果可能不完整",
+                "length" | "max_tokens" => "模型输出达到长度上限，结果可能不完整",
+                "stuck" | "doom_loop" => "检测到重复执行，已触发保护性停止",
+                "tool_use" | "tool_calls" => "工具调用流程尚未正常结束",
+                "abort" | "aborted" | "interrupted" | "cancelled" => "执行异常中断，未确认正常完成",
+                _ => "执行未正常结束",
+            };
+            (
+                "error",
+                Some(format!(
+                    "任务未完成：{cause}（终止原因：{}）。请查看已有输出和执行轨迹，处理后重试。",
+                    crate::infra::strings::mask_credentials(&reason)
+                )),
+            )
+        };
+        Self {
+            status,
+            finish_reason: crate::infra::strings::mask_credentials(&reason),
+            text,
+            error,
+        }
+    }
+
+    fn start_failed(error: &AppError, cancelled: bool) -> Self {
+        if matches!(error, AppError::Cancelled) && cancelled {
+            Self {
+                status: "stopped",
+                finish_reason: "cancelled".into(),
+                text: String::new(),
+                error: Some(
+                    "任务已停止：准备执行期间收到了停止请求。需要继续时可重新运行。".into(),
+                ),
+            }
+        } else {
+            Self {
+                status: "error",
+                finish_reason: "start_failed".into(),
+                text: String::new(),
+                error: Some(crate::infra::strings::mask_credentials(&error.to_string())),
+            }
+        }
+    }
+
+    fn signal_lost() -> Self {
+        Self {
+            status: "error",
+            finish_reason: "completion_signal_lost".into(),
+            text: String::new(),
+            error: Some(
+                "任务未完成：未收到执行结果，无法确认完成状态。请查看执行会话后重试。".into(),
+            ),
+        }
+    }
+
+    fn forward_text(&self) -> Option<&str> {
+        (self.status == "done" && !self.text.is_empty()).then_some(self.text.as_str())
+    }
+}
+
+/// 先持久化真实终态再允许转发；日志只写结果与错误，不输出任务正文。
+async fn record_completion(
+    pool: &SqlitePool,
+    task_id: &str,
+    run_id: &str,
+    conv_id: &str,
+    completion: &TaskCompletion,
+) -> AppResult<()> {
+    let short: String = completion.text.chars().take(RUN_SUMMARY_MAX).collect();
+    if let Err(error) = task::finish_run(
+        pool,
+        run_id,
+        completion.status,
+        (!short.is_empty()).then_some(short.as_str()),
+        completion.error.as_deref(),
+    )
+    .await
+    {
+        tracing::error!(target: "ice_paw.scheduler", task_id, run_id, conv_id,
+            status = completion.status, finish_reason = %completion.finish_reason,
+            error = %crate::infra::strings::mask_credentials(&error.to_string()),
+            "定时任务结果未能保存，取消自动转发");
+        return Err(error);
+    }
+    if completion.status == "error" {
+        tracing::warn!(target: "ice_paw.scheduler", task_id, run_id, conv_id,
+            status = completion.status, finish_reason = %completion.finish_reason,
+            reason = completion.error.as_deref().unwrap_or(""), "定时任务未完成");
+    } else {
+        tracing::info!(target: "ice_paw.scheduler", task_id, run_id, conv_id,
+            status = completion.status, finish_reason = %completion.finish_reason,
+            "定时任务回合结束");
+    }
+    Ok(())
 }
 
 /// 懒建载体会话：配置了转发则挂目标同项目（MA-3 项目边界适配，见模块头）。
@@ -465,7 +589,7 @@ pub async fn execute_task(
             pre_materialized: false,
             tools_enabled: true,
             model_override: None,
-            cancel_token,
+            cancel_token: cancel_token.clone(),
             fallback,
         },
     )
@@ -475,7 +599,8 @@ pub async fn execute_task(
         Ok(rx) => rx,
         Err(e) => {
             // 发起失败：注销责任在 run_agent_turn 内部已处理（guard 未移交）
-            task::finish_run(pool, &run_id, "error", None, Some(&e.to_string())).await?;
+            let completion = TaskCompletion::start_failed(&e, cancel_token.is_cancelled());
+            record_completion(pool, &t.id, &run_id, &conv.id, &completion).await?;
             if scheduled {
                 advance_schedule(pool, t, &spec).await;
             }
@@ -486,48 +611,38 @@ pub async fn execute_task(
     scopeguard::ScopeGuard::into_inner(cancel_guard);
 
     // --- 同步等完成（调度循环串行 = 全局并发 1；手动触发整函数被 spawn） ---
-    let final_text = match done_rx.await {
-        Ok(summary) => {
-            let text = summary.final_text.trim().to_string();
-            let short: String = text.chars().take(RUN_SUMMARY_MAX).collect();
-            task::finish_run(pool, &run_id, "done", Some(&short), None).await?;
-            text
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            task::finish_run(pool, &run_id, "error", None, Some(&msg)).await?;
-            String::new()
-        }
+    let completion = match done_rx.await {
+        Ok(summary) => TaskCompletion::from_summary(summary, cancel_token.is_cancelled()),
+        Err(_) => TaskCompletion::signal_lost(),
     };
+    record_completion(pool, &t.id, &run_id, &conv.id, &completion).await?;
     if scheduled {
         advance_schedule(pool, t, &spec).await;
     }
 
     // --- 可选转发（MA-3 通道；失败披露进 run 记录，不掩盖） ---
-    if let Some(dst) = &t.deliver_to_conv_id {
-        if !final_text.is_empty() {
-            let source = crate::harness::inbox::SourceInfo {
-                conv_id: conv.id.clone(),
-                conv_title: conv.title.clone(),
-                agent_id: conv.agent_id.clone(),
-                agent_name: creds.agent.name.clone(),
-                project_id: conv.project_id.clone(),
-            };
-            let deliver_result =
-                crate::harness::inbox::deliver(app, pool, &source, dst, &final_text, false, false, false)
-                    .await;
-            let note = match deliver_result {
-                Ok(_) => "\n[转发投递：已送达]".to_string(),
-                Err(e) => format!("\n[转发投递失败：{e}]"),
-            };
-            let _ = sqlx::query(
-                "UPDATE task_runs SET summary = COALESCE(summary,'') || ? WHERE id = ?",
-            )
-            .bind(&note)
-            .bind(&run_id)
-            .execute(pool)
-            .await;
-        }
+    if let (Some(dst), Some(final_text)) = (&t.deliver_to_conv_id, completion.forward_text()) {
+        let source = crate::harness::inbox::SourceInfo {
+            conv_id: conv.id.clone(),
+            conv_title: conv.title.clone(),
+            agent_id: conv.agent_id.clone(),
+            agent_name: creds.agent.name.clone(),
+            project_id: conv.project_id.clone(),
+        };
+        let deliver_result = crate::harness::inbox::deliver(
+            app, pool, &source, dst, final_text, false, false, false,
+        )
+        .await;
+        let note = match deliver_result {
+            Ok(_) => "\n[转发投递：已送达]".to_string(),
+            Err(e) => format!("\n[转发投递失败：{e}]"),
+        };
+        let _ =
+            sqlx::query("UPDATE task_runs SET summary = COALESCE(summary,'') || ? WHERE id = ?")
+                .bind(&note)
+                .bind(&run_id)
+                .execute(pool)
+                .await;
     }
     Ok(ExecOutcome::Ran)
 }
@@ -687,6 +802,169 @@ pub fn run_now(app: AppHandle, pool: SqlitePool, task_id: String) {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn turn_summary(reason: &str, error: Option<&str>, text: &str) -> TurnSummary {
+        TurnSummary {
+            finish_reason: reason.into(),
+            error: error.map(str::to_string),
+            final_text: text.into(),
+            rounds: 1,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn only_normal_completions_can_forward_results() {
+        for reason in ["stop", "end_turn"] {
+            let completion =
+                TaskCompletion::from_summary(turn_summary(reason, None, " result "), false);
+            assert_eq!(completion.status, "done");
+            assert_eq!(completion.forward_text(), Some("result"));
+            assert!(completion.error.is_none());
+        }
+        for reason in [
+            "length",
+            "max_tokens",
+            "budget_exceeded",
+            "stuck",
+            "doom_loop",
+            "tool_use",
+            "tool_calls",
+            "abort",
+            "aborted",
+            "interrupted",
+            "error",
+            "stop_sequence",
+            "future_reason",
+            "",
+        ] {
+            let completion =
+                TaskCompletion::from_summary(turn_summary(reason, None, "部分结果"), false);
+            assert_eq!(completion.status, "error", "{reason}");
+            assert_eq!(completion.text, "部分结果");
+            assert!(completion.forward_text().is_none(), "{reason}");
+            assert!(completion.error.as_deref().unwrap().contains("任务未完成"));
+        }
+        let empty = TaskCompletion::from_summary(turn_summary("stop", None, "  "), false);
+        assert_eq!(empty.status, "done", "合法空输出不捏造执行错误");
+        assert!(empty.forward_text().is_none());
+        let unknown = TaskCompletion::from_summary(
+            turn_summary("unknown sk-PRIVATE12345678", None, ""),
+            false,
+        );
+        assert!(
+            !unknown.finish_reason.contains("PRIVATE"),
+            "日志中的未知终态也须脱敏"
+        );
+    }
+
+    #[test]
+    fn cancellation_requires_evidence_and_never_overrides_a_real_error() {
+        let stopped = TaskCompletion::from_summary(turn_summary("abort", None, "部分结果"), true);
+        assert_eq!(stopped.status, "stopped");
+        assert_eq!(stopped.text, "部分结果");
+        assert!(stopped.forward_text().is_none());
+        for reason in ["abort", "stop"] {
+            let failed = TaskCompletion::from_summary(
+                turn_summary(
+                    reason,
+                    Some("authentication failed sk-PRIVATE12345678"),
+                    "部分结果",
+                ),
+                true,
+            );
+            assert_eq!(failed.status, "error");
+            assert!(failed.forward_text().is_none());
+            assert!(failed
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("authentication failed"));
+            assert!(!failed.error.as_deref().unwrap().contains("PRIVATE"));
+        }
+        let unknown = TaskCompletion::from_summary(turn_summary("aborted", None, ""), true);
+        assert_eq!(unknown.status, "error");
+        let completed = TaskCompletion::from_summary(turn_summary("stop", None, "完成"), true);
+        assert_eq!(
+            completed.status, "done",
+            "回合正常结束后到达的停止信号不反转已完成事实"
+        );
+        assert_eq!(
+            TaskCompletion::start_failed(&AppError::Cancelled, true).status,
+            "stopped"
+        );
+        assert_eq!(
+            TaskCompletion::start_failed(&AppError::Cancelled, false).status,
+            "error"
+        );
+        assert_eq!(TaskCompletion::signal_lost().status, "error");
+        assert!(TaskCompletion::signal_lost().forward_text().is_none());
+    }
+
+    async fn task_test_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO scheduled_tasks (id, name, agent_id, schedule_kind, schedule_data, prompt) VALUES ('task', '日报', 'agent', 'once', '{}', '生成日报')")
+            .execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn run_history_and_sidebar_preserve_true_status_reason_and_partial_output() {
+        let pool = task_test_pool().await;
+        let partial = "结果".repeat(RUN_SUMMARY_MAX);
+        for (id, reason, cancelled, error, status) in [
+            ("normal", "stop", false, None, "done"),
+            ("cancel", "abort", true, None, "stopped"),
+            ("budget", "budget_exceeded", false, None, "error"),
+            ("provider", "abort", false, Some("连接失败"), "error"),
+        ] {
+            task::insert_run(&pool, id, "task", "conv").await.unwrap();
+            let completion =
+                TaskCompletion::from_summary(turn_summary(reason, error, &partial), cancelled);
+            record_completion(&pool, "task", id, "conv", &completion)
+                .await
+                .unwrap();
+            let runs = task::list_runs(&pool, "task", 20).await.unwrap();
+            let row = runs.iter().find(|r| r.id == id).unwrap();
+            assert_eq!(row.status, status);
+            assert_eq!(
+                row.summary.as_deref().unwrap().chars().count(),
+                RUN_SUMMARY_MAX
+            );
+            assert_eq!(row.error, completion.error);
+            assert!(row.finished_at.is_some());
+            let recent = task::recent_runs(&pool, 20).await.unwrap();
+            let sidebar = recent.iter().find(|r| r.run_id == id).unwrap();
+            assert_eq!(sidebar.status, row.status);
+            assert_eq!(sidebar.error, row.error);
+            assert_eq!(sidebar.summary, row.summary);
+            assert_eq!(completion.forward_text().is_some(), status == "done");
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_result_persistence_blocks_the_forwarding_path() {
+        let pool = task_test_pool().await;
+        task::insert_run(&pool, "run", "task", "conv")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER reject_run_result BEFORE UPDATE ON task_runs BEGIN SELECT RAISE(ABORT, 'write blocked'); END")
+            .execute(&pool).await.unwrap();
+        let completion = TaskCompletion::from_summary(turn_summary("stop", None, "结果"), false);
+        let result = record_completion(&pool, "task", "run", "conv", &completion).await;
+        assert!(result.is_err(), "执行器须在自动转发前收到落库错误");
+        let runs = task::list_runs(&pool, "task", 1).await.unwrap();
+        assert_eq!(runs[0].status, "running");
+        assert!(runs[0].finished_at.is_none());
+    }
 
     fn local(y: i32, m: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(y, m, d, h, mi, 0).unwrap()

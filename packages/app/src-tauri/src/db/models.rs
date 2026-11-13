@@ -1440,7 +1440,7 @@ pub struct TaskRunRow {
     pub id: String,
     pub task_id: String,
     pub conv_id: Option<String>,
-    /// running | done | error | missed
+    /// running | done | error | stopped | missed
     pub status: String,
     pub summary: Option<String>,
     pub error: Option<String>,
