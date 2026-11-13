@@ -179,7 +179,7 @@ fn ensure_help_docs(default_workspace: &str) {
         HelpDoc::new(
             "faq.md",
             include_str!("../../../resources/help/faq.md"),
-            &["29b185fb67391af7"],
+            &["29b185fb67391af7", "44163888a90fccb9"],
         ),
         // ---- 2026-09-11 全面更新批：新增六篇（首发，known_hashes 为空）----
         HelpDoc::new(

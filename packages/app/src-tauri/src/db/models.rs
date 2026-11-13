@@ -50,8 +50,10 @@ pub struct AgentRow {
     pub description: String,
     /// M2-1: Agent 头像（URL 或 base64）
     pub avatar: Option<String>,
-    /// Phase 3: 工作区目录路径（存放 agent.yaml 的本地目录）
+    /// 工具工作区目录；不决定 Agent 配置的归属。
     pub workspace_path: Option<String>,
+    /// IcePaw 托管配置目录（出生/迁移时固定，用户不可经更新载荷改写）。
+    pub config_dir: Option<String>,
     /// ModelProfile Phase 2: 引用的模型配置（NULL = legacy 路径，provider/model 等
     /// 四列即权威；非 NULL = 四列作解析快照，get_with_credentials 每轮解析回写）
     pub model_profile_id: Option<String>,
@@ -164,10 +166,10 @@ impl AgentRow {
             .map(|v| v as usize)
     }
 
-    /// 若 workspace_path 存在，尝试读取 `<workspace_path>/agent.yaml` 并解析为文件配置。
+    /// 仅从托管 config_dir 读取 agent.yaml，不回退到任务工作目录。
     /// 文件不存在或解析失败静默返回 None（向后兼容）。
     pub fn load_file_config(&self) -> Option<AgentFileConfig> {
-        let dir = self.workspace_path.as_ref()?;
+        let dir = self.config_dir.as_ref()?;
         let yaml_path = std::path::Path::new(dir).join("agent.yaml");
         let content = std::fs::read_to_string(yaml_path).ok()?;
         serde_yaml::from_str(&content).ok()
@@ -317,6 +319,8 @@ pub struct Agent {
     /// Phase 3: 工作区目录路径
     #[serde(default)]
     pub workspace_path: Option<String>,
+    /// 后端固定的托管配置目录，只读出参。
+    pub config_dir: Option<String>,
     /// ModelProfile Phase 2: 引用的模型配置（None = legacy 路径，模型区四字段即权威）
     #[serde(default)]
     pub model_profile_id: Option<String>,
@@ -337,7 +341,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    /// 从 AgentRow 转换，并尝试读取 workspace_path 下的 agent.yaml 合并配置。
+    /// 从 AgentRow 转换，并尝试读取 config_dir 下的 agent.yaml 合并配置。
     /// 文件不存在或解析失败时静默回退到 DB 原始值。
     pub fn from_row_with_file_config(row: AgentRow) -> Self {
         let mut agent = Agent::from(row);
@@ -348,10 +352,9 @@ impl Agent {
         agent
     }
 
-    /// 尝试从 workspace_path 读取 agent.yaml。
-    /// 注意：此方法在 Agent 上调用时 workspace_path 已通过 AgentRow 赋值。
+    /// 仅从后端登记的 config_dir 读取 agent.yaml。
     fn load_file_config(&self) -> Option<AgentFileConfig> {
-        let dir = self.workspace_path.as_ref()?;
+        let dir = self.config_dir.as_ref()?;
         let yaml_path = std::path::Path::new(dir).join("agent.yaml");
         let content = std::fs::read_to_string(yaml_path).ok()?;
         serde_yaml::from_str(&content).ok()
@@ -366,6 +369,7 @@ impl From<AgentRow> for Agent {
         let has_api_key = !row.api_key_ref.is_empty();
         Agent {
             workspace_path: row.workspace_path.clone(),
+            config_dir: row.config_dir.clone(),
             config_from_file: false,
             id: row.id,
             name: row.name,
@@ -441,7 +445,7 @@ pub struct NewAgent {
     /// 是否支持图片输入（默认 false）
     #[serde(default)]
     pub supports_vision: bool,
-    /// Phase 3: 工作区目录路径（存放 agent.yaml）
+    /// Agent 默认执行工作区；配置归属由后端独立登记。
     #[serde(default)]
     pub workspace_path: Option<String>,
     /// M2-1: 头像图片（base64 dataURL，前端 canvas 压缩）

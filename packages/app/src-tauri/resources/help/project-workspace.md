@@ -11,7 +11,7 @@ tags: [workspace, 工作区, 工作空间, 项目, project, project.md, conventi
 ## 三层目录
 
 1. **默认工作空间（default workspace）**：在设置里设的全局根目录。全局知识库挂在它的 `knowledge/` 下；agent 没单独设工作区时也回退到这里。
-2. **agent 工作区**：单个 agent 的工作目录。agent.yaml、agent 专属知识库都在这里。没设则回退到 `<默认工作空间>/agents/<agent_id>/`。
+2. **Agent 工作区**：单个 Agent 的默认执行目录，文件与命令在这里工作，Agent 专属知识库仍按此目录组织。`agent.yaml` 另存于应用管理的独立配置目录；更换工作区不会移动配置，可在「设置 → Agent → 打开 agent.yaml」编辑。
 3. **项目 workspace**：项目绑定的源码根目录。绑了之后，文件/代码类工具（read_file、run_command、git 等）把它当 current_dir 和路径白名单根。
 
 ## knowledge 目录约定

@@ -22,6 +22,24 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use crate::error::{AppError, AppResult};
 
+/// 正常退出随 app state 释放；启动失败立即退出前可显式排空文件写入队列。
+pub struct LogGuard(Mutex<Option<WorkerGuard>>);
+
+impl LogGuard {
+    fn shutdown(&self) {
+        // 先释放锁再等待写线程收尾；重复调用无副作用。
+        let guard = self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+        drop(guard);
+    }
+}
+
+/// 仅用于启动失败的退出路径，调用后不再接收新的文件日志。
+pub fn shutdown(app: &AppHandle) {
+    if let Some(guard) = app.try_state::<LogGuard>() {
+        guard.shutdown();
+    }
+}
+
 /// 日志子目录名（相对 app_data_dir）
 const LOG_DIR_NAME: &str = "logs";
 /// 日志文件前缀。tracing-appender daily 实际产物为 `{prefix}.{YYYY-MM-DD}`。
@@ -43,9 +61,9 @@ pub fn log_dir(app: &AppHandle) -> AppResult<PathBuf> {
 
 /// 初始化 tracing：stdout（dev 终端）+ file（daily 轮转，非阻塞写）+ panic hook。
 ///
-/// 返回的 `WorkerGuard` 必须保活整个进程生命周期（drop 时 flush + 关闭写线程），
-/// 由 `lib.rs` 的 setup 放入 `app.manage(...)` 托管，应用退出时随 state 一起 drop。
-pub fn init(app: &AppHandle) -> AppResult<Mutex<WorkerGuard>> {
+/// 返回的 `LogGuard` 必须保活整个进程生命周期（drop 时 flush + 关闭写线程），
+/// 由 `lib.rs` 的 setup 放入 `app.manage(...)` 托管；启动失败用 shutdown 显式排空。
+pub fn init(app: &AppHandle) -> AppResult<LogGuard> {
     let dir = log_dir(app)?;
     std::fs::create_dir_all(&dir)?;
 
@@ -93,7 +111,7 @@ pub fn init(app: &AppHandle) -> AppResult<Mutex<WorkerGuard>> {
         tracing::info!(target: "ice_paw", "已清理 {} 个过期日志文件（>{} 天）", removed, RETAIN_DAYS);
     }
 
-    Ok(Mutex::new(guard))
+    Ok(LogGuard(Mutex::new(Some(guard))))
 }
 
 /// 定位「当前」日志文件：优先今日文件，缺失则回退目录内最新一个。
@@ -167,6 +185,24 @@ fn parse_log_date(name: &str) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_flushes_pending_file_logs_and_can_be_repeated() {
+        use std::io::Write;
+
+        let path = std::env::temp_dir().join(format!("icepaw-log-{}.log", uuid::Uuid::new_v4()));
+        let file = std::fs::File::create(&path).unwrap();
+        let (mut writer, guard) = tracing_appender::non_blocking(file);
+        let guard = LogGuard(Mutex::new(Some(guard)));
+        writeln!(writer, "agent_migrated agent_id=a1").unwrap();
+        writeln!(writer, "failed agent_id=a2").unwrap();
+        guard.shutdown();
+        guard.shutdown();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("agent_migrated agent_id=a1"));
+        assert!(saved.contains("failed agent_id=a2"));
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn parse_log_date_ok() {

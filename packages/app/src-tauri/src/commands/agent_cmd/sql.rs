@@ -129,7 +129,7 @@ impl AgentCmd for SqlAgentCmd {
 
     async fn get_with_credentials(&self, agent_id: &str) -> AppResult<AgentWithCredentials> {
         let mut agent = repo::agent::get_by_id(&self.pool, agent_id).await?;
-        // 尝试从 workspace_path 加载 agent.yaml 配置，合并到 AgentRow（覆盖 chat_cmd 用的字段）。
+        // 只从固定 config_dir 加载行为配置，执行工作区变更不影响配置归属。
         // 同时提取 hooks 与 word_style_profile（两者不进 DB，纯文件，不参与
         // apply_to_row 的字段覆盖）。
         let (hooks, word_style_profile): (HookConfig, Option<String>) =
@@ -214,6 +214,16 @@ impl AgentCmd for SqlAgentCmd {
         if repo::agent::get_by_id(&self.pool, &id).await.is_ok() {
             return Err(AppError::Validation(format!("ID '{}' 已被使用", id)));
         }
+
+        // 在落 Agent/凭据等副作用前准备固定配置目录；不可写时不会留下半成品实体。
+        // 把这次解析的目录直接传入 repo，避免创建期间偏好变化让两处解析分叉。
+        let config_dir = crate::db::agent_config::managed_dir(&self.pool, &id).await?;
+        tokio::fs::create_dir_all(&config_dir).await.map_err(|e| {
+            AppError::Validation(format!(
+                "无法创建 Agent：配置目录 {} 不可用（{e}）。请检查目录权限或磁盘连接后重试。",
+                config_dir.display()
+            ))
+        })?;
 
         // 模型身份三路（Phase 3，2026-09-08 拍板——数据从出生就是「实体+引用」）：
         // a) 引用直传（Phase 2 既有）：解析 profile 写快照列——provider/model/
@@ -307,7 +317,9 @@ impl AgentCmd for SqlAgentCmd {
             new_agent.base_url = base_url;
         }
 
-        let row: AgentRow = repo::agent::create(&self.pool, &new_agent, &id, &id).await?;
+        let row: AgentRow =
+            repo::agent::create_with_config_dir(&self.pool, &new_agent, &id, &id, &config_dir)
+                .await?;
 
         // 为新 Agent 确保 KB 行存在（无需重启）
         let default_ws = repo::preferences::get_all(&self.pool)
@@ -331,10 +343,10 @@ impl AgentCmd for SqlAgentCmd {
             wm.add_watch(kb.id, kb.directory);
         }
 
-        // 7. 自动生成 agent.yaml（含完整配置：provider/model/tools/system_prompt/base_url）
-        if let Some(ws) = row.workspace_path.as_deref() {
+        // 7. 配置归属固定在 IcePaw agents/<id>/，与自定义执行工作区分离。
+        if let Some(dir) = row.config_dir.as_deref() {
             write_default_agent_yaml(
-                ws,
+                dir,
                 &row.name,
                 &row.provider,
                 &row.model,
@@ -456,9 +468,9 @@ impl AgentCmd for SqlAgentCmd {
         // A（2026-08-26 生产反馈根治）：同步 agent.yaml 的 provider/model/base_url
         // 镜像行——它们是创建时写入的信息性镜像（运行时不读），不更新会与 UI 分裂
         // 误导排障。文件不存在不创建；失败 best-effort warn（DB 已更新，不回滚）。
-        if let Some(ws) = row.workspace_path.as_deref() {
+        if let Some(dir) = row.config_dir.as_deref() {
             if let Err(e) =
-                sync_agent_yaml_mirror_file(ws, &row.provider, &row.model, row.base_url.as_deref())
+                sync_agent_yaml_mirror_file(dir, &row.provider, &row.model, row.base_url.as_deref())
                     .await
             {
                 tracing::warn!(

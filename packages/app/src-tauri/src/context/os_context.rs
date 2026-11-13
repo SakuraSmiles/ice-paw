@@ -17,15 +17,15 @@ pub(crate) const OS_HASH_EPOCH: chrono::DateTime<chrono::Utc> =
 ///
 /// 包含：
 /// - 操作系统类型 / CPU 架构 / 用户主目录 / 时区 / 当前时间
-/// - Agent 配置目录（KB 和 agent.yaml 所在路径）
+/// - Agent 固定配置目录（agent.yaml 所在路径）
 /// - 工作目录外的文件访问说明
 ///
 /// ③ 可观测化：时间由参数注入（[`build_os_context`] 传真实 now；
 /// 稳定核传 [`OS_HASH_EPOCH`]）——确定性使哈希可计算、可测试。
 pub(crate) fn build_os_context_at(
     timezone: Option<&str>,
-    agent_workspace: Option<&str>,
-    project_workspace: Option<&str>,
+    agent_config_dir: Option<&str>,
+    execution_workspace: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -63,12 +63,12 @@ pub(crate) fn build_os_context_at(
     // 当前本地时间（基于用户时区，帮助 LLM 感知"现在"）
     parts.push(format!("当前时间: {}", now.format("%Y-%m-%d %H:%M:%S UTC")));
 
-    // 项目工作目录（文件工具默认操作路径，优先于 Agent 目录）
-    if let Some(ws) = project_workspace {
+    // 实际执行目录（项目目录优先，否则使用 Agent 默认执行目录）
+    if let Some(ws) = execution_workspace {
         parts.push(format!("当前工作目录: {}", ws));
     }
-    // Agent 配置目录（KB 和 agent.yaml 所在）
-    if let Some(ws) = agent_workspace {
+    // Agent 固定配置目录（不随执行目录变化）
+    if let Some(ws) = agent_config_dir {
         parts.push(format!("Agent 配置目录: {}", ws));
     }
 
@@ -99,13 +99,13 @@ pub(crate) fn build_os_context_at(
 #[cfg(test)]
 pub(crate) fn build_os_context(
     timezone: Option<&str>,
-    agent_workspace: Option<&str>,
-    project_workspace: Option<&str>,
+    agent_config_dir: Option<&str>,
+    execution_workspace: Option<&str>,
 ) -> String {
     build_os_context_at(
         timezone,
-        agent_workspace,
-        project_workspace,
+        agent_config_dir,
+        execution_workspace,
         chrono::Utc::now(),
     )
 }
@@ -166,6 +166,18 @@ mod tests {
     fn get_home_dir_returns_some_or_none() {
         // 在 CI 或 WSL 环境可能返回 None 或 Some，只需验证不 panic
         let _ = get_home_dir();
+    }
+
+    #[test]
+    fn config_directory_is_distinct_from_execution_directory() {
+        let ctx = build_os_context(
+            None,
+            Some("D:/icepaw/agents/editor"),
+            Some("D:/projects/demo"),
+        );
+        assert!(ctx.contains("Agent 配置目录: D:/icepaw/agents/editor"));
+        assert!(ctx.contains("当前工作目录: D:/projects/demo"));
+        assert!(!ctx.contains("Agent 配置目录: D:/projects/demo"));
     }
 
     // ---- ③ 可观测化：稳定核哈希 ----

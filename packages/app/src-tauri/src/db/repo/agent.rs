@@ -4,6 +4,8 @@
 //! - `api_key_ref` 仅作引用 key（默认 = agent_id），密文存在 stronghold 里
 //! - 上层负责调用 strongbold 写入/删除；本模块只更新 DB 这一行
 
+use std::path::Path;
+
 use sqlx::SqlitePool;
 
 use crate::db::models::{AgentRow, NewAgent};
@@ -16,7 +18,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, enabled_tools, tool_scopes, context_window,
                 supports_vision, description, avatar,
-                workspace_path, model_profile_id, fallback_profile_ids,
+                workspace_path, config_dir, model_profile_id, fallback_profile_ids,
                 agent_kind, created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
@@ -33,7 +35,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, enabled_tools, tool_scopes, context_window,
                 supports_vision, description, avatar,
-                workspace_path, model_profile_id, fallback_profile_ids,
+                workspace_path, config_dir, model_profile_id, fallback_profile_ids,
                 agent_kind, created_at, updated_at
            FROM agents WHERE id = ?",
     )
@@ -54,6 +56,21 @@ pub async fn create(
     id: &str,
     api_key_ref: &str,
 ) -> AppResult<AgentRow> {
+    // 配置归属由后端生成；工作目录及用户载荷不能指定配置位置。
+    // 只计算路径，不创建目录（repo 读取/测试不能产生用户目录副作用）。
+    let config_dir = crate::db::agent_config::managed_dir(pool, id).await?;
+    create_with_config_dir(pool, new_agent, id, api_key_ref, &config_dir).await
+}
+
+/// 使用命令层预备完成的托管目录快照，避免准备目录和 INSERT 之间偏好变更导致漂移。
+/// 仅 crate 内部调用，config_dir 不来自用户可编辑的载荷。
+pub(crate) async fn create_with_config_dir(
+    pool: &SqlitePool,
+    new_agent: &NewAgent,
+    id: &str,
+    api_key_ref: &str,
+    config_dir: &Path,
+) -> AppResult<AgentRow> {
     let extra = new_agent
         .extra_params
         .clone()
@@ -67,14 +84,16 @@ pub async fn create(
         0i32
     };
 
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    crate::db::agent_config::ensure_available(&mut tx, id, config_dir).await?;
     sqlx::query(
         "INSERT INTO agents
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
             max_history_messages, enabled_tools, supports_vision,
-            workspace_path, context_window, avatar, model_profile_id, fallback_profile_ids,
+            workspace_path, config_dir, context_window, avatar, model_profile_id, fallback_profile_ids,
             agent_kind)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -97,6 +116,7 @@ pub async fn create(
     )
     .bind(supports_vision_i)
     .bind(new_agent.workspace_path.as_deref())
+    .bind(config_dir.to_string_lossy().as_ref())
     .bind(new_agent.context_window)
     .bind(new_agent.avatar.as_deref())
     // ModelProfile Phase 2：引用模式两列（legacy 路径 None → NULL）
@@ -111,8 +131,9 @@ pub async fn create(
     // 恒 None → standard（DB 默认值同源）；仅引擎内部（spawn_worker/Router 接线）
     // 显式传 ephemeral/router
     .bind(new_agent.agent_kind.as_deref().unwrap_or("standard"))
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     get_by_id(pool, id).await
 }
@@ -349,15 +370,13 @@ pub async fn set_agent_kind(
     from_kind: &str,
     to_kind: &str,
 ) -> AppResult<u64> {
-    let affected = sqlx::query(
-        "UPDATE agents SET agent_kind = ? WHERE id = ? AND agent_kind = ?",
-    )
-    .bind(to_kind)
-    .bind(id)
-    .bind(from_kind)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let affected = sqlx::query("UPDATE agents SET agent_kind = ? WHERE id = ? AND agent_kind = ?")
+        .bind(to_kind)
+        .bind(id)
+        .bind(from_kind)
+        .execute(pool)
+        .await?
+        .rows_affected();
     Ok(affected)
 }
 
@@ -453,6 +472,111 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn config_directory_is_managed_and_does_not_follow_workspace_or_preferences() {
+        let pool = test_pool().await;
+        let root =
+            std::env::temp_dir().join(format!("icepaw-config-path-{}", uuid::Uuid::new_v4()));
+        crate::db::repo::preferences::set(&pool, "default_workspace_path", &root.to_string_lossy())
+            .await
+            .unwrap();
+        let mut input = new_agent(None);
+        input.workspace_path = Some(root.join("custom-project").to_string_lossy().to_string());
+        let row = create(&pool, &input, "a1", "a1").await.unwrap();
+        let config_dir = root.join("agents").join("a1").to_string_lossy().to_string();
+        assert_eq!(row.config_dir.as_deref(), Some(config_dir.as_str()));
+        assert!(
+            !root.exists(),
+            "repo create must not create user directories"
+        );
+        crate::db::repo::preferences::set(
+            &pool,
+            "default_workspace_path",
+            &root.join("new-root").to_string_lossy(),
+        )
+        .await
+        .unwrap();
+        let row = update(
+            &pool,
+            "a1",
+            &AgentRepoUpdate {
+                workspace_path: Some(Some(
+                    root.join("other-project").to_string_lossy().to_string(),
+                )),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.config_dir.as_deref(), Some(config_dir.as_str()));
+        let row = update(
+            &pool,
+            "a1",
+            &AgentRepoUpdate {
+                workspace_path: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.config_dir.as_deref(), Some(config_dir.as_str()));
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn prepared_config_directory_survives_preference_change_and_cannot_be_shared() {
+        let pool = test_pool().await;
+        let root = std::env::temp_dir().join(format!("icepaw-prepared-{}", uuid::Uuid::new_v4()));
+        crate::db::repo::preferences::set(&pool, "default_workspace_path", &root.to_string_lossy())
+            .await
+            .unwrap();
+        let prepared = crate::db::agent_config::managed_dir(&pool, "a1")
+            .await
+            .unwrap();
+        crate::db::repo::preferences::set(
+            &pool,
+            "default_workspace_path",
+            &root.join("new-root").to_string_lossy(),
+        )
+        .await
+        .unwrap();
+        let row = create_with_config_dir(&pool, &new_agent(None), "a1", "a1", &prepared)
+            .await
+            .unwrap();
+        assert_eq!(
+            row.config_dir.as_deref(),
+            Some(prepared.to_string_lossy().as_ref())
+        );
+        // 即使内部调用传入词法别名，也不能登记成另一个 Agent 的配置归属。
+        let alias = prepared.join(".");
+        assert!(
+            create_with_config_dir(&pool, &new_agent(None), "other", "other", &alias)
+                .await
+                .is_err()
+        );
+        assert!(get_by_id(&pool, "other").await.is_err());
+        assert!(!root.exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn case_different_ids_cannot_share_config_directory() {
+        let pool = test_pool().await;
+        let root = std::env::temp_dir().join(format!("icepaw-case-{}", uuid::Uuid::new_v4()));
+        crate::db::repo::preferences::set(&pool, "default_workspace_path", &root.to_string_lossy())
+            .await
+            .unwrap();
+        create(&pool, &new_agent(None), "Editor", "Editor")
+            .await
+            .unwrap();
+        assert!(create(&pool, &new_agent(None), "editor", "editor")
+            .await
+            .is_err());
+        assert!(get_by_id(&pool, "editor").await.is_err());
+        assert_eq!(list(&pool).await.unwrap().len(), 1);
+        assert!(!root.exists());
+    }
+
     /// Router 化批 P1-1：agent_kind 默认 standard（存量零迁移语义）+ 内部路径
     /// 显式 ephemeral 落列往返。
     #[tokio::test]
@@ -470,7 +594,9 @@ mod tests {
         let mut worker = new_agent(None);
         worker.id = "w1".into();
         worker.agent_kind = Some("ephemeral".into());
-        create(&pool, &worker, "w1", "w1").await.expect("create worker");
+        create(&pool, &worker, "w1", "w1")
+            .await
+            .expect("create worker");
         let row = get_by_id(&pool, "w1").await.expect("get worker");
         assert_eq!(row.agent_kind, "ephemeral");
     }

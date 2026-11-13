@@ -105,6 +105,7 @@ async fn make_ctx(
         enabled_tools: None,
         tool_scopes: None,
         avatar: None,
+        config_dir: None,
         workspace_path: None,
         description: String::new(),
         supports_vision: 0,

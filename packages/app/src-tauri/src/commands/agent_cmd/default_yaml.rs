@@ -1,16 +1,16 @@
 //! 出生 agent.yaml 内容构造 + 落盘（从 `agent_cmd.rs` God module 拆出，U3-5 ③）。
 //!
-//! 只负责「新 agent 创建时若 workspace 下尚无 agent.yaml 则生成一份镜像文件」。
-//! 运行时不读此文件（模型身份以 DB 行为准），它只是信息性镜像；后续 update 的
-//! provider/model/base_url 镜像同步走 `commands/agent_yaml.rs::sync_agent_yaml_mirror_file`。
+//! 只负责「新 agent 创建时若固定配置目录下尚无 agent.yaml 则生成一份镜像文件」。
+//! 行为字段由文件配置读侧加载；模型身份仍以 DB 行为准，其信息性镜像在 update 时
+//! 通过 `commands/agent_yaml.rs::sync_agent_yaml_mirror_file` 同步。
 
-/// 在 Agent workspace 目录写入默认 agent.yaml。
+/// 在 Agent 固定配置目录写入默认 agent.yaml。
 ///
 /// - 仅在文件不存在时写入（不覆盖用户手动编辑的内容）
 /// - 写入失败仅 warn，不阻断 Agent 创建
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn write_default_agent_yaml(
-    workspace_dir: &str,
+    config_dir: &str,
     agent_name: &str,
     provider: &str,
     model: &str,
@@ -20,7 +20,7 @@ pub(crate) fn write_default_agent_yaml(
     enabled_tools: Option<&[String]>,
     base_url: Option<&str>,
 ) {
-    let yaml_path = std::path::Path::new(workspace_dir).join("agent.yaml");
+    let yaml_path = std::path::Path::new(config_dir).join("agent.yaml");
 
     // 文件已存在则跳过
     if yaml_path.exists() {

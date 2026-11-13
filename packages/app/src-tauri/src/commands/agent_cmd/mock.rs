@@ -142,6 +142,7 @@ impl AgentCmd for MockAgentCmd {
             supports_vision: if input.supports_vision { 1 } else { 0 },
             description: String::new(),
             avatar: None,
+            config_dir: None,
             workspace_path: input.workspace_path.clone(),
             model_profile_id: input.model_profile_id.clone(),
             fallback_profile_ids: input

@@ -6,11 +6,11 @@ tags: [agent.yaml, 配置, system_prompt, temperature, max_tokens, hooks, 钩子
 
 # agent.yaml 进阶配置
 
-每个 agent 的工作区里有个 `agent.yaml`，改完**即时生效、不用重启**。它覆盖数据库里的 agent 配置（文件优先）。字段都可省略，省略则用默认值或 DB 值。
+每个 Agent 的独立配置目录里有个 `agent.yaml`，保存后**后续对话加载新配置，不用重启**。它覆盖数据库里的 Agent 配置（文件优先）。字段都可省略，省略则用默认值或 DB 值。
 
 ## 位置
 
-`<agent 工作区>/agent.yaml`。新建 agent 时会自动生成一份默认的。
+`<Agent 配置目录>/agent.yaml`。配置目录由应用固定管理，新建 Agent 时自动生成默认文件。在「设置 → Agent」展开对应 Agent，点击「打开 agent.yaml」即可编辑。工作区只决定文件与命令的默认执行目录；更换工作区不会移动配置，项目工作区也不会替换 Agent 配置目录。
 
 ## 字段速查
 

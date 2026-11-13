@@ -49,9 +49,13 @@ Agent 正在生成时你仍然可以直接发送——在途回复会在下一�
 
 ### agent.yaml
 
-为 Agent 指定 workspace 后，可在该目录放置 `agent.yaml` 覆盖专家旋钮（`system_prompt` / `temperature` / `max_tokens` / `enabled_tools` / `word_style_profile` / `hooks` 等），修改即时生效。出生证字段（名字、厂商、模型、Key）走应用界面管理，不进 yaml。
+每个 Agent 都有独立的固定配置目录，由应用创建和管理；出生时位于 `<默认工作空间>/agents/<id>/`，登记后不会随执行工作区变化。`agent.yaml` 保存在该目录，用于覆盖专家旋钮（`system_prompt` / `temperature` / `max_tokens` / `enabled_tools` / `word_style_profile` / `hooks` 等）。编辑文件并保存后，后续对话加载新配置。出生证字段（名字、厂商、模型、Key）走应用界面管理，不进 yaml。
 
-在应用里也有「打开 agent.yaml」入口；Agent 还可以通过提案通道请求修改自己的配置（仍需你批准）。
+旧版本升级时，应用仅为尚未登记配置目录的 Agent 迁移一次：将旧工作区中的 `agent.yaml` 原样复制到托管目录，成功后登记。原文件保留作备份，后续不再读取；请从应用的「打开 agent.yaml」入口编辑。新旧文件内容冲突或旧工作区不可访问时，会停止迁移，启动错误提示会显示具体原因，不覆盖文件；修复后重启仅重试尚未完成的 Agent。
+
+迁移日志记录各 Agent 的源路径、目标路径、处理结果及整轮汇总耗时，不记录 YAML 正文或 API Key。可在**设置 → 日志**查看，也可直接打开 `<应用数据目录>/logs/ice-paw.log.日期`；Windows 启动失败时的兜底日志位于 `%LOCALAPPDATA%/com.icepaw.app/logs/ice-paw.boot-panic.log`。
+
+在**设置 → Agent → 展开对应 Agent → 打开 agent.yaml**，可用系统默认编辑器打开配置文件。工作区仅指定文件与命令的默认执行目录，项目会话优先使用项目工作区；更换工作区不会移动或替换 Agent 配置，没有指定工作区也能编辑配置与使用风格预设。Agent 还可以通过提案通道请求修改自己的配置（仍需你批准）。
 
 ### 风格
 

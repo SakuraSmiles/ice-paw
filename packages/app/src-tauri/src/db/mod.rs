@@ -3,6 +3,7 @@
 //! - `init_pool`：启动时初始化连接池，跑迁移，注入到 `tauri::State`
 //! - 提供 `get_pool` 给非 setup 钩子处的代码借用
 
+pub mod agent_config;
 pub mod migrate;
 pub mod models;
 pub mod repo;
@@ -71,6 +72,8 @@ pub async fn init_pool(app: &AppHandle) -> AppResult<SqlitePool> {
     migrate::heal_checksum_drift(&pool, &migrator).await;
     migrate::heal_dropped_migrations(&pool, &migrator).await;
     migrator.run(&pool).await?;
+    // 配置归属迁移须在任何 Agent 读取前完成；失败不能静默降级到 DB 默认值。
+    agent_config::migrate_legacy_configs(&pool).await?;
     info!(target: "ice_paw.db", "数据库迁移完成");
 
     // 5.5) tool_result 孤儿迁移：把历史坏数据（tool_result 混进 assistant 消息）

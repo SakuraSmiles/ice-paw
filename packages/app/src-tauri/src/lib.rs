@@ -302,7 +302,7 @@ pub fn run() {
             harness::mcp::screen::channel::global().set_broadcaster(handle.clone());
 
             // 0) 初始化日志（stdout + 文件 daily 轮转，非阻塞写）+ panic hook。
-            //    WorkerGuard 托管到 app state，进程退出时随 state drop 自动 flush。
+            //    LogGuard 托管到 app state；启动失败立即退出前显式排空。
             match logging::init(&handle) {
                 Ok(guard) => {
                     handle.manage(guard);
@@ -385,6 +385,8 @@ pub fn run() {
             }) {
                 Ok(p) => p,
                 Err(e) => {
+                    tracing::error!(target: "ice_paw.boot", error = %e, "数据库或 Agent 配置初始化失败，停止启动");
+                    logging::shutdown(&handle);
                     eprintln!("[ice_paw] db init failed: {e}");
                     return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
@@ -849,19 +851,18 @@ fn parse_saved_window_state(path: &std::path::Path) -> Option<SavedWindowState> 
 
 /// 启动期致命错误统一出口：三段式可读文案 + 兜底日志 +（Windows）原生对话框。
 ///
-/// 此路径发生在 tracing 未初始化时（WebView2 panic 先于 setup 闭包），故兜底日志
-/// 独立写文件（不依赖 tracing-appender），路径与正式日志同目录便于一起排查。
+/// 此路径也可能先于 tracing 初始化，兜底日志必须独立同步写入。
+/// Windows 历史兜底文件在 LOCALAPPDATA，正式运行日志在 APPDATA，不移动旧入口。
 fn fatal_boot_error(identifier: &str, raw: &str) {
-    let msg = format!(
-        "发生了什么：IcePaw 无法创建应用界面，WebView2 运行时初始化失败。\n\
-         为什么：系统 WebView2 运行时不可用、损坏或被组策略拦截。\n\
-         怎么办：重装「Microsoft Edge WebView2 运行时」（developer.microsoft.com/microsoft-edge/webview2）后重启应用；若仍失败，请查看日志目录。\n\n\
-         技术细节：\n{raw}"
-    );
+    let msg = boot_error_message(raw);
 
     #[cfg(windows)]
     {
-        write_boot_panic_log(identifier, &msg);
+        let mut msg = msg;
+        if let Err(e) = write_boot_panic_log(identifier, &msg) {
+            eprintln!("[ice_paw] 启动错误日志写入失败: {e}\n{msg}");
+            msg.push_str(&format!("\n\n启动错误日志未能保存：{e}。请复制本窗口的技术细节用于排查。"));
+        }
         show_fatal_error_dialog(&msg);
     }
     #[cfg(not(windows))]
@@ -871,29 +872,63 @@ fn fatal_boot_error(identifier: &str, raw: &str) {
     }
 }
 
-/// 兜底日志：写 `{LOCALAPPDATA}/{identifier}/logs/ice-paw.boot-panic.log`（append）。
-/// tracing 未就绪时唯一可用的持久化出口——正常日志目录同一位置，排查时一起看。
-#[cfg(windows)]
-fn write_boot_panic_log(identifier: &str, msg: &str) {
-    let Ok(local) = std::env::var("LOCALAPPDATA") else {
-        return;
+/// 仅剥离框架已知的错误包装，避免路径或错误正文中的关键词触发错误归因。
+fn boot_error_cause(mut raw: &str) -> &str {
+    const WRAPPERS: &[&str] = &[
+        "应用构建失败: ",
+        "Failed to setup app: ",
+        "error encountered during setup hook: ",
+        "runtime error: ",
+        "failed to create webview: ",
+        "参数校验失败: ",
+    ];
+    loop {
+        match WRAPPERS.iter().find_map(|prefix| raw.strip_prefix(prefix)) {
+            Some(rest) => raw = rest,
+            None => return raw,
+        }
+    }
+}
+
+fn boot_error_message(raw: &str) -> String {
+    let cause = boot_error_cause(raw);
+    let guidance = if cause.starts_with(db::agent_config::MIGRATION_FAILURE_PREFIX) {
+        "发生了什么：Agent 配置迁移未完成，IcePaw 已停止启动。\n\
+         为什么：配置迁移的文件准备或目录登记失败，具体原因见下方技术细节。\n\
+         怎么办：按具体错误检查目录权限、磁盘连接或冲突文件；原配置已保留，处理后重新启动，只会重试未完成的 Agent。"
+    } else if cause == "Could not find the webview runtime, make sure it is installed" {
+        "发生了什么：IcePaw 无法创建应用界面。\n\
+         为什么：系统未找到 WebView2 运行时。\n\
+         怎么办：安装 Microsoft Edge WebView2 运行时（developer.microsoft.com/microsoft-edge/webview2）后重启应用。"
+    } else if cause.starts_with("WebView2 error: ") {
+        "发生了什么：IcePaw 无法创建应用界面。\n\
+         为什么：WebView2 报告初始化错误，具体原因见下方技术细节。\n\
+         怎么办：按具体错误检查 WebView2 运行时及数据目录权限；运行时缺失或损坏时修复安装，然后重启应用。"
+    } else {
+        "发生了什么：IcePaw 启动失败。\n\
+         为什么：启动过程中发生错误，具体原因见下方技术细节。\n\
+         怎么办：根据技术细节和启动日志处理对应问题后重试；若仍失败，请保留错误信息用于排查。"
     };
+    format!("{guidance}\n\n技术细节：\n{raw}")
+}
+
+/// 兜底日志：写 `{LOCALAPPDATA}/{identifier}/logs/ice-paw.boot-panic.log`（append）。
+/// tracing 未就绪时仍可用；同步完成后再退出，不依赖进程析构排空队列。
+#[cfg(windows)]
+fn write_boot_panic_log(identifier: &str, msg: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let local = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA 不可用")
+    })?;
     let dir = std::path::PathBuf::from(local)
         .join(identifier)
         .join("logs");
-    if std::fs::create_dir_all(&dir).is_ok() {
-        let path = dir.join("ice-paw.boot-panic.log");
-        let line = format!(
-            "{}\n{}\n\n",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-            msg
-        );
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-    }
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("ice-paw.boot-panic.log");
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{}\n{msg}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+    file.sync_all()
 }
 
 /// Windows 原生错误对话框（MessageBoxW）。空 hwnd = 归属桌面，桌面应用在无窗口
@@ -1073,6 +1108,54 @@ fn dir_size_on_disk(dir: &std::path::Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn migration_boot_error_preserves_reason_without_webview_misattribution() {
+        let detail = format!(
+            "{}Agent a1：D:/WebView2/agents/a1/agent.yaml 已存在且与旧配置不同",
+            super::db::agent_config::MIGRATION_FAILURE_PREFIX
+        );
+        for raw in [
+            detail.clone(),
+            format!("应用构建失败: error encountered during setup hook: 参数校验失败: {detail}"),
+            format!("Failed to setup app: error encountered during setup hook: 参数校验失败: {detail}"),
+        ] {
+            let msg = super::boot_error_message(&raw);
+            let (guidance, technical) = msg.split_once("\n\n技术细节：\n").unwrap();
+            assert!(guidance.contains("Agent 配置迁移未完成"));
+            assert!(guidance.contains("只会重试未完成的 Agent"));
+            assert!(!guidance.contains("WebView2"));
+            assert_eq!(technical, raw);
+        }
+    }
+
+    #[test]
+    fn boot_error_keywords_in_paths_do_not_determine_cause() {
+        for raw in [
+            "Failed to setup app: IO error: D:/WebView2/config permission denied",
+            "runtime error: failed to create webview: IO error: permission denied",
+            "IO error: D:/Agent 配置迁移未完成：/data.db access denied",
+            "unknown panic payload",
+        ] {
+            let msg = super::boot_error_message(raw);
+            let guidance = msg.split_once("\n\n技术细节：\n").unwrap().0;
+            assert!(guidance.starts_with("发生了什么：IcePaw 启动失败。"));
+            assert!(!guidance.contains("WebView2"));
+        }
+    }
+
+    #[test]
+    fn known_webview_boot_errors_retain_specific_guidance() {
+        let missing = super::boot_error_message(
+            "Failed to setup app: runtime error: Could not find the webview runtime, make sure it is installed",
+        );
+        assert!(missing.contains("系统未找到 WebView2 运行时"));
+        let component = super::boot_error_message(
+            "runtime error: failed to create webview: WebView2 error: access denied",
+        );
+        assert!(component.contains("WebView2 报告初始化错误"));
+        assert!(!component.contains("系统未找到"));
+    }
+
     // U1-1：panic payload 提取覆盖最常见的两种形态（&str 字面量 / String 格式化）。
     #[test]
     fn panic_payload_to_string_extracts_str_and_string() {

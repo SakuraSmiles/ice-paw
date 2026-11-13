@@ -32,6 +32,7 @@ fn sample_agent_row(id: &str, name: &str) -> AgentRow {
         supports_vision: 0,
         description: String::new(),
         avatar: None,
+        config_dir: None,
         workspace_path: None,
         model_profile_id: None,
         fallback_profile_ids: None,

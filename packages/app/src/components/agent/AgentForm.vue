@@ -11,7 +11,7 @@
 //   模型，拖拽/键盘调序），Key 与端点在「设置-模型」统一维护
 // - 旁路（提案 CreateAgent 等凭据不齐的 legacy 行）编辑时选实体即转正
 import AvatarField from "../common/AvatarField.vue";
-import { ExternalLink, ChevronDown, X, Plus, HelpCircle } from "@lucide/vue";
+import { ExternalLink, ChevronDown, X, Plus, HelpCircle, FileCode2 } from "@lucide/vue";
 import { ref, computed, onMounted, nextTick, watch } from "vue";
 import { useRouter } from "vue-router";
 import draggable from "vuedraggable";
@@ -29,6 +29,7 @@ import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
 import StylePresetPicker from "./StylePresetPicker.vue";
 import { fillPresetName, type StylePreset } from "../../data/stylePresets";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 
 const props = defineProps<{
   agent: Agent | null;
@@ -330,9 +331,28 @@ function onModelSelect(item: ComboboxItem) {
 
 const saving = ref(false);
 
-const hasFileConfig = computed(
-  () => isEdit.value && !!props.agent?.workspace_path && !!props.agent?.config_from_file,
-);
+/** 配置目录由后端确定；工作区草稿变更不影响配置入口或风格预设。 */
+const agentYamlPath = computed(() => {
+  const dir = props.agent?.config_dir?.trim();
+  return dir ? `${dir.replace(/\\/g, "/").replace(/\/+$/, "")}/agent.yaml` : null;
+});
+const hasFileConfig = computed(() => !!agentYamlPath.value && !!props.agent?.config_from_file);
+const openingYaml = ref(false);
+const yamlOpenError = ref("");
+
+async function openAgentYaml() {
+  const path = agentYamlPath.value;
+  if (!path || openingYaml.value) return;
+  openingYaml.value = true;
+  yamlOpenError.value = "";
+  try {
+    await bridge.appInfo.openPath(path);
+  } catch (e) {
+    yamlOpenError.value = `打开 agent.yaml 失败：${stripInvokePrefix(msgOf(e))}。请检查文件与默认编辑器后重试。`;
+  } finally {
+    openingYaml.value = false;
+  }
+}
 
 // ---- 测试连接 / 拉取模型（同一往返；失败是结果不是异常，行内红字展示） ----
 const testing = ref(false);
@@ -979,10 +999,24 @@ function confirmDelete() {
               <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
             </svg>
           </button>
-          <span v-if="hasFileConfig" class="ws-badge">agent.yaml</span>
+        </div>
+        <p class="field-hint">文件与命令的默认执行目录；项目会话优先使用项目工作区。更换工作区不会移动 Agent 配置。</p>
+        <div class="config-actions">
+          <button
+            v-if="isEdit && agentYamlPath"
+            type="button"
+            class="ws-preset-btn config-open-btn"
+            :disabled="openingYaml"
+            :title="agentYamlPath"
+            @click="openAgentYaml"
+          >
+            <FileCode2 :size="14" />
+            {{ openingYaml ? "打开中…" : "打开 agent.yaml" }}
+          </button>
+          <span v-if="hasFileConfig" class="ws-badge">配置已加载</span>
           <!-- 风格预设入口（创建/编辑两用；创建态选中随保存写入，编辑态选档即写 yaml） -->
           <button
-            v-if="!isEdit || hasWorkspacePath"
+            v-if="!isEdit || agentYamlPath"
             type="button"
             class="ws-preset-btn"
             :class="{ active: pickerOpen, chosen: !!selectedPreset }"
@@ -993,8 +1027,9 @@ function confirmDelete() {
             @click="openPicker"
           >{{ selectedPreset ? `风格 · ${selectedPreset.name}` : "风格预设" }}</button>
         </div>
+        <p v-if="yamlOpenError" class="field-hint config-error" role="alert">{{ yamlOpenError }}</p>
         <p v-if="presetDone" class="field-hint preset-done">{{ presetDone }}</p>
-        <p class="field-hint">在此目录下创建 <code>agent.yaml</code> 可配置 system_prompt、temperature 等</p>
+        <p class="field-hint">Agent 配置保存在独立目录，<code>agent.yaml</code> 用于配置 system_prompt、temperature 等。</p>
       </div>
 
       <!-- 工具集范围（编辑态；组装可见性层——默认全开，自定义 = 组/Server 多选收窄） -->
@@ -1613,7 +1648,22 @@ function confirmDelete() {
   white-space: nowrap;
   font-family: var(--ip-font-mono);
 }
-/* 风格预设入口（与 agent.yaml 徽章同排；弹层 Teleport 到 body） */
+/* 配置只读动作与风格预设独立成行，不附着于执行工作区。 */
+.config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+}
+.config-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ip-spacing-1);
+}
+.field-hint.config-error {
+  color: var(--ip-danger-text);
+}
+/* 风格预设入口（弹层 Teleport 到 body） */
 .ws-preset-btn {
   height: 22px;
   padding: 0 var(--ip-spacing-2);

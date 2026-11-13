@@ -240,27 +240,29 @@ fn validate_patched(
     Ok(AgentYamlFields::from_config(&cfg))
 }
 
-/// 读取某 agent 的 yaml 预算字段。文件缺失 / 无 workspace / 解析失败 → None
+/// 读取某 agent 的 yaml 预算字段。文件缺失 / 无配置目录 / 解析失败 → None
 /// （前端语义：全部默认自适应，字段区显示空）。
-async fn read_fields(workspace_path: &Option<String>) -> Option<AgentYamlFields> {
-    let dir = workspace_path.as_ref()?;
+async fn read_fields(config_dir: &Option<String>) -> Option<AgentYamlFields> {
+    let dir = config_dir.as_ref()?;
     let yaml_path = std::path::Path::new(dir).join("agent.yaml");
     let content = tokio::fs::read_to_string(yaml_path).await.ok()?;
     let cfg: AgentFileConfig = serde_yaml::from_str(&content).ok()?;
     Some(AgentYamlFields::from_config(&cfg))
 }
 
-/// 解析 workspace → agent.yaml 路径并读回内容（async IO，不阻塞 tokio worker）。
+/// 解析固定配置目录 → agent.yaml 路径并读回内容（async IO，不阻塞 tokio worker）。
 ///
-/// 无 workspace → Validation「未配置工作区目录」；文件缺失 → NotFound。
+/// 无配置目录 → Validation「尚未初始化配置目录」；文件缺失 → NotFound。
 /// 六个写命令（标量 / system_prompt / word_profile / enabled_tools / tool_scopes）
 /// 此前各自复制这段「取路径 → 查存在 → 同步读」，U3-1 收敛为单一入口。
 async fn read_agent_yaml(
-    workspace_path: &Option<String>,
+    config_dir: &Option<String>,
     agent_id: &str,
 ) -> AppResult<(std::path::PathBuf, String)> {
-    let dir = workspace_path.as_ref().ok_or_else(|| {
-        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
+    let dir = config_dir.as_ref().ok_or_else(|| {
+        AppError::Validation(format!(
+            "agent {agent_id} 尚未初始化配置目录，无 agent.yaml"
+        ))
     })?;
     let yaml_path = std::path::Path::new(dir).join("agent.yaml");
     if !yaml_path.exists() {
@@ -291,7 +293,7 @@ pub async fn get_agent_yaml_fields(
     agent_id: String,
 ) -> AppResult<AgentYamlFields> {
     let row = cmd.inner().get(&agent_id).await?;
-    Ok(read_fields(&row.workspace_path).await.unwrap_or_default())
+    Ok(read_fields(&row.config_dir).await.unwrap_or_default())
 }
 
 /// 设置 / 注释掉单个标量字段（预算整数族 + `temperature` 浮点族）。
@@ -308,7 +310,7 @@ pub async fn set_agent_yaml_field(
     value: Option<f64>,
 ) -> AppResult<AgentYamlFields> {
     let row = cmd.inner().get(&agent_id).await?;
-    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
+    let (yaml_path, content) = read_agent_yaml(&row.config_dir, &agent_id).await?;
 
     // 整数族（预算/出力上限）收整数；temperature 浮点族 0 合法（如 OpenAI 确定性档）
     const INT_FIELDS: &[&str] = &["max_total_tokens", "tool_max_rounds", "max_tokens"];
@@ -385,7 +387,7 @@ pub async fn set_agent_system_prompt(
         ));
     }
     let row = cmd.inner().get(&agent_id).await?;
-    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
+    let (yaml_path, content) = read_agent_yaml(&row.config_dir, &agent_id).await?;
 
     let new_content = patch_agent_yaml_block(&content, "system_prompt", &text);
     let fields = validate_system_prompt_patched(&new_content, &text)?;
@@ -467,7 +469,7 @@ pub async fn set_agent_word_profile(
 ) -> AppResult<AgentYamlFields> {
     let trimmed = text.unwrap_or_default().trim().to_string();
     let row = cmd.inner().get(&agent_id).await?;
-    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
+    let (yaml_path, content) = read_agent_yaml(&row.config_dir, &agent_id).await?;
 
     let (new_content, fields, is_removal) = if trimmed.is_empty() {
         let nc = patch_agent_yaml_remove_block(&content, "word_style_profile");
@@ -594,7 +596,7 @@ pub async fn set_agent_enabled_tools(
 ) -> AppResult<AgentYamlFields> {
     let tools = tools.filter(|v| !v.is_empty());
     let row = cmd.inner().get(&agent_id).await?;
-    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
+    let (yaml_path, content) = read_agent_yaml(&row.config_dir, &agent_id).await?;
 
     let (new_content, fields, is_removal) = match &tools {
         Some(items) => {
@@ -677,7 +679,7 @@ pub async fn set_agent_tool_scopes(
 ) -> AppResult<AgentYamlFields> {
     let scopes = scopes.filter(|v| !v.is_empty());
     let row = cmd.inner().get(&agent_id).await?;
-    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
+    let (yaml_path, content) = read_agent_yaml(&row.config_dir, &agent_id).await?;
 
     let (new_content, fields, is_removal) = match &scopes {
         Some(items) => {
@@ -832,7 +834,7 @@ fn validate_mirror_sync(
     Ok(())
 }
 
-/// 对某 agent 工作区的 agent.yaml 做镜像行同步（update() 调用）。
+/// 对某 Agent 固定配置目录的 agent.yaml 做镜像行同步（update() 调用）。
 ///
 /// - 文件不存在 → Ok（**不创建**——镜像只跟随已存在的文件）
 /// - 内容无变化（逐字节相等）→ 直接返回，不动文件
@@ -840,12 +842,12 @@ fn validate_mirror_sync(
 ///
 /// async（tokio::fs）——U3-1 去同步 IO；`atomic_write_yaml` 收敛原子写样板。
 pub async fn sync_agent_yaml_mirror_file(
-    workspace_dir: &str,
+    config_dir: &str,
     provider: &str,
     model: &str,
     base_url: Option<&str>,
 ) -> AppResult<()> {
-    let yaml_path = std::path::Path::new(workspace_dir).join("agent.yaml");
+    let yaml_path = std::path::Path::new(config_dir).join("agent.yaml");
     if !yaml_path.exists() {
         return Ok(());
     }

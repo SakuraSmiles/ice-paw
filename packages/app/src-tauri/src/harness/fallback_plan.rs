@@ -274,6 +274,7 @@ mod tests {
             supports_vision: 0,
             description: String::new(),
             avatar: None,
+            config_dir: None,
             workspace_path: None,
             model_profile_id: model_profile_id.map(Into::into),
             fallback_profile_ids: fallback_ids.map(Into::into),

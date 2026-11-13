@@ -119,14 +119,17 @@ impl PipelineStage for OsContextStage {
         let (project_md, conventions_md) = read_project_ctx(ctx.project_context_dir.as_ref()).await;
 
         // 先取出 owned 值再进闭包（闭包捕获 &ctx 会与下方的字段赋值借用冲突）
-        let agent_ws = ctx.agent.workspace_path.clone();
-        let project_ws = ctx.project_workspace.clone();
+        let config_dir = ctx.agent.config_dir.clone();
+        let execution_ws = ctx
+            .project_workspace
+            .clone()
+            .or_else(|| ctx.agent.workspace_path.clone());
         let project_brief = ctx.project_brief.clone();
         let build = move |now: chrono::DateTime<chrono::Utc>| {
             let mut s = crate::context::os_context::build_os_context_at(
                 tz.as_deref(),
-                agent_ws.as_deref(),
-                project_ws.as_deref(),
+                config_dir.as_deref(),
+                execution_ws.as_deref(),
                 now,
             );
             if let Some(md) = &project_md {

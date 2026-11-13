@@ -41,7 +41,7 @@ agent 配了**降级链**时，主力档撞上余额不足 / 限流 / 网络错�
 
 ## 配置文件在哪
 
-- agent 配置：`<agent 工作区>/agent.yaml`（即时生效，不用重启）。
+- Agent 配置：独立配置目录中的 `agent.yaml`，在「设置 → Agent → 打开 agent.yaml」编辑（保存后后续对话加载新配置，不用重启）；更换工作区不会移动配置。
 - 模型配置（Key/端点）：设置 → 模型 页管理，存在应用数据库，Key 加密。
 - 知识库文档：`<默认工作空间>/knowledge/`（全局）和 `<agent 工作区>/knowledge/`（agent 专属）。
 - 项目上下文：`<默认工作空间>/projects/<项目id>/`（project.md、conventions.md）。

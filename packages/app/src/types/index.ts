@@ -27,7 +27,10 @@ export interface Agent {
   supports_vision?: boolean;
   description?: string;
   avatar?: string | null;
+  /** 默认执行目录；项目会话可由项目工作区覆盖，不决定 Agent 配置位置。 */
   workspace_path?: string | null;
+  /** 后端生成的固定配置目录（只读），agent.yaml 位于此目录。 */
+  config_dir?: string | null;
   /** 引用的模型配置 id（null = 手动模式，provider/model 等四字段即权威） */
   model_profile_id?: string | null;
   /** 降级链 profile id（null = 无链；后端批 2 消费） */
