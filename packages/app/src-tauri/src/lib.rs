@@ -210,6 +210,7 @@ pub fn run() {
             commands::inbox_cmd::set_conversation_auto_approve,
             commands::worker_cmd::get_worker_profile,
             commands::worker_cmd::promote_worker,
+            commands::channel_cmd::set_channel_router_mode,
             commands::task_cmd::list_scheduled_tasks,
             commands::task_cmd::create_scheduled_task,
             commands::task_cmd::update_scheduled_task,

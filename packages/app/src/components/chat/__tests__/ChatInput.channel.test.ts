@@ -60,7 +60,7 @@ describe("ChatInput 频道 @ 点名", () => {
 
   it("候选 = 频道成员（kindText「成员」；统筹者 owner 标注），不出现会话/消息段", async () => {
     const chat = await setup();
-    chat.channelView = { channel: null, members: members([{ id: "ag1", name: "写手", role: "coordinator" }, { id: "ag2", name: "审校" }]), coordinator_agent_id: "ag1", coordinator_appointed: false };
+    chat.channelView = { channel: null, members: members([{ id: "ag1", name: "写手", role: "coordinator" }, { id: "ag2", name: "审校" }]), coordinator_agent_id: "ag1", coordinator_appointed: false, router_mode: false };
 
     const wrapper = mount(ChatInput);
     await type(wrapper, "@");
@@ -79,7 +79,7 @@ describe("ChatInput 频道 @ 点名", () => {
 
   it("选中成员 = 文本替换为 `@名字 `（无 chip、无 pendingRefs）", async () => {
     const chat = await setup();
-    chat.channelView = { channel: null, members: members([{ id: "ag1", name: "写手" }]), coordinator_agent_id: null, coordinator_appointed: false };
+    chat.channelView = { channel: null, members: members([{ id: "ag1", name: "写手" }]), coordinator_agent_id: null, coordinator_appointed: false, router_mode: false };
 
     const wrapper = mount(ChatInput);
     await type(wrapper, "请 @写");
@@ -93,7 +93,7 @@ describe("ChatInput 频道 @ 点名", () => {
 
   it("send 解析 mentions：点名命中 + 去重保序（invoke 断言）", async () => {
     const chat = await setup();
-    chat.channelView = { channel: null, members: members([{ id: "ag1", name: "写手" }, { id: "ag2", name: "审校" }]), coordinator_agent_id: null, coordinator_appointed: false };
+    chat.channelView = { channel: null, members: members([{ id: "ag1", name: "写手" }, { id: "ag2", name: "审校" }]), coordinator_agent_id: null, coordinator_appointed: false, router_mode: false };
 
     const wrapper = mount(ChatInput);
     await type(wrapper, "@审校 你先看，@写手 再改，@审校 不重复");
@@ -113,7 +113,7 @@ describe("ChatInput 频道 @ 点名", () => {
         { id: "ag1", name: "审校" }, { id: "ag2", name: "审校长" },
         { id: "ag3", name: "影子" }, { id: "ag4", name: "影子" },
       ]),
-      coordinator_agent_id: null, coordinator_appointed: false,
+      coordinator_agent_id: null, coordinator_appointed: false, router_mode: false,
     };
 
     const wrapper = mount(ChatInput);

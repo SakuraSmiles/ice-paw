@@ -342,6 +342,7 @@ mod tests {
             initiator_agent_id: None,
             parent_conversation_id: None,
             auto_approve: 0,
+            router_mode: 0,
             inbox_policy: "accept".into(),
             archived_at: None,
         }

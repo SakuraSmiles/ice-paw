@@ -35,6 +35,8 @@ pub struct ChannelView {
     /// 统筹者是否用户手动指定（C5 两档：指定档故障不自动换帅，频道头部据此
     /// 展示「让系统补选」入口）
     pub coordinator_appointed: bool,
+    /// Router 试点模式是否开启（批 P3-1；migration 62 列透出）
+    pub router_mode: bool,
 }
 
 async fn build_view(pool: &SqlitePool, conv: Option<Conversation>) -> AppResult<ChannelView> {
@@ -44,6 +46,7 @@ async fn build_view(pool: &SqlitePool, conv: Option<Conversation>) -> AppResult<
             members: Vec::new(),
             coordinator_agent_id: None,
             coordinator_appointed: false,
+            router_mode: false,
         });
     };
     let Some(pid) = conv.project_id.clone() else {
@@ -60,6 +63,7 @@ async fn build_view(pool: &SqlitePool, conv: Option<Conversation>) -> AppResult<
         Some(cid) => channel::coordinator_is_user_appointed(pool, &conv.id, cid).await,
         None => false,
     };
+    let router_mode = router_mode_of(&conv);
     Ok(ChannelView {
         members: profiles
             .into_iter()
@@ -72,7 +76,140 @@ async fn build_view(pool: &SqlitePool, conv: Option<Conversation>) -> AppResult<
         channel: Some(conv),
         coordinator_agent_id,
         coordinator_appointed,
+        router_mode,
     })
+}
+
+/// 频道行 router_mode 读取（批 P3-1；旧库缺列场景由 migration 62 保证恒有值）
+fn router_mode_of(conv: &Conversation) -> bool {
+    conv.router_mode
+}
+
+// =========================================================================
+// Router 试点（批 P3-1）：项目级 router 实体接线
+// =========================================================================
+
+/// 幂等确保项目 router 实体存在：channel_routers 已有 → 返回；否则建 router
+/// agent 行（agent_kind='router'，不进用户配置面——P1-1 过滤收口庇护）+
+/// 关联行。模型引用好默认（L1）：项目成员里第一个带 model_profile_id 的
+/// agent 所引用的 profile——router 与成员同源，用户日后可换（v1 好默认）。
+pub(crate) async fn ensure_project_router(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<String> {
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT agent_id FROM channel_routers WHERE project_id = ?")
+            .bind(project_id)
+            .fetch_optional(pool)
+            .await?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    let proj = repo::project::get_by_id(pool, project_id).await?;
+    let members = repo::project::list_member_profiles(pool, project_id).await?;
+    if members.is_empty() {
+        return Err(AppError::Validation(
+            "项目还没有成员——Router 需要至少一名成员作为调度对象与默认模型来源".into(),
+        ));
+    }
+    // 好默认模型引用：第一个带 profile 引用的成员（闭包内不能 await——for 循环）
+    let mut profile_id: Option<String> = None;
+    for m in &members {
+        if let Ok(a) = repo::agent::get_by_id(pool, &m.agent_id).await {
+            if a.model_profile_id.is_some() {
+                profile_id = a.model_profile_id.clone();
+                break;
+            }
+        }
+    }
+    let profile_id = profile_id.ok_or_else(|| {
+        AppError::Validation(
+            "项目成员都没有模型配置引用——Router 需要一个可用的模型配置作决策模型".into(),
+        )
+    })?;
+    let router_id = uuid::Uuid::new_v4().to_string();
+    repo::agent::create(
+        pool,
+        &crate::db::models::NewAgent {
+            id: router_id.clone(),
+            name: format!("调度·{}", proj.name),
+            provider: String::new(),
+            model: String::new(),
+            // router 决策回合的 system prompt 由引擎注入（名册+触发上下文），
+            // 行内留空——行只是凭据/降级链/健康检查的载体
+            system_prompt: String::new(),
+            api_key: String::new(),
+            base_url: None,
+            temperature: 0.7,
+            max_tokens: 8192,
+            extra_params: None,
+            sort_order: 0,
+            cache_prompt: true,
+            supports_vision: false,
+            max_history_messages: None,
+            context_window: None,
+            enabled_tools: None,
+            workspace_path: None,
+            avatar: None,
+            model_profile_id: Some(profile_id),
+            fallback_profile_ids: None,
+            agent_kind: Some("router".into()),
+        },
+        &router_id,
+        &router_id,
+    )
+    .await?;
+    sqlx::query("INSERT INTO channel_routers (project_id, agent_id) VALUES (?, ?)")
+        .bind(project_id)
+        .bind(&router_id)
+        .execute(pool)
+        .await?;
+    tracing::info!(
+        target: "ice_paw.router",
+        project = %project_id,
+        router_agent = %router_id,
+        "项目 Router 实体创建（调度中枢）"
+    );
+    Ok(router_id)
+}
+
+/// 频道 Router 试点模式开关（批 P3-1）：开 = ensure router 实体 + 频道行置位；
+/// 关 = 频道行清零（实体保留幂等无害）。归档频道拒写。
+#[tauri::command]
+pub async fn set_channel_router_mode(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+    on: bool,
+) -> AppResult<()> {
+    let pool = pool.inner();
+    let conv = repo::conversation::get_by_id(pool, &conversation_id).await?;
+    if conv.kind != "channel" {
+        return Err(AppError::Validation("只有频道支持 Router 模式".into()));
+    }
+    if conv.archived_at.is_some() {
+        return Err(AppError::Validation(
+            "频道已归档（只读）——不能切换 Router 模式".into(),
+        ));
+    }
+    let pid = conv.project_id.clone().ok_or_else(|| {
+        AppError::Validation("频道未挂载项目（数据异常）——请反馈问题".into())
+    })?;
+    if on {
+        ensure_project_router(pool, &pid).await?;
+    }
+    let affected = sqlx::query("UPDATE conversations SET router_mode = ? WHERE id = ?")
+        .bind(if on { 1 } else { 0 })
+        .bind(&conversation_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: conversation_id,
+        });
+    }
+    Ok(())
 }
 
 /// 幂等确保项目频道存在的核心（懒建命令入口与「成员就位即自动建」共用）。
@@ -413,5 +550,34 @@ mod tests {
             .unwrap()
             .expect("成员就位后频道已建");
         assert_eq!(conv.agent_id, "a1");
+    }
+
+    /// 批 P3-1：router 实体幂等创建——两连建同 id、kind='router'、模型引用取
+    /// 成员 profile；空成员/无 profile 成员如实拒绝。
+    #[tokio::test]
+    async fn ensure_project_router_idempotent_with_member_profile() {
+        let pool = test_pool().await;
+        seed_project(&pool, "p1").await;
+        seed_agent(&pool, "a1").await;
+        // a1 挂进项目 + 给它一个 profile 引用（好默认来源）
+        sqlx::query("INSERT INTO project_agents (project_id, agent_id, role) VALUES ('p1', 'a1', 'member')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO model_profiles (id, alias, provider, model, api_key_ref) VALUES ('mp-1', '默认', 'mock', 'm', 'mp-1')")
+            .execute(&pool).await.unwrap();
+        repo::agent::update(&pool, "a1", &repo::agent::AgentRepoUpdate {
+            model_profile_id: Some(Some("mp-1".into())),
+            ..Default::default()
+        }).await.unwrap();
+
+        let r1 = ensure_project_router(&pool, "p1").await.expect("首次创建");
+        let r2 = ensure_project_router(&pool, "p1").await.expect("二次幂等");
+        assert_eq!(r1, r2, "幂等：同 id");
+        let row = repo::agent::get_by_id(&pool, &r1).await.unwrap();
+        assert_eq!(row.agent_kind, "router");
+        assert_eq!(row.model_profile_id.as_deref(), Some("mp-1"));
+        // P1-1 过滤收口的回归面：router 不进委派候选集
+        let dispatchable = crate::harness::mcp::delegate::resolve_dispatchable(&pool, Some("p1"), "a1")
+            .await.unwrap();
+        assert!(dispatchable.iter().all(|d| d.id != r1), "router 不进可调度集合");
     }
 }

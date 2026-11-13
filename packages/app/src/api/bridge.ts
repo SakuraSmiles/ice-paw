@@ -634,6 +634,11 @@ const channels = {
     try { await invoke<void>("reelect_channel_coordinator", { conversationId }); }
     catch (err) { throw wrapInvokeError("channels.reelect", err); }
   },
+  /** Router 试点模式开关（批 P3-1：开 = ensure router 实体 + 频道行置位） */
+  async setRouterMode(conversationId: string, on: boolean): Promise<void> {
+    try { await invoke<void>("set_channel_router_mode", { conversationId, on }); }
+    catch (err) { throw wrapInvokeError("channels.setRouterMode", err); }
+  },
 };
 
 const workers = {

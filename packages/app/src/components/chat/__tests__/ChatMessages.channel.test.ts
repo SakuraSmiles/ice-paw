@@ -97,7 +97,7 @@ async function mountChannel(messages: Message[], coordinator: string | null = "a
       { agent_id: "ag2", name: "审校", role: "member" },
     ],
     coordinator_agent_id: coordinator,
-    coordinator_appointed: false,
+    coordinator_appointed: false, router_mode: false,
   };
   const w = mount(ChatMessages);
   await flushPromises();

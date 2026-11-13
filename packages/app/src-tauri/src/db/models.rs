@@ -585,6 +585,9 @@ pub struct ConversationRow {
     /// 软删除为只读归档保留聊天记录；普通会话恒 NULL。
     #[sqlx(default)]
     pub archived_at: Option<String>,
+    /// Router 试点模式开关（migration 62，批 P3-1；非频道恒 0）
+    #[sqlx(default)]
+    pub router_mode: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -619,6 +622,10 @@ pub struct Conversation {
     /// 会话级全自动开关（migration 58）：Confirm 级工具直接放行（含委派继承）
     #[serde(default)]
     pub auto_approve: bool,
+    /// Router 试点模式（批 P3-1，仅频道有意义）：true = 该频道走 router 调度
+    /// 路径（旧群聊路径不动，Phase 5 才替换）
+    #[serde(default)]
+    pub router_mode: bool,
 }
 
 /// `kind` 的 serde 默认值（旧负载无此字段时视为普通聊天会话）
@@ -660,6 +667,7 @@ impl From<ConversationRow> for Conversation {
             },
             archived_at: row.archived_at,
             auto_approve: row.auto_approve != 0,
+            router_mode: row.router_mode != 0,
         }
     }
 }

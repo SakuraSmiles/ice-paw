@@ -87,6 +87,24 @@ async function reelect() {
     reelecting.value = false;
   }
 }
+
+// ===== Router 试点模式开关（批 P3-1）：开 = 该频道走 router 调度路径 =====
+const routerSwitching = ref(false);
+async function toggleRouter() {
+  if (routerSwitching.value || !view.value) return;
+  routerSwitching.value = true;
+  errorText.value = null;
+  const next = !view.value.router_mode;
+  try {
+    await bridge.channels.setRouterMode(props.convId, next);
+    await chat.refreshChannelView();
+    if (next) await chat.loadConversations(); // 频道行 router_mode 变化同步侧栏视图
+  } catch (e) {
+    errorText.value = stripInvokePrefix(msgOf(e));
+  } finally {
+    routerSwitching.value = false;
+  }
+}
 </script>
 
 <template>
@@ -145,6 +163,31 @@ async function reelect() {
       >
         <Users :size="13" aria-hidden="true" />
         {{ reelecting ? "补选中…" : "让系统补选" }}
+      </button>
+    </div>
+
+    <!-- Router 试点模式（批 P3-1）：开关即提交（档 A 平铺属性契约）；开启时
+         后端 ensure router 实体（好默认模型取成员 profile）。试点期与群聊
+         统筹并存——开关只影响「无 @ 消息」的路由归属 -->
+    <div v-if="view" class="router-toggle">
+      <div class="router-toggle-info">
+        <span class="router-toggle-title">Router 调度模式</span>
+        <span class="router-toggle-hint">
+          {{ view.router_mode
+            ? "开启中：无 @ 的消息交由项目 Router 评估分派（零自答）；@ 点名仍直通成员"
+            : "试点能力：开启后无 @ 的消息交由项目 Router 评估分派，不再走统筹者接令" }}
+        </span>
+      </div>
+      <button
+        class="router-switch"
+        role="switch"
+        :aria-checked="view.router_mode"
+        :class="{ on: view.router_mode }"
+        :disabled="routerSwitching"
+        :title="view.router_mode ? '关闭 Router 调度，回到统筹者接令' : '开启 Router 调度（首次开启会创建项目 Router 实体）'"
+        @click="toggleRouter"
+      >
+        <span class="router-switch-knob" />
       </button>
     </div>
   </div>
@@ -212,4 +255,30 @@ async function reelect() {
 .channel-reelect:hover:not(:disabled) { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .channel-reelect:disabled { opacity: 0.5; cursor: not-allowed; }
 .channel-reelect svg { display: inline-block; }
+/* ===== Router 试点模式开关（批 P3-1）===== */
+.router-toggle {
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-2) 0 0;
+  border-top: 1px solid var(--ip-color-border-default);
+}
+.router-toggle-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.router-toggle-title {
+  font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+}
+.router-toggle-hint { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
+.router-switch {
+  flex-shrink: 0; position: relative; width: 34px; height: 19px;
+  border-radius: var(--ip-radius-full, 999px); border: none; cursor: pointer;
+  background: var(--ip-color-bg-tertiary);
+  transition: background var(--ip-duration-fast) var(--ip-ease-out);
+}
+.router-switch.on { background: var(--ip-primary-500); }
+.router-switch:disabled { opacity: 0.6; cursor: default; }
+.router-switch-knob {
+  position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+  border-radius: 50%; background: #fff;
+  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
+}
+.router-switch.on .router-switch-knob { transform: translateX(15px); }
 </style>

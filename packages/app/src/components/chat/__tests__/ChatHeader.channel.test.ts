@@ -35,7 +35,7 @@ function view(coordinatorId: string | null, memberCount = 6): ChannelView {
     channel: null,
     members,
     coordinator_agent_id: coordinatorId,
-    coordinator_appointed: false,
+    coordinator_appointed: false, router_mode: false,
   };
 }
 

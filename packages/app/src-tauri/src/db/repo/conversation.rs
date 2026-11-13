@@ -10,7 +10,7 @@ use crate::error::{AppError, AppResult};
 /// 全列清单（MA-1 起含 kind/initiator/parent 四列，MA-3 加 inbox_policy，
 /// 频道 v1 加 archived_at；`query_as<ConversationRow>` 要求 SELECT 覆盖全部
 /// 字段，统一收口防止逐站点漂移）
-const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy, archived_at, auto_approve";
+const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy, archived_at, auto_approve, router_mode";
 
 /// 列出全部会话（不限 agent），按 `pinned DESC, updated_at DESC`
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {

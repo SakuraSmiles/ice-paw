@@ -177,6 +177,8 @@ export interface Conversation {
    *  软删除：记录只读保留，散落 scope 侧栏可见「已归档」） */
   archived_at?: string | null;
   auto_approve?: boolean;
+  /** Router 试点模式（批 P3-1，仅频道有意义）：true = 走 router 调度路径 */
+  router_mode?: boolean;
 }
 
 export interface NewConversation {
@@ -204,6 +206,8 @@ export interface ChannelView {
   coordinator_agent_id: string | null;
   /** 统筹者是否用户手动指定（C5 两档：指定档故障不自动换帅 → 头部出「让系统补选」） */
   coordinator_appointed: boolean;
+  /** Router 试点模式开关（批 P3-1） */
+  router_mode: boolean;
 }
 
 // ============================================================================
