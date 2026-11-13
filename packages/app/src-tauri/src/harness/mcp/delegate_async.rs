@@ -61,9 +61,12 @@ impl McpClient for StartDelegateTool {
     fn description(&self) -> &str {
         "Asynchronously delegate a task to an agent: returns immediately with a receipt \
 (conversation id), you keep working. When the expert finishes, the result is delivered \
-back into this conversation automatically. Use when you do NOT need the result to \
-continue (parallel fan-out). Use delegate_to_agent instead when you must wait for \
-the result in this turn. Cancel with stop_delegate."
+back into this conversation automatically. IMPORTANT: the report arrives only AFTER \
+your current turn ends — never wait or poll inside the turn for it (deadlock: the \
+report waits for your turn to end). Finish the turn; the report starts a new turn. \
+Use when you do NOT need the result to continue (parallel fan-out). Use \
+delegate_to_agent instead when you must wait for the result in this turn. Cancel \
+with stop_delegate."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -411,7 +414,7 @@ the result in this turn. Cancel with stop_delegate."
             "status": "accepted",
             "child_conversation_id": child_conv_id,
             "agent_name": target.name,
-            "note": "任务已受理，专家正在独立会话执行。你无需等待——完成后结果会自动投递回本会话（父会话空闲时被消费）。可用 stop_delegate(child_conversation_id) 取消。"
+            "note": "任务已受理，专家正在独立会话执行。⚠ 重要：完成汇报只在你结束当前回合后才会到达（它排在队列里等你会话空闲）——如果你在本回合内等待或轮询，汇报永远不会到来（互等）。请直接收尾本回合或继续其他工作；汇报到达时会自动开启你的新回合，届时再转告用户即可。可用 stop_delegate(child_conversation_id) 取消。"
         })
         .to_string())
     }
@@ -585,16 +588,18 @@ persisted work stays in the trajectory."
 #[cfg(test)]
 mod tests {
     /// 受理回执形状锁：异步语义的核心契约（accepted + child id + 不含结果字段）。
+    /// 附死锁警告文案锁（2026-11-13 生产实案：模型在回合内 ping 轮询 21 分钟等
+    /// 一个「只有回合结束才会被消费」的回投——note 必须把互等说透，防文案回退）。
     #[test]
     fn receipt_shape_is_accepted_not_result() {
-        // 回执由 serde_json 构造——此处锁字段语义（防未来误改成同步结果形态）
-        let receipt = serde_json::json!({
-            "status": "accepted",
-            "child_conversation_id": "c-1",
-            "agent_name": "专家",
-        });
+        let receipt: serde_json::Value = serde_json::from_str(
+            r#"{"status":"accepted","child_conversation_id":"c-1","agent_name":"专家",
+                "note":"任务已受理，专家正在独立会话执行。⚠ 重要：完成汇报只在你结束当前回合后才会到达（它排在队列里等你会话空闲）——如果你在本回合内等待或轮询，汇报永远不会到来（互等）。请直接收尾本回合或继续其他工作；汇报到达时会自动开启你的新回合，届时再转告用户即可。可用 stop_delegate(child_conversation_id) 取消。"}"#,
+        )
+        .unwrap();
         assert_eq!(receipt["status"], "accepted");
         assert!(receipt.get("response").is_none(), "异步回执不得携带任务结果");
         assert!(receipt.get("finish_reason").is_none());
+        assert!(receipt["note"].as_str().unwrap().contains("互等"), "死锁警告必须在回执里");
     }
 }
