@@ -47,7 +47,7 @@ use crate::harness::mcp::screen::channel as screen_channel;
 use crate::harness::mcp::{AuthorizationLevel, McpRegistry, McpServerManager, ToolContext};
 pub use crate::harness::oneshot_registry::ToolAuthRegistry;
 use crate::infra::protocol::{
-    AuthScope, ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload,
+    AuthScope, ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload, ToolAuthPath,
     ToolAuthRequestPayload, ToolAuthResponse,
 };
 use base64::Engine as _;
@@ -195,35 +195,13 @@ pub(crate) async fn execute_tool_round(
         let tool_ctx = &enriched_ctx;
         let tool_start = std::time::Instant::now();
         let started_at = now_sql();
-        // 1. 解析授权级别 + 路径（+ 路径字段名——「允许此目录」档判定 dir 本身 vs 父目录用；
-        //    双路径工具（move/copy）提取全部路径）
-        let (level, mut file_path, path_key, all_paths) =
-            inspect_tool_for_auth(registry, tc_name, tc_args).await;
-
-        // workspace 快速路径：PathWhitelist 且**全部**路径都在 workspace 内才免授权
-        // （2026-09-04 质检 Q1：只查 source 时 destination 是旁路面——source 在 ws 内
-        // 即可零审批写 ws 外任意路径，与 write_file 越界必弹 Confirm 不一致）。任一路径
-        // 越界 → 展示首个越界路径走审批/会话授权（审批卡所见即所批）。
-        let decision = if matches!(level, AuthorizationLevel::PathWhitelist)
-            && !all_paths.is_empty()
-            && all_paths
-                .iter()
-                .all(|p| path_within_workspace(p, &workspace))
-        {
-            // workspace 内 + PathWhitelist 级别（如 read_file）→ 免授权放行
-            AuthorizationDecision::Allow
-        } else {
-            if let Some(outside) = all_paths
-                .iter()
-                .find(|p| !path_within_workspace(p, &workspace))
-            {
-                file_path = outside.clone();
-            }
-            check_authorization_with_session(
-                level, &file_path, whitelist, tc_name, tc_args, session,
-            )
-            .await
-        };
+        // 1. 对每条路径分别核对工作区、白名单与会话授权，全部覆盖才能免弹窗。
+        // copy/move 的来源已授权不代表目标也获授权；审批展示首个真正未授权的路径。
+        let ToolAuthInspection {
+            decision,
+            paths,
+            directory_path,
+        } = inspect_tool_for_auth(registry, tc_name, tc_args, &workspace, whitelist, session).await;
 
         // Confirm 级工具若声明了 auth_reason（如截屏「画面将发送给模型服务商」），
         // 替换通用 reason 展示在审批卡上——用户点「允许」前必须知道数据去向。
@@ -322,6 +300,8 @@ pub(crate) async fn execute_tool_round(
                     tool_use_id: tc_id.clone(),
                     tool_name: tool_name.clone(),
                     file_path: file_path.clone(),
+                    paths: paths.clone(),
+                    directory_path: directory_path.clone(),
                     arguments: arguments.clone(),
                     conversation_id: tool_ctx.conv_id.clone(),
                     message_id: asst_msg_id.to_string(),
@@ -340,6 +320,9 @@ pub(crate) async fn execute_tool_round(
                 } else {
                     tracing::info!(
                         target: "ice_paw.tool_auth",
+                        conversation_id = %tool_ctx.conv_id,
+                        paths = ?paths,
+                        directory_path = ?directory_path,
                         "已发送授权请求: tool={} path={} request_id={}",
                         tool_name,
                         file_path,
@@ -379,15 +362,16 @@ pub(crate) async fn execute_tool_round(
                                         None => session.mark_tool_authorized(&tool_name).await,
                                     }
                                 }
-                                AuthScope::ThisDir => match dir_grant_target(&path_key, &file_path)
-                                {
-                                    Some(dir) => session.mark_dir_authorized(&dir).await,
+                                AuthScope::ThisDir => match &directory_path {
+                                    Some(dir) => session.mark_dir_authorized(dir).await,
                                     // 无路径（Confirm 级工具）→ 退化为工具档（协议注释已声明）
                                     None => session.mark_tool_authorized(&tool_name).await,
                                 },
                             }
                             tracing::info!(
                                 target: "ice_paw.tool_auth",
+                                request_id = %request_id,
+                                directory_path = ?directory_path,
                                 "用户允许工具调用: tool={} path={} scope={:?}",
                                 tool_name,
                                 file_path,
@@ -432,6 +416,7 @@ pub(crate) async fn execute_tool_round(
                             // 用户拒绝：写工具结果为拒绝错误
                             tracing::info!(
                                 target: "ice_paw.tool_auth",
+                                request_id = %request_id,
                                 "用户拒绝工具调用: tool={} path={}",
                                 tool_name,
                                 file_path,
@@ -538,9 +523,8 @@ pub(crate) async fn execute_tool_round(
                 });
                 // live 图片随事件（2026-10-26：chat:tool-result 附图——前端工具行
                 // 展开在轮末落库前就能看到图；收集与下方 Image push 同步）
-                let mut emit_images: Vec<
-                    crate::infra::protocol::ToolResultImagePayload,
-                > = Vec::new();
+                let mut emit_images: Vec<crate::infra::protocol::ToolResultImagePayload> =
+                    Vec::new();
                 // 门②（事2）：工具回传图 → 按 agent「有效视觉能力」统一适配。
                 // 图源两路：工具原生 image_png + 文本内嵌 base64 提取图（2026-09-12
                 // UE5 实案扩充——外部 server 把截图 base64 塞在 JSON 文本里返回）。
@@ -1036,34 +1020,78 @@ fn now_sql() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// 从工具实例提取 `AuthorizationLevel` + 代表路径 + 路径字段名 + **全部**路径。
-///
-/// - `level` 直接调 `tool.authorization_level()`
-/// - `file_path` 路径列表首元素（见 [`extract_paths_from_args`]），找不到则空字符串
-///   （`Always` 工具不需要路径）
-/// - `path_key` 首元素命中的字段名（"path"/"dir"/…），「允许此目录」档判定
-///   目录参数本身 vs 文件参数的父目录用
-/// - `all_paths` 全部路径（双路径工具 source+destination 都在），workspace
-///   免授权快速路径的 all-match 判定用（Q1）
+struct ToolAuthInspection {
+    decision: AuthorizationDecision,
+    paths: Vec<ToolAuthPath>,
+    directory_path: Option<String>,
+}
+
+/// 每条路径可以由不同来源覆盖，但不能用其中一条的授权代替整个调用的授权。
+/// 未覆盖时只发一张整次调用的审批卡，目录档仅记住首个未授权路径对应的目录。
 async fn inspect_tool_for_auth(
     registry: &McpRegistry,
     tool_name: &str,
     args: &str,
-) -> (AuthorizationLevel, String, String, Vec<String>) {
-    let default_level = AuthorizationLevel::Always;
+    workspace: &Option<PathBuf>,
+    whitelist: &PathWhitelistConfig,
+    session: &PathAuthSession,
+) -> ToolAuthInspection {
+    let level = registry
+        .get(tool_name)
+        .await
+        .map_or(AuthorizationLevel::Always, |tool| {
+            tool.authorization_level()
+        });
+    let extracted = extract_paths_from_args(args);
+    let mut paths = Vec::new();
+    let mut representative_key = String::new();
 
-    let Some(tool) = registry.get(tool_name).await else {
-        return (default_level, String::new(), String::new(), Vec::new());
+    let decision = if matches!(level, AuthorizationLevel::PathWhitelist) && !extracted.is_empty() {
+        let mut decision = AuthorizationDecision::Allow;
+        for (key, path) in extracted {
+            let path_decision = if path_within_workspace(&path, workspace) {
+                AuthorizationDecision::Allow
+            } else {
+                check_authorization_with_session(level, &path, whitelist, tool_name, args, session)
+                    .await
+            };
+            let requires_approval = !matches!(path_decision, AuthorizationDecision::Allow);
+            if requires_approval && matches!(decision, AuthorizationDecision::Allow) {
+                representative_key = key.clone();
+                decision = path_decision;
+            }
+            paths.push(ToolAuthPath {
+                key,
+                path,
+                requires_approval,
+            });
+        }
+        if matches!(decision, AuthorizationDecision::Allow) && paths.len() > 1 {
+            tracing::info!(
+                target: "ice_paw.tool_auth",
+                tool = %tool_name,
+                path_count = paths.len(),
+                "全部参与路径已获授权"
+            );
+        }
+        decision
+    } else {
+        // 空路径不能借 all() 的空集结果免问；Confirm 级工具不使用路径授权。
+        let (key, path) = extracted.first().cloned().unwrap_or_default();
+        representative_key = key;
+        check_authorization_with_session(level, &path, whitelist, tool_name, args, session).await
     };
-
-    let level = tool.authorization_level();
-    let paths = extract_paths_from_args(args);
-    let (path_key, path) = paths
-        .first()
-        .cloned()
-        .unwrap_or_else(|| (String::new(), String::new()));
-    let all_paths = paths.into_iter().map(|(_, p)| p).collect();
-    (level, path, path_key, all_paths)
+    let directory_path = match &decision {
+        AuthorizationDecision::Confirm { file_path, .. } => {
+            dir_grant_target(&representative_key, file_path)
+        }
+        _ => None,
+    };
+    ToolAuthInspection {
+        decision,
+        paths,
+        directory_path,
+    }
 }
 
 /// 解析 agent 的 workspace 根路径（canonicalize，用于 workspace 内免授权判断）。
@@ -1137,13 +1165,12 @@ fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
 }
 
 /// 从工具参数 JSON 提取**全部**路径字段（`path` / `file_path` / `dir` / `source` /
-/// `destination`），按该优先级排序返回 `(字段名, 路径)` 列表；首元素为「代表路径」
-/// （授权弹窗展示与「允许此目录」档入账用）。
+/// `destination`），按该优先级排序返回 `(字段名, 路径)` 列表。
+/// 授权判定后才选出首个未授权路径作为审批代表，保留字段名以正确计算目录授权范围。
 ///
-/// 双路径工具（`move_file`/`copy_file` 的 source+destination）全部入列：workspace
-/// 免授权快速路径要求**所有**路径都在 workspace 内，任一越界即走审批——copy/move
-/// 与 write_file 同受工作区边界约束，destination 不得成为旁路面（2026-09-04 质检
-/// Q1）。工具内的 `reject_sensitive` 是敏感路径防御（/proc 等 + agent.yaml），不含
+/// 双路径工具（`move_file`/`copy_file` 的 source+destination）全部入列：每条路径
+/// 都须经工作区、白名单、会话授权判定，destination 不得成为旁路面。
+/// 工具内的 `reject_sensitive` 是敏感路径防御（/proc 等 + agent.yaml），不含
 /// workspace 边界，两层职责互补不互代。多路径数组（`read_multiple_files` 的 paths）
 /// 无法逐字段提取，不入列——回退到弹窗确认。
 fn extract_paths_from_args(args: &str) -> Vec<(String, String)> {
@@ -1184,6 +1211,9 @@ fn dir_grant_target(path_key: &str, file_path: &str) -> Option<String> {
 // ==========================================================================
 // 单元测试
 // ==========================================================================
+
+#[cfg(test)]
+mod auth_tests;
 
 #[cfg(test)]
 mod tests {

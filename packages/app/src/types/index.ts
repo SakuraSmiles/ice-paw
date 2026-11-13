@@ -913,6 +913,10 @@ export interface ChatSummaryStartedPayload {
 export interface ToolAuthRequestPayload {
   request_id: string; tool_use_id: string; tool_name: string; file_path: string;
   arguments: string; conversation_id: string; message_id: string; reason: string;
+  /** 参与路径及后端最终授权判定；旧负载缺省时仅展示 file_path。 */
+  paths?: Array<{ key: string; path: string; requires_approval: boolean }>;
+  /** 此目录档实际记住的目录（首个未授权路径对应目录），由后端确定。 */
+  directory_path?: string | null;
   /** 所属外部 server 展示名（2026-09-11 ③）：外部 server 工具带出——审批卡据此
    *  展示「此 Server（本会话）」第三档；内置工具缺省。*/
   server_name?: string | null;

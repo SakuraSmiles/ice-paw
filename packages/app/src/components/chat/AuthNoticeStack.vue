@@ -59,6 +59,13 @@ function isDelegation(
   return "agent_name" in payload;
 }
 
+function pathLabel(key: string): string {
+  if (key === "source") return "来源";
+  if (key === "destination") return "目标";
+  if (key === "dir") return "目录";
+  return key === "path" || key === "file_path" ? "路径" : key;
+}
+
 /** 后台会话的用户选择跳过（dismissed——agent 收「自行决策并说明」） */
 function dismissAsk(requestId: string) {
   void chat.respondToAsk(requestId, "dismissed");
@@ -91,10 +98,18 @@ function dismissAsk(requestId: string) {
             委派给 {{ entry.payload.agent_name }}
           </div>
           <div v-else class="notice-tool">{{ entry.payload.tool_name }} 请求授权</div>
-          <div
-            v-if="!isDelegation(entry.payload) && entry.payload.file_path"
-            class="notice-path"
-          >{{ entry.payload.file_path }}</div>
+          <template v-if="!isDelegation(entry.payload)">
+            <div v-if="(entry.payload.paths?.length ?? 0) > 1" class="notice-paths" aria-label="参与路径与授权状态">
+              <div v-for="(p, index) in entry.payload.paths" :key="`${p.key}-${index}`" class="notice-path-row">
+                <span class="notice-path-label">{{ pathLabel(p.key) }}</span>
+                <span class="notice-path-value" :title="p.path">{{ p.path }}</span>
+                <span class="notice-path-status" :class="{ pending: p.requires_approval }">{{ p.requires_approval ? "待授权" : "已授权" }}</span>
+              </div>
+            </div>
+            <div v-else-if="entry.payload.file_path || entry.payload.paths?.[0]?.path" class="notice-path">
+              {{ entry.payload.file_path || entry.payload.paths?.[0]?.path }}
+            </div>
+          </template>
           <div class="notice-hint">点击查看详情 · 跳转会话</div>
         </button>
         <div class="notice-actions">
@@ -206,6 +221,27 @@ function dismissAsk(requestId: string) {
   text-overflow: ellipsis;
   margin-top: 2px;
 }
+.notice-paths {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1_5);
+  margin-top: var(--ip-spacing-1_5);
+}
+.notice-path-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--ip-spacing-1_5);
+  font-size: var(--ip-text-caption-size);
+}
+.notice-path-label { color: var(--ip-color-text-tertiary); }
+.notice-path-value {
+  font-family: var(--ip-font-mono);
+  color: var(--ip-color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.notice-path-status { color: var(--ip-success-text); white-space: nowrap; }
+.notice-path-status.pending { color: var(--ip-warning-text); }
 .notice-hint {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);

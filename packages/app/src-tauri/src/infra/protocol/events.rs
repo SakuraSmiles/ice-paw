@@ -286,6 +286,16 @@ pub struct ChatSummaryStartedPayload {
 
 // === A2-3 工具授权事件 payload ===
 
+/// 多路径工具的逐条授权状态，供审批界面展示。
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolAuthPath {
+    /// 工具参数中的路径字段名（source / destination / path / dir 等）。
+    pub key: String,
+    pub path: String,
+    /// 是否尚未被工作区、白名单或会话授权覆盖。
+    pub requires_approval: bool,
+}
+
 /// `chat:tool-auth-request` 事件 payload (Rust → Frontend)
 ///
 /// 当工具调用需要用户确认授权（例如路径不在白名单）时，Rust 侧 emit 此事件，
@@ -295,7 +305,7 @@ pub struct ChatSummaryStartedPayload {
 /// - `request_id`     唯一标识，前后端匹配响应用
 /// - `tool_use_id`    LLM 端的工具调用 ID（用于工具结果回填）
 /// - `tool_name`      工具名
-/// - `file_path`      待访问的路径（可能为空，例如 list_directory 也适用）
+/// - `file_path`      首个待授权路径（无路径工具为空）
 /// - `arguments`      工具调用参数 JSON 字符串（前端展示用）
 /// - `conversation_id` / `message_id` 与其它 chat:* 事件保持一致，便于前端过滤
 /// - `reason`         触发原因（前端展示文案）
@@ -305,6 +315,10 @@ pub struct ToolAuthRequestPayload {
     pub tool_use_id: String,
     pub tool_name: String,
     pub file_path: String,
+    /// PathWhitelist 工具的全部参与路径及逐条授权结果。
+    pub paths: Vec<ToolAuthPath>,
+    /// 「此目录」实际记入会话的唯一目录，与首个未授权路径对应。
+    pub directory_path: Option<String>,
     pub arguments: String,
     pub conversation_id: String,
     pub message_id: String,
@@ -600,6 +614,12 @@ mod tests {
             tool_use_id: "tc-1".into(),
             tool_name: "read_file".into(),
             file_path: "/etc/passwd".into(),
+            paths: vec![ToolAuthPath {
+                key: "path".into(),
+                path: "/etc/passwd".into(),
+                requires_approval: true,
+            }],
+            directory_path: Some("/etc".into()),
             arguments: r#"{"path":"/etc/passwd"}"#.into(),
             conversation_id: "c-1".into(),
             message_id: "m-1".into(),
@@ -614,8 +634,10 @@ mod tests {
         assert_eq!(parsed["file_path"], "/etc/passwd");
         assert_eq!(parsed["conversation_id"], "c-1");
         assert_eq!(parsed["message_id"], "m-1");
-        // 9 个字段（server_name 恒序列化——None 为 null，前端按可选字段读）
-        assert_eq!(parsed.as_object().unwrap().len(), 9);
+        assert_eq!(parsed["paths"][0]["requires_approval"], true);
+        assert_eq!(parsed["paths"][0]["key"], "path");
+        assert_eq!(parsed["directory_path"], "/etc");
+        assert_eq!(parsed.as_object().unwrap().len(), 11);
     }
 
     #[test]

@@ -34,7 +34,18 @@ const delegationReq = computed(() => {
   const p = req.value;
   return p && "agent_name" in p ? p : null;
 });
-const hasPath = computed(() => !!toolReq.value?.file_path);
+const requestPaths = computed(() => toolReq.value?.paths ?? []);
+const hasMultiplePaths = computed(() => requestPaths.value.length > 1);
+const singlePath = computed(() => toolReq.value?.file_path || requestPaths.value[0]?.path || "");
+const hasPath = computed(() => !!singlePath.value);
+const directoryPath = computed(() => toolReq.value?.directory_path || null);
+
+function pathLabel(key: string): string {
+  if (key === "source") return "来源";
+  if (key === "destination") return "目标";
+  if (key === "dir") return "目录";
+  return key === "path" || key === "file_path" ? "路径" : key;
+}
 
 // 批次④ 步骤 1：request_screen_session 特判为二键卡——批准即开屏幕共享通道，
 // scope 档（仅此一次/此目录/此工具）对它无意义（后端忽略，once 兜底无害）。
@@ -119,9 +130,16 @@ function deny() {
         <!-- L2 工具授权：路径 + 原因（单行省略，全文走 title）+ server 来源标注
              （外部 server 工具——「此 Server」档信任的对象要让用户看见）+ 参数折叠；
              委派授权：任务摘要 + 全文折叠 -->
+        <div v-if="toolReq && hasMultiplePaths" class="auth-paths" aria-label="参与路径与授权状态">
+          <div v-for="(p, index) in requestPaths" :key="`${p.key}-${index}`" class="auth-path-row">
+            <span class="auth-path-label">{{ pathLabel(p.key) }}</span>
+            <span class="auth-path-value" :title="p.path">{{ p.path }}</span>
+            <span class="auth-path-status" :class="{ pending: p.requires_approval }">{{ p.requires_approval ? "待授权" : "已授权" }}</span>
+          </div>
+        </div>
         <div v-if="toolReq" class="auth-line2">
-          <span v-if="hasPath" class="auth-path" :title="toolReq.file_path">{{ toolReq.file_path }}</span>
-          <span v-if="hasPath && toolReq.reason" class="auth-dot">·</span>
+          <span v-if="hasPath && !hasMultiplePaths" class="auth-path" :title="singlePath">{{ singlePath }}</span>
+          <span v-if="hasPath && !hasMultiplePaths && toolReq.reason" class="auth-dot">·</span>
           <span v-if="toolReq.reason" class="auth-reason" :title="toolReq.reason">{{ toolReq.reason }}</span>
           <span v-if="toolReq.server_name" class="auth-path" title="此工具来自外部 MCP Server">Server: {{ toolReq.server_name }}</span>
           <details class="auth-args">
@@ -180,6 +198,7 @@ function deny() {
               role="radio"
               :aria-checked="scope === opt.value"
               :disabled="expired"
+              :title="opt.value === 'this_dir' ? directoryPath ?? undefined : undefined"
               @click="scope = opt.value"
             >
               {{ opt.label }}
@@ -192,6 +211,9 @@ function deny() {
             </button>
           </div>
         </div>
+        <p v-if="toolReq && !isChannelRequest && scope === 'this_dir' && directoryPath" class="auth-directory-hint">
+          本会话仅记住此目录（含子目录）：<code>{{ directoryPath }}</code><template v-if="hasMultiplePaths">；其余路径仅批准本次操作。</template>
+        </p>
       </div>
     </div>
   </Transition>
@@ -281,6 +303,34 @@ function deny() {
   border-radius: var(--ip-radius-sm);
 }
 .auth-dot { color: var(--ip-color-text-disabled); flex-shrink: 0; }
+.auth-paths {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1);
+}
+.auth-path-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--ip-spacing-2);
+  font-size: var(--ip-text-caption-size);
+}
+.auth-path-label { color: var(--ip-color-text-tertiary); }
+.auth-path-value {
+  font-family: var(--ip-font-mono);
+  color: var(--ip-color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.auth-path-status { color: var(--ip-success-text); white-space: nowrap; }
+.auth-path-status.pending { color: var(--ip-warning-text); }
+.auth-directory-hint {
+  margin: 0;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.auth-directory-hint code { font-family: var(--ip-font-mono); }
 .auth-reason {
   flex: 1;
   min-width: 0;
