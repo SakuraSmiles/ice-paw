@@ -7,7 +7,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { invoke } from "@tauri-apps/api/core";
 import ProjectOverview from "../project/ProjectOverview.vue";
 import { useProjectStore } from "../../stores/project";
-import type { Project } from "../../types";
+import type { Project, ProjectTask } from "../../types";
 
 const mockInvoke = vi.mocked(invoke);
 const push = vi.fn();
@@ -39,7 +39,18 @@ const OVERVIEW_OUT = {
   ],
 };
 
-function mockBackend(tasks: unknown[] = [], overview = OVERVIEW_OUT) {
+function task(overrides: Partial<ProjectTask>): ProjectTask {
+  return {
+    conv_id: "t", title: "任务", executor_agent_id: "a1",
+    initiator_agent_id: null, parent_conversation_id: null,
+    started_at: "2026-08-18 00:00:00", updated_at: "2026-08-18 01:00:00",
+    ended_at: "2026-08-18 01:00:00", termination: "stop", rounds: 1,
+    billed_tokens: null,
+    ...overrides,
+  };
+}
+
+function mockBackend(tasks: ProjectTask[] = [], overview = OVERVIEW_OUT) {
   mockInvoke.mockImplementation((async (cmd: string) => {
     switch (cmd) {
       case "get_project_overview": return overview;
@@ -89,8 +100,8 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(w.find(".mix-meta").text()).toContain("最近活动");
 
     mockBackend([
-      { conv_id: "t1", termination: "stop" },
-      { conv_id: "t2", termination: "error" },
+      task({ conv_id: "t1", termination: "stop" }),
+      task({ conv_id: "t2", termination: "error" }),
     ]);
     w = await mountOverview();
     const legend = w.findAll(".mix-item").map((n) => n.text());
@@ -98,6 +109,7 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(legend).toContain("未成功 1");
     expect(w.find(".mix-empty").exists()).toBe(false);
     expect(w.find(".mix-meta").text()).toContain("共 2 个任务");
+    expect(w.findAll(".task-row")).toHaveLength(2);
   });
 
   it("成员卡点击直达设置 tab", async () => {
